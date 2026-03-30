@@ -1,0 +1,22 @@
+[workspace]
+members = ["colmena-core", "colmena-cli", "colmena-mcp"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+regex = "1"
+sha2 = "0.10"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3"
+
+[profile.release]
+opt-level = 2
+strip = true
+lto = "thin"

@@ -1,0 +1,12 @@
+{
+  "id": "1774830200640-tu_integration",
+  "timestamp": "2026-03-30T00:23:20.640553Z",
+  "agent_id": null,
+  "tool": "mcp__unknown__tool",
+  "input": {
+    "arg": "value"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1774847367306-toolu_01LSWKRTDNAPDKN4CtPXotip",
+  "timestamp": "2026-03-30T05:09:27.306552Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git stash && git checkout main && git pull origin main 2>&1",
+    "description": "Stash, switch to main, pull"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

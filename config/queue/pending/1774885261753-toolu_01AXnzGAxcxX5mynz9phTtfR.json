@@ -1,0 +1,13 @@
+{
+  "id": "1774885261753-toolu_01AXnzGAxcxX5mynz9phTtfR",
+  "timestamp": "2026-03-30T15:41:01.753505Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git checkout main && git pull origin main 2>&1",
+    "description": "Pull merged main"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

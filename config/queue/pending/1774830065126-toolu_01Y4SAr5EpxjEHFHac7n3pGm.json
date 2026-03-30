@@ -1,0 +1,13 @@
+{
+  "id": "1774830065126-toolu_01Y4SAr5EpxjEHFHac7n3pGm",
+  "timestamp": "2026-03-30T00:21:05.126664Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git add colmena-core/src/selector.rs colmena-core/src/lib.rs && git commit -m \"$(cat <<'EOF'\nfeat(m1): add pattern selector + mission generator\n\n- Keyword-based scoring: when_to_use hits * 2.0 + specialization * 1.5 - anti * 3.0\n- Mission config generator: creates CLAUDE.md per agent combining role prompt + mission context\n- Role gap detection: identifies domain keywords not covered by existing roles\n- Role scaffold generator: creates stub YAML + prompt for custom roles\n- Formatted recommendations output with [RECOMMENDED] label and team roster\n- 6 new unit tests, 67 total passing\n\nbuilt with ❤️‍🔥 by AppSec\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\nEOF\n)\"",
+    "description": "Commit selector"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

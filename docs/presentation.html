@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Colmena — Orquestacion Multi-Agente para Claude Code</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --bg-card: #12121a;
+    --bg-accent: #1a1a2e;
+    --amber: #f59e0b;
+    --amber-dim: #92610a;
+    --green: #10b981;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --purple: #8b5cf6;
+    --cyan: #06b6d4;
+    --text: #e2e8f0;
+    --text-dim: #64748b;
+    --border: #1e293b;
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  .slide {
+    display: none;
+    height: 100vh;
+    width: 100vw;
+    padding: 60px 80px;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    animation: fadeIn 0.4s ease-in-out;
+  }
+
+  .slide.active { display: flex; }
+
+  .slide-dense {
+    padding: 40px 60px;
+  }
+
+  .slide-dense h2 { margin-bottom: 20px; }
+  .slide-dense p { font-size: 1.05rem; }
+  .slide-dense .card { padding: 20px; }
+  .slide-dense .card p { font-size: 0.9rem; }
+  .slide-dense .card h3 { font-size: 0.95rem; margin-bottom: 8px; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    margin-bottom: 24px;
+  }
+
+  h2 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+    margin-bottom: 32px;
+  }
+
+  h3 {
+    font-size: 1.3rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--amber);
+  }
+
+  p, li {
+    font-size: 1.25rem;
+    line-height: 1.7;
+    font-weight: 300;
+    color: var(--text);
+  }
+
+  .subtitle {
+    font-size: 1.5rem;
+    font-weight: 300;
+    color: var(--text-dim);
+    margin-bottom: 40px;
+  }
+
+  .highlight { color: var(--amber); }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+  .blue { color: var(--blue); }
+  .purple { color: var(--purple); }
+  .cyan { color: var(--cyan); }
+  .dim { color: var(--text-dim); }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    margin-top: 20px;
+  }
+
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+    margin-top: 20px;
+  }
+
+  .grid-4 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 20px;
+    margin-top: 20px;
+  }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+  }
+
+  .card.amber-border { border-color: var(--amber-dim); }
+  .card.green-border { border-color: #065f46; }
+  .card.blue-border { border-color: #1e3a5f; }
+  .card.purple-border { border-color: #4c1d95; }
+  .card.cyan-border { border-color: #155e75; }
+
+  .card-icon {
+    font-size: 2.5rem;
+    margin-bottom: 16px;
+  }
+
+  .card h3 { margin-bottom: 12px; }
+  .card p { font-size: 1.05rem; }
+
+  code, .mono {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.95rem;
+  }
+
+  .code-block {
+    background: #0d1117;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.9rem;
+    line-height: 1.8;
+    overflow-x: auto;
+    white-space: pre;
+    color: #c9d1d9;
+  }
+
+  .code-block-compact {
+    font-size: 0.75rem;
+    line-height: 1.6;
+    padding: 16px;
+  }
+
+  .code-block .comment { color: #6e7681; }
+  .code-block .keyword { color: var(--amber); }
+  .code-block .string { color: var(--green); }
+  .code-block .tool { color: var(--cyan); }
+
+  .stat-number {
+    font-size: 4rem;
+    font-weight: 900;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+
+  .stat-label {
+    font-size: 1rem;
+    color: var(--text-dim);
+    font-weight: 400;
+  }
+
+  .tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .tag.amber { background: rgba(245,158,11,0.15); color: var(--amber); }
+  .tag.green { background: rgba(16,185,129,0.15); color: var(--green); }
+  .tag.blue { background: rgba(59,130,246,0.15); color: var(--blue); }
+  .tag.purple { background: rgba(139,92,246,0.15); color: var(--purple); }
+  .tag.cyan { background: rgba(6,182,212,0.15); color: var(--cyan); }
+  .tag.red { background: rgba(239,68,68,0.15); color: var(--red); }
+
+  .flow-arrow {
+    text-align: center;
+    font-size: 2rem;
+    color: var(--text-dim);
+    padding: 8px 0;
+  }
+
+  .progress-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: var(--amber);
+    transition: width 0.4s ease;
+    z-index: 100;
+  }
+
+  .nav {
+    position: fixed;
+    bottom: 24px;
+    right: 40px;
+    display: flex;
+    gap: 12px;
+    z-index: 100;
+  }
+
+  .nav button {
+    background: var(--bg-accent);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1.1rem;
+    transition: all 0.2s;
+  }
+
+  .nav button:hover {
+    background: var(--amber);
+    color: var(--bg);
+    border-color: var(--amber);
+  }
+
+  .slide-counter {
+    position: fixed;
+    bottom: 30px;
+    left: 40px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    z-index: 100;
+  }
+
+  ul { list-style: none; padding: 0; }
+  ul li {
+    padding: 8px 0;
+    padding-left: 24px;
+    position: relative;
+  }
+  ul li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 18px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--amber);
+  }
+
+  .comparison-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 16px;
+  }
+
+  .comparison-table th,
+  .comparison-table td {
+    padding: 16px 20px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 1.05rem;
+  }
+
+  .comparison-table th {
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .comparison-table td:first-child { font-weight: 600; }
+
+  .center-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+  }
+
+  .banner-img {
+    width: 200px;
+    border-radius: 20px;
+    margin-bottom: 32px;
+    opacity: 0.9;
+  }
+
+  .timeline {
+    display: flex;
+    gap: 0;
+    margin-top: 32px;
+    position: relative;
+  }
+
+  .timeline::before {
+    content: '';
+    position: absolute;
+    top: 40px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--border);
+  }
+
+  .timeline-item {
+    flex: 1;
+    text-align: center;
+    position: relative;
+    padding-top: 60px;
+  }
+
+  .timeline-dot {
+    position: absolute;
+    top: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 3px solid;
+    background: var(--bg);
+    z-index: 1;
+  }
+
+  .timeline-item.done .timeline-dot { border-color: var(--green); background: var(--green); }
+  .timeline-item.current .timeline-dot { border-color: var(--amber); background: var(--amber); }
+  .timeline-item.future .timeline-dot { border-color: var(--text-dim); }
+
+  .flow-horizontal {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .flow-step {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 24px;
+    text-align: center;
+    min-width: 120px;
+  }
+
+  .flow-step h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--amber);
+    margin-bottom: 6px;
+  }
+
+  .flow-step p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+  }
+
+  .flow-connector {
+    font-size: 1.5rem;
+    color: var(--text-dim);
+  }
+
+  .decay-bar {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .decay-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    width: 120px;
+    color: var(--text-dim);
+  }
+
+  .decay-fill {
+    height: 24px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  .small-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .invariant-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .invariant-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--amber);
+    min-width: 24px;
+  }
+
+  .invariant-text {
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<!-- Slide 1: Titulo -->
+<div class="slide active center-content" id="s1">
+  <img src="colmena-banner.png" alt="Colmena" class="banner-img" onerror="this.style.display='none'">
+  <h1>Colmena</h1>
+  <p class="subtitle">Capa de orquestacion multi-agente para Claude Code</p>
+  <div class="grid-4" style="margin-top: 32px; max-width: 900px;">
+    <div style="text-align: center;">
+      <p style="font-size: 1.1rem; font-weight: 600;">Trust Firewall</p>
+      <span class="tag green" style="margin-top: 8px;">DONE</span>
+    </div>
+    <div style="text-align: center;">
+      <p style="font-size: 1.1rem; font-weight: 600;">Wisdom Library</p>
+      <span class="tag green" style="margin-top: 8px;">DONE</span>
+    </div>
+    <div style="text-align: center;">
+      <p style="font-size: 1.1rem; font-weight: 600;">Peer Review</p>
+      <span class="tag green" style="margin-top: 8px;">DONE</span>
+    </div>
+    <div style="text-align: center;">
+      <p style="font-size: 1.1rem; font-weight: 600;">ELO Engine</p>
+      <span class="tag green" style="margin-top: 8px;">DONE</span>
+    </div>
+  </div>
+  <p class="dim" style="margin-top: 40px; font-size: 0.9rem;">
+    Hooks + MCP + YAML  |  Una sola sesion CC orquesta todo
+  </p>
+</div>
+
+<!-- Slide 2: El Problema -->
+<div class="slide" id="s2">
+  <span class="tag red">El Problema</span>
+  <h2 style="margin-top: 20px;">Tres gaps que Claude Code <span class="red">no cubre nativamente</span></h2>
+  <div class="grid-3" style="margin-top: 32px;">
+    <div class="card">
+      <div class="stat-number red">~100</div>
+      <div class="stat-label" style="margin-bottom: 16px;">prompts de permisos por sesion</div>
+      <p style="font-size: 0.95rem;">Cada <code>Read</code>, <code>Grep</code>, <code>git status</code> pide aprobacion. Aceptas 70 sin pensar. Despues te perdes el que importa.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Sin control granular: o confias en todo, o aprobas todo manualmente. No hay termino medio.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">?</div>
+      <h3 style="color: var(--text);">Sin visibilidad de calidad</h3>
+      <p style="font-size: 0.95rem;">Un agente produce codigo, otro produce mas codigo. Nadie revisa nada. Confias en el output porque estas cansado, no porque fue validado.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">No hay peer review entre agentes. No hay metricas. No hay senial de calidad.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">/dev/null</div>
+      <h3 style="color: var(--text);">Sin memoria institucional</h3>
+      <p style="font-size: 0.95rem;">Los findings de una sesion desaparecen. La siguiente auditoria arranca de cero. No se acumula conocimiento entre misiones.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Cada sesion es una isla. Sin playbook, sin workflow repetible, sin historia.</p>
+    </div>
+  </div>
+  <div class="card" style="margin-top: 24px; padding: 20px; border-color: var(--amber-dim); text-align: center;">
+    <p style="font-size: 1rem;">Estimacion: <span class="highlight">~70% de los prompts</span> en una sesion CC multi-agente son ruido de permisos. El resto es trabajo real.</p>
+  </div>
+</div>
+
+<!-- Slide 3: Casos de Uso Reales -->
+<div class="slide slide-dense" id="s3">
+  <span class="tag purple">POR QUE COLMENA</span>
+  <h2 style="margin-top: 20px;">Dos escenarios donde CC solo <span class="purple">no alcanza</span></h2>
+  <div class="grid-2" style="align-items: start;">
+    <div class="card blue-border">
+      <h3 style="color: var(--blue);">Incident Response Coordinado</h3>
+      <p style="font-size: 0.9rem; margin-bottom: 12px;"><strong>Situacion:</strong> Incidente de seguridad activo. 4 agentes en paralelo: analisis de logs, revision de codigo afectado, busqueda de IOCs, redaccion de postmortem.</p>
+      <p style="font-size: 0.9rem; margin-bottom: 12px;"><span class="red"><strong>Sin Colmena:</strong></span> ~120 prompts manuales mientras el clock del incidente corre. El humano es relay entre agentes.</p>
+      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Trust rules por rol (el de logs corre queries en Splunk, el de codigo solo lee). El humano aprueba solo acciones criticas. Peer review del postmortem asegura calidad. Findings quedan para futuras investigaciones.</p>
+    </div>
+    <div class="card purple-border">
+      <h3>Compliance Audit Multi-Framework</h3>
+      <p style="font-size: 0.9rem; margin-bottom: 12px;"><strong>Situacion:</strong> Auditoria SOC2 + PCI-DSS + ISO 27001 simultanea. Un agente por framework con rubrica especifica.</p>
+      <p style="font-size: 0.9rem; margin-bottom: 12px;"><span class="red"><strong>Sin Colmena:</strong></span> Findings duplicados entre frameworks. El humano copia manualmente "este gap de access control tambien impacta PCI req 7". Sin visibilidad de calidad.</p>
+      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Findings se persisten en el store — cualquier agente los consulta cross-framework. ELO muestra que auditor es mas confiable para que dominio. Patron oracle-workers coordina.</p>
+    </div>
+  </div>
+  <p class="dim" style="margin-top: 24px; font-size: 0.9rem; text-align: center;">Colmena no reemplaza herramientas especializadas de security testing. Orquesta agentes de CC para que trabajen juntos con trust, calidad y memoria.</p>
+</div>
+
+<!-- Slide 4: Que es Colmena -->
+<div class="slide" id="s4">
+  <span class="tag green">La Solucion</span>
+  <h2 style="margin-top: 20px;">Colmena: una <span class="highlight">capa delgada</span> sobre Claude Code</h2>
+  <p style="margin-bottom: 24px; font-size: 1.1rem;">Construida sobre CC, no alrededor. Usa mecanismos oficiales: hooks, MCP, Agent tool, CLAUDE.md.</p>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <div class="code-block" style="font-size: 0.8rem; line-height: 1.6;">
+<span class="comment">         +---------------------------------+</span>
+<span class="comment">         |     HUMANO (decisiones reales)  |</span>
+<span class="comment">         +---------------+-----------------+</span>
+<span class="comment">                         |</span>
+<span class="comment">         +---------------+-----------------+</span>
+<span class="comment">         |     CLAUDE CODE (orquestador)   |</span>
+<span class="comment">         |     Agent tool para sub-agentes |</span>
+<span class="comment">         +--+--------------+---------------+</span>
+<span class="comment">            |              |</span>
+<span class="comment">       PreToolUse      MCP stdio</span>
+<span class="comment">        (hook)        (20 tools)</span>
+<span class="comment">            |              |</span>
+<span class="comment">         +--+--------------+---------------+</span>
+<span class="comment">         |          COLMENA                |</span>
+<span class="comment">         |  firewall, library, review,     |</span>
+<span class="comment">         |  elo, findings, queue           |</span>
+<span class="comment">         +---------------------------------+</span></div>
+    </div>
+    <div>
+      <div class="card amber-border" style="margin-bottom: 16px;">
+        <h3 style="font-size: 1rem;">Hook (reactivo)</h3>
+        <p style="font-size: 0.95rem;">PreToolUse hook evalua cada tool call contra reglas YAML. Decide <code>allow</code>, <code>deny</code> o <code>ask</code> en &lt;15ms. Sin llamadas de red.</p>
+      </div>
+      <div class="card green-border" style="margin-bottom: 16px;">
+        <h3 style="font-size: 1rem; color: var(--green);">MCP (proactivo)</h3>
+        <p style="font-size: 0.95rem;">CC llama herramientas de Colmena nativamente: seleccionar patrones, generar instrucciones, gestionar reviews, consultar findings.</p>
+      </div>
+      <div class="card" style="padding: 20px;">
+        <h3 style="font-size: 1rem;">Principio de diseno</h3>
+        <p style="font-size: 0.95rem;">Todo es filesystem. Sin base de datos, sin Docker, sin servicios externos. Git-versionable. Superficie de ataque minima.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 5: Trust Firewall -->
+<div class="slide" id="s5">
+  <span class="tag amber">Trust Firewall</span>
+  <h2 style="margin-top: 20px;">Reglas declarativas, evaluacion en <span class="highlight">&lt;15ms</span></h2>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <p style="margin-bottom: 20px; font-size: 1.05rem;">Cada tool call pasa por el firewall antes de ejecutarse. Reglas evaluadas en orden de precedencia estricto.</p>
+      <div class="code-block" style="font-size: 0.8rem; line-height: 1.6;">
+<span class="comment"># Flujo de evaluacion:</span>
+<span class="keyword">CC tool call</span> --> PreToolUse hook --> colmena binary
+                                          |
+                            <span class="keyword">blocked?</span>    --> deny  (no overridable)
+                            <span class="keyword">delegated?</span>  --> allow (TTL-scoped)
+                            <span class="keyword">restricted?</span> --> ask   (humano decide)
+                            <span class="keyword">trusted?</span>    --> allow (auto-approve)
+                            <span class="keyword">default</span>     --> ask   (fallback seguro)
+
+<span class="comment"># Precedencia:</span>
+<span class="string">blocked > delegations > agent_overrides > restricted > trust_circle > defaults</span></div>
+      <div class="card" style="margin-top: 16px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">Garantia de seguridad</h3>
+        <p style="font-size: 0.9rem;">Cualquier falla del hook retorna <code>"ask"</code>, nunca <code>"deny"</code>. El humano siempre tiene la ultima palabra en casos borde.</p>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">Impacto medido (caso payments API)</h3>
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th><span class="red">Sin Colmena</span></th>
+            <th><span class="green">Con Colmena</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Prompts de permisos</td>
+            <td>~100</td>
+            <td class="green">~30</td>
+          </tr>
+          <tr>
+            <td>Proteccion force push</td>
+            <td>Ninguna</td>
+            <td class="green">Regla blocked</td>
+          </tr>
+          <tr>
+            <td>Operaciones de lectura</td>
+            <td>Piden permiso</td>
+            <td class="green">Auto-aprobadas</td>
+          </tr>
+          <tr>
+            <td>Granularidad de confianza</td>
+            <td>Binaria: todo o nada</td>
+            <td class="green">6 niveles</td>
+          </tr>
+          <tr>
+            <td>Delegacion en runtime</td>
+            <td>No existe</td>
+            <td class="green">TTL-scoped, 4h max</td>
+          </tr>
+          <tr>
+            <td>Audit trail</td>
+            <td>Ninguno</td>
+            <td class="green">Cada decision logueada</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 6: Wisdom Library -->
+<div class="slide" id="s6">
+  <span class="tag green">Wisdom Library</span>
+  <h2 style="margin-top: 20px;">Roles + Patterns: <span class="highlight">quien</span> y <span class="highlight">como</span></h2>
+  <p style="margin-bottom: 16px; font-size: 1.05rem;">Los roles definen que hace cada agente. Los patterns definen como se coordinan. El mission generator conecta ambos.</p>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <div class="card" style="margin-bottom: 16px;">
+        <h3 style="font-size: 1rem;">4 Role Templates</h3>
+        <div class="code-block" style="font-size: 0.8rem; padding: 16px; line-height: 1.6;">
+<span class="keyword">security-architect</span>  Threat modeling, design review
+<span class="keyword">pentester</span>           Testing ofensivo, PoC de exploits
+<span class="keyword">auditor</span>             Compliance, code review
+<span class="keyword">researcher</span>          Analisis profundo, documentacion</div>
+      </div>
+      <div class="card">
+        <h3 style="font-size: 1rem;">6 Orchestration Patterns</h3>
+        <div class="code-block" style="font-size: 0.8rem; padding: 16px; line-height: 1.6;">
+<span class="keyword">oracle-workers</span>      Lead dirige, workers ejecutan
+<span class="keyword">pipeline</span>            Handoff secuencial (A -> B -> C)
+<span class="keyword">debate</span>              Review adversarial, consenso
+<span class="keyword">swarm-consensus</span>     Trabajo paralelo, voto mayoria
+<span class="keyword">plan-then-execute</span>   Fase plan, despues ejecucion paralela
+<span class="keyword">mentored-execution</span>  Senior guia a agentes junior</div>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">Flujo del mission generator</h3>
+      <div class="flow-horizontal" style="flex-direction: column; align-items: stretch;">
+        <div class="flow-step" style="width: 100%;"><h4>1. Describir mision</h4><p>"Auditar PCI-DSS compliance de la payments API"</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%;"><h4>2. library_select</h4><p>Evalua 6 patterns, retorna los mejores matches con asignacion de roles</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%;"><h4>3. library_generate</h4><p>Crea CLAUDE.md por agente con contexto de mision, instrucciones de rol, reglas de coordinacion</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">4. Agent tool</h4><p>CC lanza sub-agentes en la misma sesion con las instrucciones generadas</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 7: Peer Review Protocol -->
+<div class="slide" id="s7">
+  <span class="tag blue">Peer Review Protocol</span>
+  <h2 style="margin-top: 20px;">Sin peer review, no hay <span class="blue">senial de calidad</span></h2>
+  <p style="margin-bottom: 16px; font-size: 1.05rem;">Evaluacion cruzada estructurada entre agentes. Reviews producen findings, scores, y decisiones de trust gate.</p>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">Ciclo de vida del review</h3>
+      <div class="flow-horizontal" style="flex-direction: column; align-items: stretch;">
+        <div class="flow-step" style="width: 100%;"><h4>Submit</h4><p>El autor envia artefacto + hash SHA256 para revision</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%;"><h4>Assign</h4><p>Se selecciona reviewer elegible (invariantes enforced)</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%;"><h4>Evaluate</h4><p>Reviewer puntua en N dimensiones + lista findings</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">Trust Gate</h4><p>avg >= 7.0 y sin findings criticos --> auto-complete | sino --> revision humana</p></div>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">6 Invariantes de seguridad</h3>
+      <div class="invariant-item">
+        <span class="invariant-num">1</span>
+        <span class="invariant-text">El autor no puede revisar su propio trabajo</span>
+      </div>
+      <div class="invariant-item">
+        <span class="invariant-num">2</span>
+        <span class="invariant-text">Anti-reciproco: si A reviso a B, B no puede revisar a A en la misma mision</span>
+      </div>
+      <div class="invariant-item">
+        <span class="invariant-num">3</span>
+        <span class="invariant-text">Integridad de artefacto verificada via hash SHA256</span>
+      </div>
+      <div class="invariant-item">
+        <span class="invariant-num">4</span>
+        <span class="invariant-text">Minimo 2 dimensiones de score por evaluacion</span>
+      </div>
+      <div class="invariant-item">
+        <span class="invariant-num">5</span>
+        <span class="invariant-text">Findings critical/high siempre escalan a revision humana</span>
+      </div>
+      <div class="invariant-item" style="border-bottom: none;">
+        <span class="invariant-num">6</span>
+        <span class="invariant-text">Score floor en 5.0 -- debajo siempre requiere decision humana</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 8: ELO Engine + Findings Store -->
+<div class="slide slide-dense" id="s8">
+  <span class="tag purple">ELO Engine + Findings Store</span>
+  <h2 style="margin-top: 20px;">Sin ELO, el peer review es solo <span class="purple">opinion</span></h2>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">ELO: rating append-only con decay temporal</h3>
+      <div class="code-block" style="font-size: 0.78rem; padding: 16px; line-height: 1.6;">
+<span class="comment"># Delta del autor (segun score promedio):</span>
+<span class="keyword">score >= 8</span>  -->  <span class="string">+(score - 7) * 3</span>  (reward)
+<span class="keyword">score 5-7</span>  -->  <span class="string">  0</span>              (neutral)
+<span class="keyword">score < 5</span>  -->  <span class="string">-(6 - score) * 4</span>  (penalty)
+
+<span class="comment"># Penalidades por findings:</span>
+<span class="keyword">critical</span>  --> <span class="red">-10</span>  |  <span class="keyword">high</span>  --> <span class="red">-5</span>
+
+<span class="comment"># Reward para reviewer (por finding):</span>
+<span class="keyword">any finding</span> -->  <span class="string">+5</span></div>
+      <div style="margin-top: 12px;">
+        <div class="decay-bar">
+          <span class="decay-label">0-7 dias</span>
+          <div class="decay-fill" style="width: 100%; background: var(--green);">1.0x</div>
+        </div>
+        <div class="decay-bar">
+          <span class="decay-label">7-30 dias</span>
+          <div class="decay-fill" style="width: 70%; background: var(--amber);">0.7x</div>
+        </div>
+        <div class="decay-bar">
+          <span class="decay-label">30-90 dias</span>
+          <div class="decay-fill" style="width: 40%; background: var(--purple);">0.4x</div>
+        </div>
+        <div class="decay-bar">
+          <span class="decay-label">90+ dias</span>
+          <div class="decay-fill" style="width: 10%; background: var(--text-dim);">0.1x</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">Findings Store: memoria que crece</h3>
+      <div class="card" style="margin-bottom: 12px;">
+        <p style="font-size: 0.9rem;">Cada review produce findings estructurados que se acumulan entre misiones. La tercera auditoria de payments API se beneficia de las dos anteriores.</p>
+      </div>
+      <div class="code-block" style="font-size: 0.75rem; padding: 14px; line-height: 1.6;">
+<span class="comment"># Registro de finding (JSON)</span>
+{
+  <span class="keyword">"mission"</span>:    <span class="string">"audit payments API"</span>,
+  <span class="keyword">"author"</span>:     <span class="string">"pentester"</span>,
+  <span class="keyword">"reviewer"</span>:   <span class="string">"auditor"</span>,
+  <span class="keyword">"severity"</span>:   <span class="string">"high"</span>,
+  <span class="keyword">"category"</span>:   <span class="string">"auth"</span>,
+  <span class="keyword">"description"</span>: <span class="string">"Admin endpoint sin RBAC"</span>
+}</div>
+      <div class="card" style="margin-top: 12px;">
+        <h3 style="font-size: 0.95rem;">Leaderboard</h3>
+        <div class="code-block" style="font-size: 0.75rem; padding: 12px; line-height: 1.6;">
+<span class="keyword"> #  Agent               ELO   7d   Reviews</span>
+<span class="string"> 1  security-architect  1024  +15  8</span>
+<span class="string"> 2  auditor             1012   +8  6</span>
+<span class="string"> 3  pentester            998   -3  7</span>
+<span class="string"> 4  researcher           985   +5  4</span></div>
+      </div>
+      <div class="card" style="margin-top: 12px; padding: 14px; border-color: var(--amber-dim);">
+        <p style="font-size: 0.85rem;"><span class="highlight">Log JSONL append-only:</span> no mutacion, no eliminacion. Cada cambio de rating es trazable a un review y mision especificos.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 9: Workflow Completo -->
+<div class="slide slide-dense" id="s9">
+  <span class="tag amber">Workflow Completo</span>
+  <h2 style="margin-top: 16px;">Una sola sesion CC: select --> spawn --> review --> <span class="highlight">learn</span></h2>
+  <div class="grid-2" style="align-items: start; gap: 30px;">
+    <div class="code-block code-block-compact">
+<span class="comment"># 1. Humano describe la mision</span>
+<span class="string">"Auditar payments API para PCI-DSS"</span>
+
+<span class="comment"># 2. CC selecciona pattern via MCP</span>
+<span class="tool">mcp__colmena__library_select</span>(
+  mission: "PCI-DSS audit payments API"
+)
+<span class="keyword">--> oracle-workers (score: 0.92)</span>
+<span class="keyword">    lead: security-architect</span>
+<span class="keyword">    workers: pentester, auditor</span>
+
+<span class="comment"># 3. CC genera instrucciones por agente</span>
+<span class="tool">mcp__colmena__library_generate</span>(
+  pattern: "oracle-workers",
+  mission: "PCI-DSS audit payments API"
+)
+
+<span class="comment"># 4. CC lanza agentes con Agent tool</span>
+<span class="tool">Agent</span>(prompt: "Sos el pentester.
+  [CLAUDE.md generado]
+  Testeá los endpoints de payments...")
+
+<span class="comment"># 5. Agente envia trabajo para review</span>
+<span class="tool">mcp__colmena__review_submit</span>(
+  artifact: "pentester-findings.md",
+  author_role: "pentester"
+)
+
+<span class="comment"># 6. Reviewer evalua</span>
+<span class="tool">mcp__colmena__review_evaluate</span>(
+  scores: {thoroughness: 8, accuracy: 9},
+  findings: [{severity: "high", ...}]
+)
+<span class="keyword">--> score: 8.5 | outcome: auto_complete</span>
+<span class="keyword">--> ELO events: 3 logueados</span></div>
+    <div>
+      <div class="card" style="margin-bottom: 12px;">
+        <h3><span style="color: var(--text-dim);">Paso 1</span> Select</h3>
+        <p style="font-size: 0.9rem;">El humano describe la mision. Colmena recomienda un pattern de orquestacion con roles asignados.</p>
+      </div>
+      <div class="card" style="margin-bottom: 12px;">
+        <h3><span style="color: var(--text-dim);">Paso 2</span> Generate</h3>
+        <p style="font-size: 0.9rem;">El mission generator crea CLAUDE.md por agente con contexto, restricciones y reglas de coordinacion.</p>
+      </div>
+      <div class="card" style="margin-bottom: 12px;">
+        <h3><span style="color: var(--text-dim);">Paso 3</span> Spawn</h3>
+        <p style="font-size: 0.9rem;">CC usa Agent tool para lanzar sub-agentes en la misma sesion. Cada agente recibe sus instrucciones generadas.</p>
+      </div>
+      <div class="card" style="margin-bottom: 12px;">
+        <h3><span style="color: var(--text-dim);">Paso 4</span> Work + Review</h3>
+        <p style="font-size: 0.9rem;">Los agentes producen artefactos. El protocolo de peer review valida calidad. Trust gate decide si se necesita aprobacion humana.</p>
+      </div>
+      <div class="card">
+        <h3><span style="color: var(--text-dim);">Paso 5</span> Learn</h3>
+        <p style="font-size: 0.9rem;">ELO actualizado. Findings almacenados. La proxima mision arranca con conocimiento acumulado y ratings calibrados.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 10: Seguridad -->
+<div class="slide" id="s10">
+  <span class="tag red">Seguridad</span>
+  <h2 style="margin-top: 20px;">Asi protegemos el sistema</h2>
+  <p style="margin-bottom: 16px; font-size: 1.05rem;">Hardening via analisis STRIDE+DREAD. Cada componente construido con least-privilege y auditabilidad.</p>
+  <div class="grid-3">
+    <div class="card">
+      <h3 style="color: var(--red);">Validacion de input</h3>
+      <ul style="font-size: 0.9rem;">
+        <li>Prevencion de path traversal (normalizacion por componentes)</li>
+        <li>Inyeccion de comandos bloqueada (regex patterns YAML, sin shell expansion)</li>
+        <li>Proteccion de overwrite en templates de la library</li>
+        <li>Verificacion de integridad via SHA256</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color: var(--amber);">Trust Boundaries</h3>
+      <ul style="font-size: 0.9rem;">
+        <li>MCP delegate es read-only por defecto</li>
+        <li>TTL de delegacion capped a 4 horas</li>
+        <li>Reglas blocked son no-overridables</li>
+        <li>Falla del hook retorna "ask" (fallback seguro)</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="color: var(--green);">Audit Trail</h3>
+      <ul style="font-size: 0.9rem;">
+        <li>Cada decision del firewall logueada</li>
+        <li>Cada evento del ciclo de review registrado</li>
+        <li>Log ELO es append-only (sin mutacion)</li>
+        <li>Findings store es durable y consultable</li>
+      </ul>
+    </div>
+  </div>
+  <div class="grid-2" style="margin-top: 20px;">
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">6 Invariantes del Review</h3>
+      <p style="font-size: 0.9rem;">Self-review bloqueado. Pairing anti-reciproco. Hashing de artefactos. Minimo de dimensiones de score. Findings criticos escalan. Score floor en 5.0.</p>
+    </div>
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Cero dependencias externas</h3>
+      <p style="font-size: 0.9rem;">Sin llamadas de red en el hook path. Sin bases de datos. Sin Docker. Todo filesystem-based y git-versionable. Superficie de ataque minima.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 11: Arquitectura + Roadmap -->
+<div class="slide slide-dense" id="s11">
+  <span class="tag cyan">Arquitectura + Roadmap</span>
+  <h2 style="margin-top: 16px;">Rust workspace, 3 crates, <span class="highlight">20 MCP tools</span></h2>
+  <div class="grid-2" style="align-items: start;">
+    <div>
+      <div class="grid-2" style="gap: 12px; margin-top: 0;">
+        <div class="card" style="text-align: center; padding: 20px;">
+          <div class="stat-number cyan" style="font-size: 3rem;">&lt;15ms</div>
+          <div class="stat-label">Hook latency</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 20px;">
+          <div class="stat-number green" style="font-size: 3rem;">133</div>
+          <div class="stat-label">Tests passing</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 20px;">
+          <div class="stat-number purple" style="font-size: 3rem;">20</div>
+          <div class="stat-label">MCP tools</div>
+        </div>
+        <div class="card" style="text-align: center; padding: 20px;">
+          <div class="stat-number amber" style="font-size: 3rem;">3</div>
+          <div class="stat-label">Rust crates</div>
+        </div>
+      </div>
+      <div class="card" style="margin-top: 12px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">MCP tools por area</h3>
+        <p style="font-size: 0.8rem;">
+          <span class="tag amber" style="font-size: 0.7rem;">Firewall</span> config_check, evaluate, delegate, delegate_list, delegate_revoke, queue_list<br>
+          <span class="tag green" style="font-size: 0.7rem;">Library</span> library_list, library_show, library_select, library_generate, library_create_role<br>
+          <span class="tag blue" style="font-size: 0.7rem;">Review</span> review_submit, review_list, review_evaluate<br>
+          <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings<br>
+          <span class="tag cyan" style="font-size: 0.7rem;">Findings</span> findings_query, findings_list
+        </p>
+      </div>
+      <div class="card" style="margin-top: 12px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">Tech stack</h3>
+        <p style="font-size: 0.85rem;">Rust 2021, rmcp (MCP stdio), serde, clap, tokio, regex pre-compilado, escrituras atomicas (temp + rename)</p>
+      </div>
+    </div>
+    <div>
+      <h3 style="font-size: 1rem; color: var(--text);">Roadmap</h3>
+      <div class="timeline" style="flex-direction: column; gap: 0; margin-top: 8px;">
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M0</span> Trust Firewall</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Reglas YAML, auto-approve ~70%, audit trail, hook + queue</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M0.5 + M1</span> MCP + Wisdom Library</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Workspace refactor, MCP server, 4 roles, 6 patterns, mission generator</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M2</span> Peer Review + ELO + Findings</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Cross-review, trust gate, ELO con temporal decay, findings store</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0;">
+          <span class="tag amber" style="font-size: 0.7rem; min-width: 50px; text-align: center;">NEXT</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M3</span> Dynamic Trust Calibration</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO scores influyen reglas del firewall. Agentes de alto rating ganan autonomia.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 12: Cierre -->
+<div class="slide center-content" id="s12">
+  <img src="colmena-banner.png" alt="Colmena" class="banner-img" style="width: 150px;" onerror="this.style.display='none'">
+  <h1 style="font-size: 3rem;">Del ruido de permisos<br>a la <span class="highlight">orquestacion con criterio.</span></h1>
+  <div style="margin-top: 40px; display: flex; gap: 24px;">
+    <div class="card" style="padding: 16px 28px; text-align: center;">
+      <p style="font-size: 0.85rem; color: var(--text-dim);">Repositorio</p>
+      <p class="mono" style="font-size: 0.9rem;">git.in.ripio.com/nicobrambilla/colmena</p>
+    </div>
+    <div class="card" style="padding: 16px 28px; text-align: center;">
+      <p style="font-size: 0.85rem; color: var(--text-dim);">Stack</p>
+      <p class="mono" style="font-size: 0.9rem;">Rust + MCP + YAML</p>
+    </div>
+    <div class="card" style="padding: 16px 28px; text-align: center;">
+      <p style="font-size: 0.85rem; color: var(--text-dim);">Crates</p>
+      <p class="mono" style="font-size: 0.9rem;">colmena-core, colmena-cli, colmena-mcp</p>
+    </div>
+  </div>
+  <p style="margin-top: 40px; font-size: 1rem; color: var(--text-dim);">
+    built with &#10084;&#65039;&#8205;&#128293; by AppSec
+  </p>
+</div>
+
+<!-- Navigation -->
+<div class="progress-bar" id="progressBar"></div>
+<div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">12</span></div>
+<div class="nav">
+  <button id="btnPrev">&#8592;</button>
+  <button id="btnNext">&#8594;</button>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var current = 0;
+    var slides = document.querySelectorAll('.slide');
+    var total = slides.length;
+    var counter = document.getElementById('currentSlide');
+    var totalEl = document.getElementById('totalSlides');
+    var bar = document.getElementById('progressBar');
+
+    totalEl.textContent = total;
+
+    function showSlide(n) {
+      slides[current].classList.remove('active');
+      slides[current].style.display = 'none';
+      current = ((n % total) + total) % total;
+      slides[current].classList.add('active');
+      slides[current].style.display = 'flex';
+      counter.textContent = current + 1;
+      bar.style.width = ((current + 1) / total * 100) + '%';
+    }
+
+    function nextSlide() { showSlide(current + 1); }
+    function prevSlide() { showSlide(current - 1); }
+
+    // Keyboard nav
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); nextSlide(); }
+      if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); prevSlide(); }
+      if (e.key === 'Home') { e.preventDefault(); showSlide(0); }
+      if (e.key === 'End') { e.preventDefault(); showSlide(total - 1); }
+    });
+
+    // Click nav (click right half = next, left half = prev)
+    document.addEventListener('click', function(e) {
+      if (e.target.tagName === 'BUTTON') return;
+      if (e.clientX > window.innerWidth / 2) { nextSlide(); } else { prevSlide(); }
+    });
+
+    // Touch support
+    var touchStartX = 0;
+    document.addEventListener('touchstart', function(e) { touchStartX = e.touches[0].clientX; });
+    document.addEventListener('touchend', function(e) {
+      var diff = touchStartX - e.changedTouches[0].clientX;
+      if (Math.abs(diff) > 50) { diff > 0 ? nextSlide() : prevSlide(); }
+    });
+
+    // Button nav
+    document.getElementById('btnPrev').addEventListener('click', function(e) { e.stopPropagation(); prevSlide(); });
+    document.getElementById('btnNext').addEventListener('click', function(e) { e.stopPropagation(); nextSlide(); });
+
+    // Init
+    showSlide(0);
+  });
+</script>
+</body>
+</html>

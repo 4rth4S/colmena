@@ -1,0 +1,13 @@
+{
+  "id": "1774828330465-toolu_019W4mTQPcmM9tRWE6SdrHGL",
+  "timestamp": "2026-03-29T23:52:10.465776Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "cd /tmp/ripio-skills-pr && git add .claude-plugin/marketplace.json skills/nerif/ skills/appsec-tm/ && git commit -m \"$(cat <<'EOF'\nfeat: add nerif and appsec-tm skills\n\n- nerif: ULTRA-NERIF strategic intelligence oracle with Anti-Hype Protocol,\n  domain packs (AppSec, AI/ML), and 5 operation modes (investigation,\n  digest, landscape, comparison, radar). Digests persist to .nerif-digests/\n  in the working directory for cross-session continuity.\n\n- appsec-tm: STRIDE + DREAD threat modeling skill. Generates RRA CSV with\n  scored threats and JIRA-ready markdown summary. Adapted from standalone\n  bash wrapper to native CC skill format.\n\nBoth skills use relative paths (references/, resources/) following the\nexisting repo conventions. All output in Spanish.\n\nbuilt with ❤️‍🔥 by AppSec\nEOF\n)\" 2>&1",
+    "description": "Stage and commit all new files"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

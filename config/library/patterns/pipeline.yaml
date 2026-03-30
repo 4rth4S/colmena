@@ -1,0 +1,35 @@
+name: Sequential Pipeline
+id: pipeline
+source: custom
+description: >
+  Agents work in sequence, each building on the previous agent's output.
+  Each stage has a checkpoint where the human can review before proceeding.
+  Best for methodical, step-by-step analysis.
+topology: sequential
+communication: chain
+when_to_use:
+  - "Analysis that builds iteratively stage by stage"
+  - "Each phase depends on the previous phase's output"
+  - "Need human checkpoints between stages"
+  - "Reconnaissance followed by testing followed by review"
+  - "Budget-conscious missions where parallel is wasteful"
+when_not_to_use:
+  - "Tasks that are naturally parallel and independent"
+  - "Time-sensitive missions requiring fast results"
+  - "Broad coverage needed simultaneously"
+pros:
+  - "Lower cost — each agent runs sequentially"
+  - "Each stage builds on validated previous output"
+  - "Clear checkpoints for human review"
+cons:
+  - "Slower — fully sequential execution"
+  - "No cross-pollination between agents"
+  - "Late-stage agents can't inform early-stage decisions"
+estimated_token_cost: low
+estimated_agents: "3-4"
+roles_suggested:
+  stage_1: researcher
+  stage_2: auditor
+  stage_3: pentester
+  stage_4: security_architect
+elo_lead_selection: false

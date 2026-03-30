@@ -1,0 +1,22 @@
+[package]
+name = "colmena-cli"
+version.workspace = true
+edition.workspace = true
+description = "CLI binary for Colmena — hook handler, queue, delegate, install"
+
+[[bin]]
+name = "colmena"
+path = "src/main.rs"
+
+[dependencies]
+colmena-core = { path = "../colmena-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+regex.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+serde_json.workspace = true

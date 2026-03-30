@@ -1,0 +1,13 @@
+{
+  "id": "1774828934592-toolu_01TJ3azEsrRTFAJK99M6yybZ",
+  "timestamp": "2026-03-30T00:02:14.592348Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "cd /tmp/ripio-skills-pr && gh pr create --title \"feat: add nerif and appsec-tm skills\" --head feat/add-nerif-appsec-tm-skills --body \"$(cat <<'EOF'\n## Summary\n\n- **nerif**: ULTRA-NERIF strategic intelligence oracle — Anti-Hype analysis of tools, trends, and technologies across AppSec, AI/ML, or any domain. 5 operation modes (investigation, digest, landscape, comparison, radar). Digests persist to `.nerif-digests/` in the working directory for cross-session continuity.\n- **appsec-tm**: STRIDE + DREAD threat modeling skill — Generates RRA CSV with scored threats and JIRA-ready markdown summary. Adapted from standalone bash wrapper to native CC skill format.\n- Both skills registered in `marketplace.json` with proper structure (`references/`, `resources/`)\n\n## Files added\n\n```\nskills/nerif/\n├── SKILL.md\n├── references/\n│   ├── core-prompt.md\n│   ├── search-strategy.md\n│   └── output-template.md\n└── resources/\n    ├── pack-appsec.md\n    ├── pack-ai-ml.md\n    └── pack-template.md\n\nskills/appsec-tm/\n├── SKILL.md\n└── references/\n    └── agent-prompt.md\n```\n\n## Validation\n\n`validate-skills.sh` passes — all checks green.\n\n## Test plan\n\n- [ ] Install plugin update: `/plugin update ripio-skills`\n- [ ] Verify `/nerif` skill appears in skill list\n- [ ] Verify `/appsec-tm` skill appears in skill list\n- [ ] Run `/nerif` with \"investiga [tool]\" from a non-appsec-tools directory\n- [ ] Run `/appsec-tm` on a test repo and check CSV + JIRA output generated\n- [ ] Verify `.nerif-digests/` created in working directory after digest mode\n\nbuilt with ❤️‍🔥 by AppSec\nEOF\n)\" 2>&1",
+    "description": "Create pull request on ripio/skills"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}
