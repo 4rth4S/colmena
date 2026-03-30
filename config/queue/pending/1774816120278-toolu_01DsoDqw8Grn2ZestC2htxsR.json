@@ -1,0 +1,13 @@
+{
+  "id": "1774816120278-toolu_01DsoDqw8Grn2ZestC2htxsR",
+  "timestamp": "2026-03-29T20:28:40.278225Z",
+  "agent_id": null,
+  "tool": "Write",
+  "input": {
+    "content": "---\nname: CC hooks format gotcha\ndescription: Claude Code hooks require matcher + hooks array format, not direct command field\ntype: feedback\n---\n\nCC settings.json hooks use `{ \"matcher\": \"\", \"hooks\": [{ \"type\": \"command\", \"command\": \"...\" }] }`, NOT `{ \"matcher\": \"\", \"command\": \"...\" }`. The direct command format causes a settings parse error on session start.\n\n**Why:** Discovered when user tried opening a second CC session and got a Settings Error. The install command was writing the wrong format.\n**How to apply:** Always use the hooks array format when writing to settings.json. Test by opening a fresh CC session after install.\n",
+    "file_path": "/Users/fr33m4n/.claude/projects/-Users-fr33m4n-colmena/memory/feedback_hook_format.md"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1774817509236-toolu_01MXchcsFrG3182Tcu44eapH",
+  "timestamp": "2026-03-29T20:51:49.236231Z",
+  "agent_id": "a54bd57fe4350c751",
+  "tool": "ToolSearch",
+  "input": {
+    "max_results": 1,
+    "query": "select:WebFetch"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

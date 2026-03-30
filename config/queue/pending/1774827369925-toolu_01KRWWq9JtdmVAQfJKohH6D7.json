@@ -1,0 +1,13 @@
+{
+  "id": "1774827369925-toolu_01KRWWq9JtdmVAQfJKohH6D7",
+  "timestamp": "2026-03-29T23:36:09.925763Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "cargo search rmcp 2>&1 | head -5",
+    "description": "Search for rmcp crate"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

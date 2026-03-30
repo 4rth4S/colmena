@@ -1,0 +1,13 @@
+{
+  "id": "1774886568207-toolu_01FncoMqE5boVkgMgvqM4y8t",
+  "timestamp": "2026-03-30T16:02:48.207816Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "zip -r /Users/fr33m4n/colmena.zip . -x './target/*' -x './.git/*' -x '.DS_Store' -x '*/.DS_Store'",
+    "description": "Zip project excluding target/ and .git/"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

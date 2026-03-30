@@ -1,0 +1,13 @@
+{
+  "id": "1774885676512-toolu_014yYdmecp4Lrm429fpEQ3mJ",
+  "timestamp": "2026-03-30T15:47:56.512135Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "rm /Users/fr33m4n/colmena/docs/plans/2026-03-30-updated-roadmap.md",
+    "description": "Remove roadmap draft"
+  },
+  "rule_matched": "restricted[1]",
+  "priority": "medium",
+  "reason": "Potentially destructive system command"
+}

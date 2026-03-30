@@ -1,0 +1,13 @@
+{
+  "id": "1774828536325-toolu_01DaapyqfC8JPwKyRF8qRiSZ",
+  "timestamp": "2026-03-29T23:55:36.325773Z",
+  "agent_id": null,
+  "tool": "Write",
+  "input": {
+    "content": "---\nname: Git branching convention\ndescription: Always use feature/fix/chore branches, never commit directly to main — use MR workflow\ntype: feedback\n---\n\nAlways create branches for commits: `feature/`, `fix/`, `chore/`, `docs/` prefixes. Never commit directly to main. Use MR (Merge Request) workflow on GitLab.\n\n**Why:** Standard git workflow. The user expects proper branch hygiene for a shared repo.\n**How to apply:** Before any new work, create a branch from main. Commit there. Push. Create MR. This applies to all future work including M1, M2, M3.\n",
+    "file_path": "/Users/fr33m4n/.claude/projects/-Users-fr33m4n-colmena/memory/feedback_branch_convention.md"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

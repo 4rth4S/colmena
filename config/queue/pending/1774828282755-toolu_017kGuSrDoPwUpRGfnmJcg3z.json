@@ -1,0 +1,13 @@
+{
+  "id": "1774828282755-toolu_017kGuSrDoPwUpRGfnmJcg3z",
+  "timestamp": "2026-03-29T23:51:22.755354Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "cd /tmp/skills-pr && bash scripts/validate-skills.sh 2>&1",
+    "description": "Run skill validation"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

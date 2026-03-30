@@ -1,0 +1,28 @@
+{
+  "id": "1774817673489-toolu_01B7yMb5HAPpZ2HffUm9HeiC",
+  "timestamp": "2026-03-29T20:54:33.489632Z",
+  "agent_id": null,
+  "tool": "AskUserQuestion",
+  "input": {
+    "questions": [
+      {
+        "header": "Prioridad",
+        "multiSelect": false,
+        "options": [
+          {
+            "description": "Salir de plan mode, ampliar bash_pattern con gh, base64, curl read-only, echo, etc. Después retomamos M1.",
+            "label": "Fix colmena ahora (Recomendado)"
+          },
+          {
+            "description": "Te digo los patterns exactos y vos editás trust-firewall.yaml manualmente en la otra terminal.",
+            "label": "Solo decime qué cambiar"
+          }
+        ],
+        "question": "El fix es ampliar el bash_pattern en trust-firewall.yaml para cubrir más comandos seguros. Querés que salga de plan mode y lo arregle ahora?"
+      }
+    ]
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

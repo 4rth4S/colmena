@@ -1,0 +1,13 @@
+{
+  "id": "1774833274681-toolu_01AL1hrcnjxdTW9FHpBsdVpP",
+  "timestamp": "2026-03-30T01:14:34.681760Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "python3 -c \"\nimport csv\nwith open('RRA_Analysis_colmena.csv', 'r') as f:\n    reader = csv.DictReader(f)\n    threats = list(reader)\n    \nprint(f'Total amenazas: {len(threats)}')\nprint(f'Columnas: {len(threats[0].keys())}')\nprint()\n\nprev_score = 100\nfor t in threats:\n    score = float(t['DREAD_Total'])\n    d = int(t['D_Score'])\n    r = int(t['R_Score'])\n    e = int(t['E_Score'])\n    a = int(t['A_Score'])\n    d2 = int(t['D_Score_2'])\n    calculated = round((d + r + e + a + d2) / 5, 1)\n    status = 'OK' if abs(calculated - score) < 0.1 else f'MISMATCH calc={calculated}'\n    sorted_ok = 'OK' if score <= prev_score else 'NOT_SORTED'\n    cat = t['STRIDE_Category'][:30]\n    desc = t['Description'][:55]\n    print(f'  #{t[chr(78)+chr(186)]:>2} DREAD:{score} {status} {sorted_ok} | {cat} | {desc}')\n    prev_score = score\n\ncategories = set(t['STRIDE_Category'] for t in threats)\nprint(f'STRIDE coverage: {categories}')\ncritical = sum(1 for t in threats if float(t['DREAD_Total']) >= 8.0)\nhigh = sum(1 for t in threats if 7.0 <= float(t['DREAD_Total']) < 8.0)\nmedium = sum(1 for t in threats if 6.0 <= float(t['DREAD_Total']) < 7.0)\nlow = sum(1 for t in threats if float(t['DREAD_Total']) < 6.0)\nprint(f'Criticas (>=8.0): {critical}')\nprint(f'Altas (7.0-7.9): {high}')\nprint(f'Medias (6.0-6.9): {medium}')\nprint(f'Bajas (<6.0): {low}')\n\"\n",
+    "description": "Validate CSV DREAD scores and sorting"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

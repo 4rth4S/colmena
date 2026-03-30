@@ -1,0 +1,13 @@
+{
+  "id": "1774833918225-toolu_01V4tbuD71xh42Qr1tkn1oKy",
+  "timestamp": "2026-03-30T01:25:18.225216Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "rm -r /Users/fr33m4n/colmena/config/missions/",
+    "description": "Remove test missions directory"
+  },
+  "rule_matched": "restricted[0]",
+  "priority": "medium",
+  "reason": "Potentially destructive system command"
+}

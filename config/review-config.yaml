@@ -1,0 +1,14 @@
+# Review Protocol Configuration
+version: 1
+
+thresholds:
+  # Score average >= this → auto-complete (no human needed)
+  auto_approve: 7.0
+  # Hardcoded floor — Colmena never auto-approves below this, regardless of config
+  # (enforced in code, this value is informational only)
+  floor: 5.0
+
+reviewer_assignment:
+  # MVP: "role_rotation" — pick different role, avoid reciprocal
+  # Post-MVP: "elo_weighted" — pick highest ELO among eligible
+  strategy: role_rotation

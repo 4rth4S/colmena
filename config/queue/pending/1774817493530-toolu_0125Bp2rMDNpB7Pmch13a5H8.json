@@ -1,0 +1,13 @@
+{
+  "id": "1774817493530-toolu_0125Bp2rMDNpB7Pmch13a5H8",
+  "timestamp": "2026-03-29T20:51:33.530324Z",
+  "agent_id": "a54bd57fe4350c751",
+  "tool": "Bash",
+  "input": {
+    "command": "gh api repos/rtk-ai/icm/git/trees/main?recursive=1 2>/dev/null | python3 -c \"import json,sys; tree=json.load(sys.stdin); [print(n['path']) for n in tree.get('tree',[])]\" 2>/dev/null | head -200",
+    "description": "Get full repo tree for rtk-ai/icm"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

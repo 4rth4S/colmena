@@ -1,0 +1,13 @@
+{
+  "id": "1774828936501-toolu_01XQzJpVn4civ7eSh88PnpaC",
+  "timestamp": "2026-03-30T00:02:16.501289Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git commit -m \"$(cat <<'EOF'\nchore: remove old single-crate src/, update README and CLAUDE.md for workspace\n\n- Removed src/ and tests/ (replaced by colmena-core/, colmena-cli/, colmena-mcp/)\n- README: updated architecture diagram, added MCP tools section, workspace structure\n- CLAUDE.md: updated quick reference, conventions, MCP tools, workspace commands\n\nLast direct commit to main. All future work uses feature/ branches + MR.\n\nbuilt with ❤️‍🔥 by AppSec\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\nEOF\n)\" && git push 2>&1",
+    "description": "Commit cleanup and push"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}
