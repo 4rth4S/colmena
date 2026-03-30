@@ -243,7 +243,7 @@ colmena/
 │   └── src/
 │       ├── main.rs            # Clap CLI, hook hot path, review/elo/library cmds
 │       ├── hook.rs            # CC hook payload/response types
-│       ├── notify.rs          # macOS sound notifications
+│       ├── notify.rs          # Notification hook (no-op placeholder)
 │       └── install.rs         # Hook registration
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
