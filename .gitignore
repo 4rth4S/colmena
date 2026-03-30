@@ -1,0 +1,14 @@
+# Build artifacts
+target/
+
+# Runtime artifacts
+colmena-errors.log
+config/audit.log
+config/queue/pending/
+config/queue/processed/
+
+# Security — never commit
+docs/security/RRA_Summary_JIRA_colmena.md
+
+# OS files
+.DS_Store
