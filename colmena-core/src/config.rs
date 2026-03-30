@@ -44,8 +44,6 @@ pub struct Defaults {
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotificationsConfig {
     pub enabled: bool,
-    #[serde(default)]
-    pub say_announcements: bool,
 }
 
 /// Top-level firewall configuration loaded from trust-firewall.yaml.
