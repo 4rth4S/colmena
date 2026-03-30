@@ -1,0 +1,13 @@
+{
+  "id": "1774847351300-toolu_0165wj7V8uX7e3Yn9WL4NLGk",
+  "timestamp": "2026-03-30T05:09:11.300954Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git checkout main && git pull origin main 2>&1",
+    "description": "Switch to main and pull latest"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1774832725262-toolu_01UUJFkNTmAYTPH3vWUx6jcg",
+  "timestamp": "2026-03-30T01:05:25.262608Z",
+  "agent_id": "aeaae21cf159c1496",
+  "tool": "Write",
+  "input": {
+    "content": "---\nname: Firewall rule tuning patterns\ndescription: Lessons from iteratively tuning trust-firewall.yaml to reduce permission noise without losing safety\ntype: feedback\n---\n\nWhen adding tools to the trust_circle, categorize accurately — don't label `mkdir` as \"read-only\" just because it's safe. Give it its own rule with an honest reason (\"non-destructive\").\n\nCommon CC tools that need explicit trust_circle rules to avoid noise: TaskCreate/TaskUpdate/TaskGet/TaskList/TaskOutput/TaskStop, Skill, ToolSearch, EnterPlanMode/ExitPlanMode, EnterWorktree/ExitWorktree, SendMessage, AskUserQuestion, NotebookEdit. All are internal CC orchestration with zero side effects.\n\n`push.*origin` in blocked tier is too broad — it blocks legitimate branch pushes. Use `^git push\\b` in restricted (ask) and rely on `--force` in blocked to catch force pushes specifically.\n\n**Why:** User was getting prompted for every TaskUpdate, mkdir, Skill invocation, etc. — dozens of unnecessary prompts per session. The blocked push rule prevented `git push -u origin feature/xyz` entirely.\n**How to apply:** When adding new rules, think about what the default (ask) catches unnecessarily. Test with real CC sessions, not just unit tests.\n",
+    "file_path": "/Users/fr33m4n/.claude/projects/-Users-fr33m4n-colmena/memory/feedback_firewall_tuning.md"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

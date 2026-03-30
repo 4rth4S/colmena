@@ -1,0 +1,13 @@
+{
+  "id": "1774817727351-toolu_019YfaEJ2nbB8bNT3MJzUT5S",
+  "timestamp": "2026-03-29T20:55:27.351190Z",
+  "agent_id": "a54bd57fe4350c751",
+  "tool": "Bash",
+  "input": {
+    "command": "gh api repos/rtk-ai/icm/contents/crates/icm-cli/src/main.rs -q '.content' 2>/dev/null | base64 -d 2>/dev/null | sed -n '1300,1700p'",
+    "description": "Read main.rs lines 1300-1700 (init, extract, cloud commands)"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

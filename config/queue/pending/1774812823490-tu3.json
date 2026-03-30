@@ -1,0 +1,12 @@
+{
+  "id": "1774812823490-tu3",
+  "timestamp": "2026-03-29T19:33:43.490836Z",
+  "agent_id": null,
+  "tool": "Write",
+  "input": {
+    "file_path": "/Users/fr33m4n/colmena/src/../../etc/passwd"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

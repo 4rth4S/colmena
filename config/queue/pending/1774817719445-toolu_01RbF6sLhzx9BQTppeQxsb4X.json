@@ -1,0 +1,13 @@
+{
+  "id": "1774817719445-toolu_01RbF6sLhzx9BQTppeQxsb4X",
+  "timestamp": "2026-03-29T20:55:19.445488Z",
+  "agent_id": "a54bd57fe4350c751",
+  "tool": "Bash",
+  "input": {
+    "command": "gh api repos/rtk-ai/icm/contents/crates/icm-cli/src/main.rs -q '.content' 2>/dev/null | base64 -d 2>/dev/null | sed -n '900,1300p'",
+    "description": "Read main.rs lines 900-1300 (hook handlers, init)"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

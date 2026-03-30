@@ -1,0 +1,34 @@
+name: Debate and Judge
+id: debate
+source: agentic-patterns.com
+description: >
+  Two agents take opposing perspectives on the same problem. A third agent
+  acts as judge, evaluating arguments and reaching a balanced conclusion.
+  Surfaces disagreements and blind spots.
+topology: adversarial
+communication: structured-exchange
+when_to_use:
+  - "Need to surface disagreements or competing priorities"
+  - "Offense vs defense perspective needed"
+  - "Risk assessment where severity is debatable"
+  - "Trade-off analysis between security and usability"
+  - "Threat modeling with conflicting assumptions"
+when_not_to_use:
+  - "Clear-cut technical tasks with one right answer"
+  - "Time-sensitive issues requiring immediate action"
+  - "Tasks where collaboration is more valuable than debate"
+pros:
+  - "Surfaces hidden assumptions and blind spots"
+  - "Thorough coverage of opposing viewpoints"
+  - "Forces explicit reasoning and evidence"
+cons:
+  - "Higher token cost than sequential approaches"
+  - "May over-focus on contentious areas"
+  - "Requires good judge to synthesize"
+estimated_token_cost: high
+estimated_agents: "3"
+roles_suggested:
+  debater_offense: pentester
+  debater_defense: auditor
+  judge: security_architect
+elo_lead_selection: true

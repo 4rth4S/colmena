@@ -1,0 +1,13 @@
+{
+  "id": "1774830264733-toolu_01RFANZUehSENj7Yo862EGgn",
+  "timestamp": "2026-03-30T00:24:24.733769Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "rm -f /Users/fr33m4n/colmena/config/library/roles/cloud-security.yaml /Users/fr33m4n/colmena/config/library/prompts/cloud-security.md 2>/dev/null; echo \"cleaned\"",
+    "description": "Remove test scaffold files"
+  },
+  "rule_matched": "restricted[0]",
+  "priority": "medium",
+  "reason": "Potentially destructive system command"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "1774853639854-tu_integration",
+  "timestamp": "2026-03-30T06:53:59.854131Z",
+  "agent_id": null,
+  "tool": "Write",
+  "input": {
+    "file_path": "/Users/fr33m4n/colmena/.env"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

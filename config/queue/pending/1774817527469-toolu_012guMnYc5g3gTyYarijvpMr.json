@@ -1,0 +1,13 @@
+{
+  "id": "1774817527469-toolu_012guMnYc5g3gTyYarijvpMr",
+  "timestamp": "2026-03-29T20:52:07.469236Z",
+  "agent_id": "a54bd57fe4350c751",
+  "tool": "Bash",
+  "input": {
+    "command": "gh api repos/rtk-ai/icm/git/trees/main --paginate -q '.tree[].path' 2>/dev/null; echo \"---RECURSIVE---\"; gh api \"repos/rtk-ai/icm/git/trees/main?recursive=1\" --paginate -q '.tree[].path' 2>/dev/null",
+    "description": "Get full repo tree for rtk-ai/icm"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1774833285479-toolu_01AyEHu5HXyQ8RqFmbtPSU4W",
+  "timestamp": "2026-03-30T01:14:45.479679Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "python3 << 'PYEOF'\nimport csv\n\nwith open('RRA_Analysis_colmena.csv', 'r') as f:\n    reader = csv.reader(f)\n    header = next(reader)\n    print(\"Columns:\", len(header))\n    \n    rows = list(reader)\n    print(\"Threats:\", len(rows))\n    \n    prev = 100.0\n    for row in rows:\n        num = row[0]\n        score = float(row[16])\n        d = int(row[6])\n        r = int(row[8])\n        e = int(row[10])\n        a = int(row[12])\n        d2 = int(row[14])\n        calc = round((d+r+e+a+d2)/5, 1)\n        ok = \"OK\" if abs(calc - score) < 0.15 else \"MISMATCH=\"+str(calc)\n        sort_ok = \"OK\" if score <= prev else \"UNSORTED\"\n        print(f\"  #{num:>2} DREAD={score} calc={ok} sort={sort_ok} | {row[3][:35]}\")\n        prev = score\n    \n    cats = set(row[3] for row in rows)\n    print(\"\\nSTRIDE:\", cats)\n    \n    crit = sum(1 for r in rows if float(r[16]) >= 8.0)\n    high = sum(1 for r in rows if 7.0 <= float(r[16]) < 8.0)\n    med = sum(1 for r in rows if 6.0 <= float(r[16]) < 7.0)\n    low = sum(1 for r in rows if float(r[16]) < 6.0)\n    print(f\"Critical: {crit}, High: {high}, Medium: {med}, Low: {low}\")\nPYEOF",
+    "description": "Validate CSV DREAD scores and STRIDE coverage"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

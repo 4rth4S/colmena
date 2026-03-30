@@ -1,0 +1,13 @@
+{
+  "id": "1774830594501-toolu_018DMaepK1v489C8WUcinN4L",
+  "timestamp": "2026-03-30T00:29:54.501622Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "gh mr create \\\n  --title \"feat: M1 — Wisdom Library + Pattern Selector\" \\\n  --description \"$(cat <<'MRDESC'\n## Summary\n\nImplements M1 of the Colmena roadmap: Wisdom Library + Pattern Selector.\n\n### What's new\n\n- **colmena-core/library.rs** — Role and Pattern types, YAML loading, cross-validation\n- **colmena-core/selector.rs** — Keyword scoring, mission config generator, role gap detection, role scaffolding\n- **4 role templates** — security-architect, pentester, auditor, researcher\n- **4 system prompts** — CLAUDE.md-compatible Markdown per role\n- **6 orchestration patterns** — oracle-workers, debate, pipeline, swarm-consensus, plan-then-execute, mentored-execution\n- **CLI subcommands** — `colmena library list/show/select/create-role`\n- **5 MCP tools** — library_list, library_show, library_select, library_generate, library_create_role\n\n### User flow\n\n```\ncolmena library select --mission \"audit PCI-DSS compliance of payments API\"\n  → Scores 6 patterns against mission keywords\n  → Presents top 3 with role assignments, pros/cons\n  → User picks one\n  → Generates CLAUDE.md per agent in config/missions/\n```\n\n### Tests\n\n73 total (47 core unit + 6 CLI unit + 20 CLI integration)\n\n### Commits\n\n5 commits: CLAUDE.md update, library types+content, selector, CLI+MCP, integration tests\n\n---\n\nbuilt with ❤️‍🔥 by AppSec\nMRDESC\n)\" \\\n  --source-branch feature/m1-wisdom-library \\\n  --target-branch main 2>&1",
+    "description": "Create MR on GitLab"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

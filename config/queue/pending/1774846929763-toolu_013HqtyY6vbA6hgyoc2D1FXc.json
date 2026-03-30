@@ -1,0 +1,13 @@
+{
+  "id": "1774846929763-toolu_013HqtyY6vbA6hgyoc2D1FXc",
+  "timestamp": "2026-03-30T05:02:09.763468Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git add colmena-core/src/audit.rs CLAUDE.md Cargo.lock colmena-cli/Cargo.toml colmena-cli/src/hook.rs colmena-cli/src/install.rs colmena-cli/src/main.rs colmena-core/src/config.rs colmena-core/src/del...",
+    "description": "Stage all RRA hardening files"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

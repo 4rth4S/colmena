@@ -1,0 +1,12 @@
+{
+  "id": "1774829135727-toolu_01Go2sRHmTK8GEUxDwqFCFgq",
+  "timestamp": "2026-03-30T00:05:35.727817Z",
+  "agent_id": null,
+  "tool": "Skill",
+  "input": {
+    "skill": "claude-md-management:revise-claude-md"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

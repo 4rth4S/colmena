@@ -1,0 +1,13 @@
+{
+  "id": "1774829798307-toolu_015om54Gm5ZHSDwMFJ3S3SLc",
+  "timestamp": "2026-03-30T00:16:38.307673Z",
+  "agent_id": "a970f063845d168ac",
+  "tool": "Bash",
+  "input": {
+    "command": "ruby -e \"require 'yaml'; Dir.glob('/Users/fr33m4n/colmena/config/library/**/*.yaml').sort.each { |f| YAML.safe_load(File.read(f)); puts \\\"OK  #{File.basename(f)}\\\" }\"",
+    "description": "Validate all YAML files with Ruby YAML parser"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}
