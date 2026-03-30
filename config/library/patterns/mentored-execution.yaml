@@ -1,0 +1,33 @@
+name: Mentored Execution
+id: mentored-execution
+source: custom
+description: >
+  A senior agent guides a junior agent through a task, providing advice
+  before critical actions. Designed for skill development and high-stakes
+  tasks where quality assurance is essential.
+topology: hierarchical
+communication: hub-and-spoke
+when_to_use:
+  - "Junior agent tackling a task above their skill level"
+  - "High-stakes task requiring oversight and guidance"
+  - "Training scenario to build agent expertise"
+  - "Task where quality review at each step prevents costly mistakes"
+  - "New domain where agent needs domain-specific guidance"
+when_not_to_use:
+  - "All agents have equal expertise in the domain"
+  - "Task is routine and well-understood"
+  - "Speed is the primary concern"
+pros:
+  - "Quality assurance at each step"
+  - "Knowledge transfer from senior to junior"
+  - "Catches mistakes before they compound"
+cons:
+  - "Slower — mentor review adds latency"
+  - "Mentor context grows with each interaction"
+  - "Only two agents active"
+estimated_token_cost: medium
+estimated_agents: "2"
+roles_suggested:
+  mentor: security_architect
+  mentee: pentester
+elo_lead_selection: true

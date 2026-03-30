@@ -1,0 +1,13 @@
+{
+  "id": "1774851265395-toolu_01RspVCVK6zq8uSyXLFhKMPy",
+  "timestamp": "2026-03-30T06:14:25.395528Z",
+  "agent_id": "aeff660172467616f",
+  "tool": "Bash",
+  "input": {
+    "command": "git add colmena-core/src/audit.rs colmena-core/src/lib.rs colmena-core/src/review.rs && git commit -m \"$(cat <<'EOF'\nfeat(m2): review protocol — submit, evaluate, trust gate, 6 invariants\n\nbuilt wit...",
+    "description": "Stage and commit review protocol files"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

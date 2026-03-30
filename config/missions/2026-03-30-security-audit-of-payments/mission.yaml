@@ -1,0 +1,13 @@
+mission: "security audit of payments API"
+pattern: oracle-workers
+pattern_name: "Oracle and Workers"
+created: 2026-03-30T00:27:47.448687+00:00
+agents:
+  - role: pentester
+    slot: workers
+  - role: auditor
+    slot: workers
+  - role: researcher
+    slot: workers
+  - role: security_architect
+    slot: oracle

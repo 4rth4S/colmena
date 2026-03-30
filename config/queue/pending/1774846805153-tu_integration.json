@@ -1,0 +1,12 @@
+{
+  "id": "1774846805153-tu_integration",
+  "timestamp": "2026-03-30T05:00:05.153617Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "rm -r /tmp/somedir"
+  },
+  "rule_matched": "restricted[1]",
+  "priority": "medium",
+  "reason": "Potentially destructive system command"
+}

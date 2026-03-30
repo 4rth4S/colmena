@@ -1,0 +1,13 @@
+{
+  "id": "1774849975907-toolu_01E19P1zqnmVJ36MndNTMPzq",
+  "timestamp": "2026-03-30T05:52:55.907841Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git add docs/specs/2026-03-30-m2-peer-review-elo-design.md && git commit -m \"$(cat <<'EOF'\ndocs: M2 design spec — Peer Review Protocol + ELO Engine + Findings Store\n\nReplaces original M2 (Knowledge ...",
+    "description": "Commit M2 design spec"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

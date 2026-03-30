@@ -1,0 +1,33 @@
+name: Oracle and Workers
+id: oracle-workers
+source: agentic-patterns.com
+description: >
+  A single orchestrator (Oracle) analyzes the mission, decomposes it into
+  sub-tasks, and dispatches specialized workers. Workers report back to
+  the Oracle, which synthesizes results into a unified deliverable.
+topology: hierarchical
+communication: hub-and-spoke
+when_to_use:
+  - "Mission has clearly decomposable sub-tasks"
+  - "Tasks are independent and can run in parallel"
+  - "Need a single synthesized output or report"
+  - "Security audit with multiple focus areas"
+  - "Architecture review requiring diverse expertise"
+when_not_to_use:
+  - "Tasks require real-time negotiation between agents"
+  - "The decomposition itself is the hard problem"
+  - "Very small scope that one agent can handle"
+pros:
+  - "Clear accountability — Oracle owns the outcome"
+  - "Parallelizable — workers run independently"
+  - "Lower token cost — workers don't share full context"
+cons:
+  - "Oracle is single point of failure"
+  - "Workers can't course-correct each other"
+  - "Oracle context grows with number of workers"
+estimated_token_cost: medium
+estimated_agents: "3-6"
+roles_suggested:
+  oracle: security_architect
+  workers: [pentester, auditor, researcher]
+elo_lead_selection: true
