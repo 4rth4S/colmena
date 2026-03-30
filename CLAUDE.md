@@ -18,7 +18,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 Rust workspace with 3 crates:
 
 - **colmena-core** — shared library: config, firewall, delegate, queue, models, paths. Zero platform deps.
-- **colmena-cli** — CLI binary: hook hot path, clap subcommands, macOS notifications, install
+- **colmena-cli** — CLI binary: hook hot path, clap subcommands, notifications (no-op placeholder), install
 - **colmena-mcp** — MCP server: rmcp, stdio transport, exposes core functions as CC tools
 
 Two CC integration points:
