@@ -1,0 +1,14 @@
+{
+  "id": "1774885934798-toolu_01ThcgY6CAqjvWCa7hw1PWEj",
+  "timestamp": "2026-03-30T15:52:14.798669Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git push -u origin docs/recover-specs-update-roadmap 2>&1",
+    "description": "Push recovery branch",
+    "timeout": 30000
+  },
+  "rule_matched": "restricted[2]",
+  "priority": "medium",
+  "reason": "Push to remote requires human confirmation"
+}

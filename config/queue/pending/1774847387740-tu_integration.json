@@ -1,0 +1,12 @@
+{
+  "id": "1774847387740-tu_integration",
+  "timestamp": "2026-03-30T05:09:47.740791Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git commit -m 'removed --force flag'"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

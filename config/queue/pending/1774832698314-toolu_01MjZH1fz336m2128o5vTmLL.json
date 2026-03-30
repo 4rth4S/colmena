@@ -1,0 +1,13 @@
+{
+  "id": "1774832698314-toolu_01MjZH1fz336m2128o5vTmLL",
+  "timestamp": "2026-03-30T01:04:58.314924Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git add config/trust-firewall.yaml && git commit -m \"$(cat <<'EOF'\nfix: tune firewall rules — reduce noise, unblock git push\n\n- Add TaskCreate/TaskUpdate/TaskGet/TaskList/TaskOutput/TaskStop to trust_circle\n- Add mkdir to trust_circle (non-destructive filesystem creation)\n- Add CC orchestration tools (Skill, ToolSearch, PlanMode, Worktree, etc.)\n- Move git push from blocked to restricted (ask, not block)\n- Narrow blocked pattern: remove overly broad push.*origin matcher\n\nbuilt with ❤️‍🔥 by AppSec\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\nEOF\n)\"",
+    "description": "Commit firewall config changes"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

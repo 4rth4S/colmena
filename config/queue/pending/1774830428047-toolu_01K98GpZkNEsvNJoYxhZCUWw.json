@@ -1,0 +1,13 @@
+{
+  "id": "1774830428047-toolu_01K98GpZkNEsvNJoYxhZCUWw",
+  "timestamp": "2026-03-30T00:27:08.047391Z",
+  "agent_id": "a6803d617e30bdc39",
+  "tool": "Bash",
+  "input": {
+    "command": "# Test the binary runs first\n/Users/fr33m4n/colmena/target/debug/colmena library list 2>&1 | head -20",
+    "description": "Test library list command"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

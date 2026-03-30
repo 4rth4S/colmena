@@ -1,0 +1,954 @@
+mod hook;
+mod install;
+mod notify;
+
+use std::io::{BufReader, Read as _};
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use chrono::Utc;
+use clap::{Parser, Subcommand};
+
+use colmena_core::config::Action;
+use colmena_core::delegate::RuntimeDelegation;
+use colmena_core::elo;
+use colmena_core::library::{default_library_dir, load_patterns, load_roles, validate_library};
+use colmena_core::paths::default_config_dir;
+use colmena_core::review::{self, ReviewState};
+use colmena_core::selector::{
+    detect_role_gaps, format_recommendations, generate_mission, scaffold_role, select_patterns,
+};
+
+/// Colmena — Trust Firewall + Approval Hub for Claude Code multi-agent orchestration
+#[derive(Parser)]
+#[command(name = "colmena", version, about)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Hot path: stdin JSON → evaluate → stdout JSON (used by CC hook)
+    Hook {
+        /// Path to trust-firewall.yaml
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// Queue management
+    Queue {
+        #[command(subcommand)]
+        action: QueueAction,
+    },
+    /// Manage runtime trust delegations
+    Delegate {
+        #[command(subcommand)]
+        action: DelegateAction,
+    },
+    /// Validate trust-firewall.yaml
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+    /// Register colmena hook in ~/.claude/settings.json
+    Install,
+    /// Wisdom library: roles, patterns, and orchestration selection
+    Library {
+        #[command(subcommand)]
+        action: LibraryAction,
+    },
+    /// Peer review management
+    Review {
+        #[command(subcommand)]
+        action: ReviewAction,
+    },
+    /// ELO ratings
+    Elo {
+        #[command(subcommand)]
+        action: EloAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum DelegateAction {
+    /// Add a new delegation
+    Add {
+        /// Tool to delegate
+        #[arg(long)]
+        tool: String,
+        /// Restrict to a specific agent
+        #[arg(long)]
+        agent: Option<String>,
+        /// TTL in hours (default: 4, max: 24)
+        #[arg(long, default_value = "4")]
+        ttl: i64,
+    },
+    /// List active delegations
+    List,
+    /// Revoke a delegation
+    Revoke {
+        /// Tool to revoke
+        #[arg(long)]
+        tool: String,
+        /// Only revoke for a specific agent
+        #[arg(long)]
+        agent: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum QueueAction {
+    /// List pending approval items
+    List,
+    /// Prune old queue entries
+    Prune {
+        /// Maximum age in days (default: 7)
+        #[arg(long, default_value = "7")]
+        older_than: i64,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Check configuration file for errors
+    Check {
+        /// Path to trust-firewall.yaml
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum LibraryAction {
+    /// List all roles and patterns
+    List,
+    /// Show details of a specific role or pattern
+    Show {
+        /// Role or pattern ID (e.g., "pentester", "oracle-workers")
+        id: String,
+    },
+    /// Select an orchestration pattern for a mission
+    Select {
+        /// Mission description
+        #[arg(long)]
+        mission: String,
+    },
+    /// Create a new role scaffold
+    CreateRole {
+        /// Role ID (e.g., "cloud-security")
+        #[arg(long)]
+        id: String,
+        /// Role description
+        #[arg(long)]
+        description: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReviewAction {
+    /// List reviews (pending, completed)
+    List {
+        /// Filter by state: pending, completed, needs_human_review
+        #[arg(long)]
+        state: Option<String>,
+    },
+    /// Show details of a specific review
+    Show {
+        /// Review ID
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum EloAction {
+    /// Show ELO leaderboard
+    Show,
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Commands::Hook { config } => run_hook(config),
+        Commands::Queue { action } => match action {
+            QueueAction::List => run_queue_list(),
+            QueueAction::Prune { older_than } => run_queue_prune(older_than),
+        },
+        Commands::Delegate { action } => match action {
+            DelegateAction::Add { tool, agent, ttl } => run_delegate(tool, agent, ttl),
+            DelegateAction::List => run_delegate_list(),
+            DelegateAction::Revoke { tool, agent } => run_delegate_revoke(tool, agent),
+        },
+        Commands::Config { action } => match action {
+            ConfigAction::Check { config } => run_config_check(config),
+        },
+        Commands::Install => install::run_install(),
+        Commands::Library { action } => match action {
+            LibraryAction::List => run_library_list(),
+            LibraryAction::Show { id } => run_library_show(id),
+            LibraryAction::Select { mission } => run_library_select(mission),
+            LibraryAction::CreateRole { id, description } => run_library_create_role(id, description),
+        },
+        Commands::Review { action } => match action {
+            ReviewAction::List { state } => run_review_list(state),
+            ReviewAction::Show { id } => run_review_show(id),
+        },
+        Commands::Elo { action } => match action {
+            EloAction::Show => run_elo_show(),
+        },
+    };
+
+    if let Err(e) = result {
+        log_error(&format!("Hook error: {e:#}"));
+        // Fix 15 (DREAD 6.2): sanitize error messages — generic for stdout, details in log only
+        let sanitized = sanitize_error(&format!("{e}"));
+        let fallback = hook::HookResponse::ask(sanitized);
+        let _ = serde_json::to_writer(std::io::stdout(), &fallback);
+        std::process::exit(0);
+    }
+}
+
+/// Hook hot path: stdin → deserialize → evaluate → queue if ask → notify → stdout
+fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
+    // 1. Read stdin with 10MB limit (Fix 7, DREAD 7.6)
+    const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
+    let mut input = String::new();
+    let bytes_read = BufReader::new(std::io::stdin())
+        .take(MAX_STDIN_BYTES + 1)
+        .read_to_string(&mut input)
+        .context("Failed to read stdin")?;
+
+    if bytes_read as u64 > MAX_STDIN_BYTES {
+        let response = hook::HookResponse::ask("Stdin payload exceeds 10MB limit");
+        serde_json::to_writer(std::io::stdout(), &response)
+            .context("Failed to write hook response")?;
+        return Ok(());
+    }
+
+    let payload: hook::HookPayload =
+        serde_json::from_str(&input).context("Failed to parse hook payload")?;
+
+    // 1b. Settings.json integrity check (Fix 12, DREAD 7.8)
+    check_hook_integrity();
+
+    // 2. Resolve config path
+    let config_file = config_path
+        .or_else(|| std::env::var("COLMENA_CONFIG").ok().map(PathBuf::from))
+        .unwrap_or_else(|| colmena_core::paths::default_config_dir().join("trust-firewall.yaml"));
+
+    let cfg = colmena_core::config::load_config(&config_file, &payload.cwd)?;
+    let patterns = colmena_core::config::compile_config(&cfg)?;
+
+    for w in colmena_core::config::validate_tool_names(&cfg) {
+        log_error(&format!("Config warning: {w}"));
+    }
+
+    // 3. Load runtime delegations
+    let delegations_path = config_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("runtime-delegations.json");
+    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+
+    // 4. Map HookPayload to EvaluationInput and evaluate
+    let eval_input = payload.to_evaluation_input();
+    let decision = colmena_core::firewall::evaluate(&cfg, &patterns, &delegations, &eval_input);
+
+    // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
+    let config_dir = config_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let audit_path = config_dir.join("audit.log");
+    let action_str = match decision.action {
+        Action::AutoApprove => "ALLOW",
+        Action::Ask => "ASK",
+        Action::Block => "DENY",
+    };
+    let key_field = colmena_core::audit::extract_key_field(&eval_input.tool_name, &eval_input.tool_input);
+    let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::Decision {
+        action: action_str,
+        session_id: &eval_input.session_id,
+        agent_id: eval_input.agent_id.as_deref(),
+        tool: &eval_input.tool_name,
+        key_field: &key_field,
+        rule: decision.matched_rule.as_deref().unwrap_or("none"),
+    });
+
+    // 5. If Ask → enqueue pending
+    if decision.action == Action::Ask {
+        if let Err(e) = colmena_core::queue::enqueue_pending(config_dir, &eval_input, &decision) {
+            log_error(&format!("Queue write failed: {e:#}"));
+        }
+    }
+
+    // 6. Fire notification (non-blocking)
+    notify::notify(
+        &decision.action,
+        &decision.priority,
+        &payload.tool_name,
+        payload.agent_id.as_deref(),
+        cfg.notifications.as_ref(),
+    );
+
+    // 7. Build and write response
+    let response = match decision.action {
+        Action::AutoApprove => hook::HookResponse::allow(&decision.reason),
+        Action::Block => hook::HookResponse::deny(&decision.reason),
+        Action::Ask => hook::HookResponse::ask(&decision.reason),
+    };
+
+    serde_json::to_writer(std::io::stdout(), &response)
+        .context("Failed to write hook response")?;
+
+    Ok(())
+}
+
+fn run_queue_list() -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let entries = colmena_core::queue::list_pending(&config_dir)?;
+
+    if entries.is_empty() {
+        println!("No pending approvals.");
+        return Ok(());
+    }
+
+    println!("{} pending approval(s):\n", entries.len());
+    for entry in &entries {
+        let agent = entry
+            .agent_id
+            .as_deref()
+            .unwrap_or("unknown");
+        println!(
+            "  [{priority}] {tool} — {agent}",
+            priority = entry.priority,
+            tool = entry.tool,
+            agent = agent,
+        );
+        println!("    Reason: {}", entry.reason);
+        println!("    Time:   {}", entry.timestamp);
+        println!("    ID:     {}", entry.id);
+        println!();
+    }
+
+    Ok(())
+}
+
+fn run_queue_prune(older_than_days: i64) -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let duration = chrono::Duration::days(older_than_days);
+    let pruned = colmena_core::queue::prune_old_entries(&config_dir, duration)?;
+    if pruned == 0 {
+        println!("No entries older than {older_than_days} days.");
+    } else {
+        println!("Pruned {pruned} entries older than {older_than_days} days → queue/decided/");
+    }
+    Ok(())
+}
+
+fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<()> {
+    for w in colmena_core::config::validate_tool_name_single(&tool) {
+        eprintln!("WARNING: {w}");
+    }
+
+    let ttl = colmena_core::delegate::validate_ttl(ttl_hours)?;
+
+    let config_dir = colmena_core::paths::default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+
+    let mut delegations = colmena_core::delegate::load_delegations(&delegations_path);
+
+    let now = Utc::now();
+    let expires_at = Some(now + ttl);
+
+    let new_delegation = RuntimeDelegation {
+        tool: tool.clone(),
+        agent_id: agent.clone(),
+        action: Action::AutoApprove,
+        created_at: now,
+        expires_at,
+        session_id: None,
+    };
+
+    delegations.push(new_delegation);
+
+    colmena_core::delegate::save_delegations(&delegations_path, &delegations)?;
+
+    // Audit log
+    let audit_path = config_dir.join("audit.log");
+    let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateCreate {
+        tool: &tool,
+        agent: agent.as_deref(),
+        ttl: &format!("{ttl_hours}h"),
+        source: "cli",
+    });
+
+    let scope = match &agent {
+        Some(a) => format!("agent '{a}'"),
+        None => "all agents".to_string(),
+    };
+
+    println!("Delegated auto-approve for '{tool}' to {scope} ({ttl_hours}h)");
+    Ok(())
+}
+
+fn run_delegate_list() -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let delegations = colmena_core::delegate::list_delegations(&delegations_path);
+
+    if delegations.is_empty() {
+        println!("No active delegations.");
+        return Ok(());
+    }
+
+    println!("{} active delegation(s):\n", delegations.len());
+    for d in &delegations {
+        let agent = d.agent_id.as_deref().unwrap_or("*");
+        let ttl = match d.expires_at {
+            Some(exp) => {
+                let remaining = exp - Utc::now();
+                if remaining.num_minutes() > 60 {
+                    format!("{}h remaining", remaining.num_hours())
+                } else {
+                    format!("{}m remaining", remaining.num_minutes())
+                }
+            }
+            None => "no expiry".to_string(),
+        };
+        println!("  {} → agent={} ({})", d.tool, agent, ttl);
+    }
+
+    Ok(())
+}
+
+fn run_delegate_revoke(tool: String, agent: Option<String>) -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+
+    let revoked = colmena_core::delegate::revoke_delegations(
+        &delegations_path,
+        &tool,
+        agent.as_deref(),
+    )?;
+
+    if revoked == 0 {
+        println!("No matching delegations found for '{tool}'.");
+    } else {
+        println!("Revoked {revoked} delegation(s) for '{tool}'.");
+
+        // Audit log
+        let audit_path = config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateRevoke {
+            tool: &tool,
+            agent: agent.as_deref(),
+        });
+    }
+
+    Ok(())
+}
+
+fn run_config_check(config_path: Option<PathBuf>) -> Result<()> {
+    let config_file = config_path
+        .or_else(|| std::env::var("COLMENA_CONFIG").ok().map(PathBuf::from))
+        .unwrap_or_else(|| colmena_core::paths::default_config_dir().join("trust-firewall.yaml"));
+
+    println!("Checking {}...", config_file.display());
+
+    let cfg = colmena_core::config::load_config(&config_file, "/tmp/placeholder")?;
+
+    println!("  Version:      {}", cfg.version);
+    println!("  Default:      {:?}", cfg.defaults.action);
+    println!("  Trust circle: {} rule(s)", cfg.trust_circle.len());
+    println!("  Restricted:   {} rule(s)", cfg.restricted.len());
+    println!("  Blocked:      {} rule(s)", cfg.blocked.len());
+    println!("  Agent overrides: {} agent(s)", cfg.agent_overrides.len());
+
+    let warnings = colmena_core::config::validate_tool_names(&cfg);
+    for w in &warnings {
+        eprintln!("  WARNING: {w}");
+    }
+
+    match colmena_core::config::compile_config(&cfg) {
+        Ok(_) => println!("\nConfig is valid."),
+        Err(e) => {
+            eprintln!("  ERROR: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_library_list() -> Result<()> {
+    let library_dir = default_library_dir();
+    if !library_dir.exists() {
+        eprintln!(
+            "Library directory not found: {}\nRun `colmena install` or create the directory manually.",
+            library_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    let roles = load_roles(&library_dir)?;
+    let patterns = load_patterns(&library_dir)?;
+
+    // Print roles table
+    println!("Roles ({}):", roles.len());
+    println!("  {:<20} {:<6} SPECIALIZATIONS", "ID", "ICON");
+    println!("  {:-<20} {:-<6} {:-<40}", "", "", "");
+    for role in &roles {
+        println!(
+            "  {:<20} {:<6} {}",
+            role.id,
+            role.icon,
+            role.specializations.len()
+        );
+    }
+
+    println!();
+
+    // Print patterns table
+    println!("Patterns ({}):", patterns.len());
+    println!(
+        "  {:<30} {:<12} ESTIMATED AGENTS",
+        "ID", "TOPOLOGY"
+    );
+    println!("  {:-<30} {:-<12} {:-<16}", "", "", "");
+    for pattern in &patterns {
+        println!(
+            "  {:<30} {:<12} {}",
+            pattern.id, pattern.topology, pattern.estimated_agents
+        );
+    }
+
+    // Validate and print warnings
+    let warnings = validate_library(&roles, &patterns, &library_dir);
+    if !warnings.is_empty() {
+        println!();
+        println!("Warnings ({}):", warnings.len());
+        for w in &warnings {
+            println!("  WARNING: {w}");
+        }
+    }
+
+    Ok(())
+}
+
+fn run_library_show(id: String) -> Result<()> {
+    let library_dir = default_library_dir();
+    if !library_dir.exists() {
+        eprintln!(
+            "Library directory not found: {}",
+            library_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    let roles = load_roles(&library_dir)?;
+    let patterns = load_patterns(&library_dir)?;
+
+    // Search roles first
+    if let Some(role) = roles.iter().find(|r| r.id == id) {
+        println!("Role: {} {}", role.icon, role.name);
+        println!("  ID:                {}", role.id);
+        println!("  Description:       {}", role.description);
+        println!("  Default trust:     {}", role.default_trust_level);
+        println!("  System prompt ref: {}", role.system_prompt_ref);
+        println!("  Tools allowed:     {}", role.tools_allowed.join(", "));
+        println!("  Specializations:   {}", role.specializations.join(", "));
+        println!("  ELO initial:       {}", role.elo.initial);
+        if !role.elo.categories.is_empty() {
+            let cats: Vec<String> = role.elo.categories
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            println!("  ELO categories:    {}", cats.join(", "));
+        }
+        if !role.mentoring.can_mentor.is_empty() {
+            println!("  Can mentor:        {}", role.mentoring.can_mentor.join(", "));
+        }
+        if !role.mentoring.mentored_by.is_empty() {
+            println!("  Mentored by:       {}", role.mentoring.mentored_by.join(", "));
+        }
+        return Ok(());
+    }
+
+    // Search patterns
+    if let Some(pattern) = patterns.iter().find(|p| p.id == id) {
+        println!("Pattern: {}", pattern.name);
+        println!("  ID:               {}", pattern.id);
+        if let Some(source) = &pattern.source {
+            println!("  Source:           {}", source);
+        }
+        println!("  Description:      {}", pattern.description);
+        println!("  Topology:         {}", pattern.topology);
+        println!("  Communication:    {}", pattern.communication);
+        println!("  Estimated agents: {}", pattern.estimated_agents);
+        println!("  Token cost:       {}", pattern.estimated_token_cost);
+        println!("  ELO lead select:  {}", pattern.elo_lead_selection);
+        println!("  When to use:");
+        for w in &pattern.when_to_use {
+            println!("    - {w}");
+        }
+        if !pattern.when_not_to_use.is_empty() {
+            println!("  When NOT to use:");
+            for w in &pattern.when_not_to_use {
+                println!("    - {w}");
+            }
+        }
+        println!("  Pros:");
+        for p in &pattern.pros {
+            println!("    + {p}");
+        }
+        println!("  Cons:");
+        for c in &pattern.cons {
+            println!("    - {c}");
+        }
+        println!("  Roles suggested:");
+        for (slot, role_slot) in &pattern.roles_suggested.0 {
+            println!("    {slot}: {}", role_slot.as_vec().join(", "));
+        }
+        return Ok(());
+    }
+
+    eprintln!("Not found: no role or pattern with id '{id}'");
+    std::process::exit(1);
+}
+
+fn run_library_select(mission: String) -> Result<()> {
+    let library_dir = default_library_dir();
+    if !library_dir.exists() {
+        eprintln!(
+            "Library directory not found: {}",
+            library_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    let roles = load_roles(&library_dir)?;
+    let patterns = load_patterns(&library_dir)?;
+
+    let recommendations = select_patterns(&mission, &patterns, &roles);
+    let formatted = format_recommendations(&recommendations);
+    println!("{formatted}");
+
+    // Check for role gaps and warn
+    let gaps = detect_role_gaps(&mission, &roles);
+    if !gaps.is_empty() {
+        println!("Role gap warnings — no role covers these mission keywords:");
+        for gap in &gaps {
+            println!("  - {gap}");
+        }
+        println!("  Consider running: colmena library create-role --id <id> --description <desc>");
+        println!();
+    }
+
+    if recommendations.is_empty() {
+        println!("No patterns matched. Try a more descriptive mission.");
+        return Ok(());
+    }
+
+    // Prompt user to choose
+    print!("Choose a pattern [1");
+    for i in 2..=recommendations.len() {
+        print!("/{i}");
+    }
+    println!("] (default: 1): ");
+
+    let mut choice_line = String::new();
+    std::io::stdin()
+        .read_line(&mut choice_line)
+        .context("Failed to read pattern choice")?;
+
+    let choice: usize = choice_line.trim().parse().unwrap_or(1);
+    let idx = if choice == 0 || choice > recommendations.len() {
+        0
+    } else {
+        choice - 1
+    };
+
+    let selected = &recommendations[idx];
+    println!("Selected: {}", selected.pattern_name);
+
+    let missions_dir = default_config_dir().join("missions");
+    let mission_config = generate_mission(
+        &mission,
+        selected,
+        &roles,
+        &library_dir,
+        &missions_dir,
+    )?;
+
+    println!();
+    println!("Mission created: {}", mission_config.mission_dir.display());
+    println!("Agent configs:");
+    for agent in &mission_config.agent_configs {
+        println!(
+            "  {} — {}",
+            agent.role_id,
+            agent.claude_md_path.display()
+        );
+    }
+    println!();
+    println!(
+        "Next: open each agent's CLAUDE.md and launch Claude Code with --project pointing to its directory."
+    );
+
+    Ok(())
+}
+
+fn run_library_create_role(id: String, description: String) -> Result<()> {
+    let library_dir = default_library_dir();
+
+    let (role_path, prompt_path) = scaffold_role(&id, &description, &library_dir)?;
+
+    println!("Created role scaffold for '{id}':");
+    println!("  Role YAML:   {} — edit to customize tools, specializations, ELO", role_path.display());
+    println!("  Prompt file: {} — edit to customize system prompt", prompt_path.display());
+
+    Ok(())
+}
+
+fn run_review_list(state: Option<String>) -> Result<()> {
+    let review_dir = default_config_dir().join("reviews");
+    if !review_dir.exists() {
+        println!("No reviews found.");
+        return Ok(());
+    }
+
+    // Map state string to ReviewState enum
+    let state_filter = match state.as_deref() {
+        Some("pending") => Some(ReviewState::Pending),
+        Some("in_review") => Some(ReviewState::InReview),
+        Some("evaluated") => Some(ReviewState::Evaluated),
+        Some("completed") => Some(ReviewState::Completed),
+        Some("needs_human_review") => Some(ReviewState::NeedsHumanReview),
+        Some("rejected") => Some(ReviewState::Rejected),
+        Some(other) => {
+            eprintln!(
+                "Unknown state '{other}'. Valid: pending, in_review, evaluated, completed, needs_human_review, rejected"
+            );
+            std::process::exit(1);
+        }
+        None => None,
+    };
+
+    let entries = review::list_reviews(&review_dir, state_filter)?;
+
+    if entries.is_empty() {
+        println!("No reviews found.");
+        return Ok(());
+    }
+
+    println!("{} review(s):\n", entries.len());
+    println!(
+        "  {:<14} {:<16} {:<25} {:<8} {:<25} CREATED",
+        "STATE", "REVIEW ID", "AUTHOR -> REVIEWER", "SCORE", "MISSION"
+    );
+    println!(
+        "  {:-<14} {:-<16} {:-<25} {:-<8} {:-<25} {:-<20}",
+        "", "", "", "", "", ""
+    );
+
+    for entry in &entries {
+        let state_str = format_review_state(&entry.state);
+        let pairing = format!("{} -> {}", entry.author_role, entry.reviewer_role);
+        let score = match entry.score_average {
+            Some(avg) => format!("{avg:.1}"),
+            None => "-".to_string(),
+        };
+        let created = entry.created_at.format("%Y-%m-%d %H:%M").to_string();
+
+        println!(
+            "  {:<14} {:<16} {:<25} {:<8} {:<25} {}",
+            state_str, entry.review_id, pairing, score, entry.mission, created
+        );
+    }
+
+    Ok(())
+}
+
+fn run_review_show(id: String) -> Result<()> {
+    let review_dir = default_config_dir().join("reviews");
+    if !review_dir.exists() {
+        eprintln!("No reviews directory found.");
+        std::process::exit(1);
+    }
+
+    let entries = review::list_reviews(&review_dir, None)?;
+    let entry = entries.iter().find(|e| e.review_id == id);
+
+    let entry = match entry {
+        Some(e) => e,
+        None => {
+            eprintln!("Review '{id}' not found.");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Review: {}", entry.review_id);
+    println!("  State:         {}", format_review_state(&entry.state));
+    println!("  Mission:       {}", entry.mission);
+    println!("  Author:        {}", entry.author_role);
+    println!("  Reviewer:      {}", entry.reviewer_role);
+    println!("  Artifact:      {}", entry.artifact_path);
+    println!("  Hash:          {}", entry.artifact_hash);
+    println!(
+        "  Created:       {}",
+        entry.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
+
+    if let Some(evaluated_at) = entry.evaluated_at {
+        println!(
+            "  Evaluated:     {}",
+            evaluated_at.format("%Y-%m-%d %H:%M:%S UTC")
+        );
+    }
+
+    if let Some(ref scores) = entry.scores {
+        println!("  Scores:");
+        for (dim, val) in scores {
+            println!("    {dim}: {val}");
+        }
+    }
+
+    if let Some(avg) = entry.score_average {
+        println!("  Average:       {avg:.1}");
+    }
+
+    if let Some(count) = entry.finding_count {
+        println!("  Findings:      {count}");
+    }
+
+    Ok(())
+}
+
+fn run_elo_show() -> Result<()> {
+    let config_dir = default_config_dir();
+    let elo_log_path = config_dir.join("elo/elo-log.jsonl");
+
+    let events = elo::read_elo_log(&elo_log_path)?;
+
+    // Load roles from library to get baseline ELO values
+    let library_dir = default_library_dir();
+    let baselines: Vec<(String, u32)> = if library_dir.exists() {
+        match load_roles(&library_dir) {
+            Ok(roles) => roles.iter().map(|r| (r.id.clone(), r.elo.initial)).collect(),
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    let ratings = elo::leaderboard(&events, &baselines);
+
+    if ratings.is_empty() {
+        println!("No ELO data available.");
+        return Ok(());
+    }
+
+    println!(
+        "  {:<20} {:<8} {:<12} {:<10} LAST ACTIVE",
+        "AGENT", "ELO", "TREND(7d)", "REVIEWS"
+    );
+    println!(
+        "  {:-<20} {:-<8} {:-<12} {:-<10} {:-<20}",
+        "", "", "", "", ""
+    );
+
+    for rating in &ratings {
+        let trend = if rating.trend_7d > 0 {
+            format!("+{}", rating.trend_7d)
+        } else {
+            format!("{}", rating.trend_7d)
+        };
+
+        let last_active = match rating.last_active {
+            Some(ts) => ts.format("%Y-%m-%d %H:%M").to_string(),
+            None => "-".to_string(),
+        };
+
+        println!(
+            "  {:<20} {:<8} {:<12} {:<10} {}",
+            rating.agent, rating.elo, trend, rating.review_count, last_active
+        );
+    }
+
+    Ok(())
+}
+
+/// Format a ReviewState for display.
+fn format_review_state(state: &ReviewState) -> &'static str {
+    match state {
+        ReviewState::Pending => "pending",
+        ReviewState::InReview => "in_review",
+        ReviewState::Evaluated => "evaluated",
+        ReviewState::Completed => "completed",
+        ReviewState::NeedsHumanReview => "needs_human",
+        ReviewState::Rejected => "rejected",
+    }
+}
+
+/// Sanitize error messages before sending to CC stdout (Fix 15).
+/// Replaces absolute paths with generic placeholders to avoid leaking internal paths.
+fn sanitize_error(msg: &str) -> String {
+    // Replace absolute paths (e.g. /Users/foo/bar/...) with generic placeholder
+    let re = regex::Regex::new(r"(/[A-Za-z][A-Za-z0-9._/-]+)").unwrap();
+    re.replace_all(msg, "<path>").to_string()
+}
+
+/// Check that the hook registered in settings.json matches the running binary (Fix 12, DREAD 7.8).
+/// Best-effort: logs warning if mismatch, never fails the hook.
+fn check_hook_integrity() {
+    let our_binary = match std::env::current_exe() {
+        Ok(p) => p.to_string_lossy().to_string(),
+        Err(_) => return,
+    };
+
+    let home = match std::env::var("HOME") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+
+    let settings_path = PathBuf::from(&home).join(".claude/settings.json");
+    let contents = match std::fs::read_to_string(&settings_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let settings: serde_json::Value = match serde_json::from_str(&contents) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    // Walk PreToolUse hooks to find our command
+    if let Some(hooks) = settings.get("hooks").and_then(|h| h.get("PreToolUse")).and_then(|p| p.as_array()) {
+        for entry in hooks {
+            if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+                for h in inner_hooks {
+                    if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                        if cmd.contains("colmena hook") && !cmd.contains(&our_binary) {
+                            log_error(&format!(
+                                "Hook integrity warning: settings.json hook command '{}' does not match running binary '{}'",
+                                cmd, our_binary
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Best-effort append to colmena error log. Never panics.
+fn log_error(msg: &str) {
+    let log_path = colmena_core::paths::colmena_home().join("colmena-errors.log");
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let line = format!("[{timestamp}] {msg}\n");
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(line.as_bytes())
+        });
+}

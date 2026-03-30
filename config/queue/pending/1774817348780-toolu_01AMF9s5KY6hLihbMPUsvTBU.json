@@ -1,0 +1,13 @@
+{
+  "id": "1774817348780-toolu_01AMF9s5KY6hLihbMPUsvTBU",
+  "timestamp": "2026-03-29T20:49:08.780207Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "gh repo view rtk-ai/icm --json name,description,language,stargazerCount,forkCount,licenseInfo,createdAt,updatedAt,isArchived,isPrivate,defaultBranchRef 2>/dev/null",
+    "description": "Get repo metadata via GitHub CLI"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "1774817810840-toolu_011x6icZZc1Sn8Y3i38SMs2j",
+  "timestamp": "2026-03-29T20:56:50.840370Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "git add config/trust-firewall.yaml && git commit -m \"$(cat <<'EOF'\nfix: expand trust_circle bash patterns for real-world workflows\n\nThe original bash_pattern only covered basic read commands (cat, ls, grep).\nReal CC sessions use gh api, git log, cargo test, jq, base64, piped\ncommands, and many more safe operations that were falling to default ask.\n\nNew rules:\n- Git read-only ops (log, diff, status, blame, show, branch, etc.)\n- GitHub/GitLab CLI reads (gh api, gh pr list, glab api, etc.)\n- Build tools (cargo, npm, pip, node, rustc)\n- Safe piped commands (cat/curl/gh api piped to processors)\n- Common UNIX utilities (jq, base64, sort, cut, awk, sed, etc.)\n\nCo-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>\nEOF\n)\"",
+    "description": "Commit expanded trust rules"
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

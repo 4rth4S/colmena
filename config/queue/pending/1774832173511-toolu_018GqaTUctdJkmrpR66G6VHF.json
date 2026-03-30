@@ -1,0 +1,15 @@
+{
+  "id": "1774832173511-toolu_018GqaTUctdJkmrpR66G6VHF",
+  "timestamp": "2026-03-30T00:56:13.511381Z",
+  "agent_id": null,
+  "tool": "Bash",
+  "input": {
+    "command": "appsec-tm -y -o /Users/fr33m4n/colmena/docs/security /Users/fr33m4n/colmena 2>&1",
+    "description": "Run STRIDE+DREAD threat model on colmena repo",
+    "run_in_background": true,
+    "timeout": 600000
+  },
+  "rule_matched": "defaults",
+  "priority": "medium",
+  "reason": "No matching rule — falling back to default"
+}

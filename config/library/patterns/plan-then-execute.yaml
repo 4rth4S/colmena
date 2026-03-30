@@ -1,0 +1,33 @@
+name: Plan Then Execute
+id: plan-then-execute
+source: custom
+description: >
+  A planning agent creates a detailed mission plan, the human reviews and
+  approves it, then multiple execution agents carry it out. Separates
+  strategy from execution.
+topology: hierarchical
+communication: hub-and-spoke
+when_to_use:
+  - "Complex mission that needs explicit planning before action"
+  - "Human wants to approve the approach before agents start working"
+  - "Mission with regulatory or compliance constraints"
+  - "High-stakes assessment where mistakes are costly"
+  - "New team or unfamiliar target requiring structured approach"
+when_not_to_use:
+  - "Simple reconnaissance or information gathering"
+  - "Urgent response where planning delay is costly"
+  - "Exploratory work where the plan emerges from discovery"
+pros:
+  - "Human validates approach before execution"
+  - "Clear mission decomposition"
+  - "Execution agents have focused scope"
+cons:
+  - "Planning overhead for simple missions"
+  - "Plan may need revision as execution reveals new info"
+  - "Two-phase approach is slower"
+estimated_token_cost: medium
+estimated_agents: "3-5"
+roles_suggested:
+  planner: security_architect
+  executors: [pentester, auditor, researcher]
+elo_lead_selection: true
