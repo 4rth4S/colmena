@@ -14,9 +14,9 @@ Colmena eliminates the noise, coordinates the swarm, and tracks who delivers.
 
 ## How It Works
 
-Two integration points with Claude Code:
+Three integration points with Claude Code:
 
-**1. Hook (reactive)** — registered as `PreToolUse` hook. Every tool call is evaluated against declarative YAML rules. Auto-approves ~70%, blocks destructive ops, asks for the rest. Every decision is logged.
+**1. PreToolUse Hook (reactive — before execution)** — Every tool call is evaluated against declarative YAML rules. Auto-approves ~70%, blocks destructive ops, asks for the rest. Every decision is logged.
 
 ```
 CC tool call --> colmena hook (stdin JSON)
@@ -28,7 +28,19 @@ CC tool call --> colmena hook (stdin JSON)
                     +-- default     --> ask
 ```
 
-**2. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
+**2. PostToolUse Hook (reactive — after execution)** — Filters Bash tool outputs before CC processes them. Strips ANSI, deduplicates repeated lines, extracts only stderr on failures, and applies smart truncation. Saves 30-50% tokens per output.
+
+```
+CC executes Bash --> colmena PostToolUse hook
+                        |
+                        |-- ANSI strip     (clean escape sequences)
+                        |-- stderr-only    (discard stdout on failure)
+                        |-- dedup          (collapse repeated lines)
+                        |-- truncate       (keep start + end, respect 30K limit)
+                        +-- return via updatedMCPToolOutput
+```
+
+**3. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
 
 ```
 CC: "use colmena to select a pattern for auditing the payments API"
@@ -46,7 +58,7 @@ CC: "submit this review with scores and findings"
 # Build all binaries
 cargo build --release
 
-# Register the PreToolUse hook
+# Register PreToolUse + PostToolUse hooks
 ./target/release/colmena install
 
 # Verify
@@ -131,6 +143,27 @@ Ratings start at 1500. The leaderboard shows who delivers consistently.
 
 Persistent knowledge base from reviews. Query by role, category, severity, date range, or mission. Findings accumulate across sessions — institutional memory for the swarm.
 
+### Output Filtering (M2.5)
+
+PostToolUse hook intercepts Bash outputs and applies a filter pipeline before CC's brute 50K truncation:
+
+- **ANSI strip** — removes escape sequences (color codes, cursor movement)
+- **Stderr-only** — on failure (exit != 0), discards stdout noise, keeps only errors
+- **Dedup** — collapses 3+ consecutive identical lines to first + count + last
+- **Smart truncation** — preserves start + end of output, inserts marker in the middle
+
+Token savings tracked in JSONL log. View with `colmena stats`.
+
+```yaml
+# config/filter-config.yaml
+max_output_lines: 150
+max_output_chars: 30000    # < CC's 50K limit
+dedup_threshold: 3
+error_only_on_failure: true
+strip_ansi: true
+enabled: true
+```
+
 ## CLI Reference
 
 ```
@@ -154,6 +187,8 @@ colmena review list [--state pending]     # List peer reviews
 colmena review show <review-id>           # Review detail
 
 colmena elo show                          # ELO leaderboard
+
+colmena stats                             # Filter token savings summary
 ```
 
 ## MCP Tools Reference
@@ -198,6 +233,10 @@ colmena elo show                          # ELO leaderboard
 
 The main firewall rules file. Defines blocked, restricted, trust_circle, and agent_overrides sections. Run `colmena config check` after any change.
 
+### filter-config.yaml
+
+Output filter settings for the PostToolUse pipeline. Controls max output size, dedup threshold, and which filters are active. Falls back to sensible defaults if file is missing.
+
 ### review-config.yaml
 
 Peer review thresholds and reviewer assignment strategy:
@@ -220,7 +259,7 @@ reviewer_assignment:
 
 ## Architecture
 
-Rust workspace with 3 crates. The core library has zero platform dependencies. CLI and MCP are thin adapters.
+Rust workspace with 4 crates. The core library has zero platform dependencies. CLI, MCP, and filter are thin adapters.
 
 ```
 colmena/
@@ -241,18 +280,30 @@ colmena/
 │       └── findings.rs        # Findings Store — persistent knowledge base
 ├── colmena-cli/               # CLI binary — hook handler + subcommands
 │   └── src/
-│       ├── main.rs            # Clap CLI, hook hot path, review/elo/library cmds
-│       ├── hook.rs            # CC hook payload/response types
+│       ├── main.rs            # Clap CLI, Pre/PostToolUse hooks, all cmds
+│       ├── hook.rs            # CC hook payload/response types (Pre + Post)
 │       ├── notify.rs          # Notification hook (no-op placeholder)
-│       └── install.rs         # Hook registration
+│       └── install.rs         # Hook registration (PreToolUse + PostToolUse)
+├── colmena-filter/            # Output filtering pipeline
+│   └── src/
+│       ├── lib.rs             # Public API surface
+│       ├── config.rs          # FilterConfig loading (YAML)
+│       ├── pipeline.rs        # FilterPipeline — chains filters with catch_unwind
+│       ├── stats.rs           # JSONL token savings log + summary
+│       └── filters/
+│           ├── mod.rs         # OutputFilter trait + FilterResult
+│           ├── ansi.rs        # ANSI escape sequence stripping
+│           ├── dedup.rs       # Consecutive duplicate line collapsing
+│           ├── truncate.rs    # Smart truncation (preserve start + end)
+│           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
 │       └── main.rs            # rmcp server, stdio transport, 20 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
+│   ├── filter-config.yaml     # Output filter settings
 │   ├── review-config.yaml     # Review thresholds
 │   ├── runtime-delegations.json
-│   ├── audit.log              # Append-only decision log
 │   ├── queue/
 │   │   ├── pending/           # Approval items awaiting decision
 │   │   └── decided/           # Resolved items
@@ -281,6 +332,7 @@ colmena/
 | M0.5 | Done | Workspace refactor + MCP server |
 | M1 | Done | Wisdom Library + Pattern Selector + RRA security hardening |
 | M2 | Done | Peer Review Protocol + ELO Engine + Findings Store |
+| M2.5 | Done | Output Filtering — PostToolUse hook + colmena-filter pipeline |
 | M3 | Next | Dynamic trust calibration — ELO-driven auto-delegation, mentoring, demotion |
 
 ## Docs
