@@ -809,7 +809,54 @@ Over time, the swarm gets smarter. Known gaps are systematically closed.
 
 ---
 
-## 12. Troubleshooting
+## 12. Output Filtering (PostToolUse)
+
+Colmena doesn't just control what tools can do — it also cleans up what they return. The PostToolUse hook intercepts Bash outputs and filters them before Claude Code processes them, saving tokens and keeping context clean.
+
+### How it works
+
+When CC executes a Bash command, colmena runs the output through a filter pipeline:
+
+1. **ANSI strip** — removes color codes and escape sequences
+2. **Stderr-only** — if the command failed (exit != 0) and stderr has content, discards stdout noise
+3. **Dedup** — collapses 3+ consecutive identical lines (e.g., "Downloading crate..." x50)
+4. **Smart truncation** — if output exceeds limits, keeps the start and end, inserts a marker
+
+The filtered output replaces the original via CC's `updatedMCPToolOutput` mechanism.
+
+### Configuration
+
+Edit `config/filter-config.yaml`:
+
+```yaml
+max_output_lines: 150       # Line limit before truncation
+max_output_chars: 30000     # Character limit (< CC's 50K)
+dedup_threshold: 3          # Min consecutive identical lines to collapse
+error_only_on_failure: true # Discard stdout when command fails
+strip_ansi: true            # Remove ANSI escape sequences
+enabled: true               # Master switch
+```
+
+If the file is missing, sensible defaults are used. Set `enabled: false` to disable filtering entirely.
+
+### Measuring impact
+
+```bash
+colmena stats
+```
+
+Shows total chars saved, estimated tokens saved, average reduction %, and top commands by savings. Data comes from `config/filter-stats.jsonl` (append-only JSONL, same pattern as ELO log).
+
+### Safety guarantees
+
+- If any filter panics, it's skipped — the other filters continue
+- If the entire pipeline fails, the original output is returned unchanged
+- PostToolUse never returns "ask" or "deny" — it either filters or passes through
+- Filter limits (30K chars) are always below CC's limits (50K) so semantic filtering happens first
+
+---
+
+## 13. Troubleshooting
 
 ### "It keeps asking me for everything"
 
@@ -887,6 +934,7 @@ All delegations expire automatically (max 24h).
 | `colmena review list --state pending` | List pending reviews |
 | `colmena review show <id>` | View review details |
 | `colmena elo show` | View ELO leaderboard |
+| `colmena stats` | View filter token savings |
 
 | MCP Tool | What it does |
 |----------|-------------|
