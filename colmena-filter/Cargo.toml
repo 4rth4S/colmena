@@ -1,0 +1,16 @@
+[package]
+name = "colmena-filter"
+version.workspace = true
+edition.workspace = true
+description = "Output filtering pipeline for Colmena PostToolUse hook"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yml.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
