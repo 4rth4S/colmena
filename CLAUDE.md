@@ -9,21 +9,23 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Config:** `config/trust-firewall.yaml`
+- **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **Repo:** `git@github.com:4rth4S/colmena.git`
 
 ## Architecture
 
-Rust workspace with 3 crates:
+Rust workspace with 4 crates:
 
 - **colmena-core** — shared library: config, firewall, delegate, queue, models, paths. Zero platform deps.
-- **colmena-cli** — CLI binary: hook hot path, clap subcommands, notifications (no-op placeholder), install
+- **colmena-cli** — CLI binary: Pre/PostToolUse hooks, clap subcommands, notifications (no-op placeholder), install
+- **colmena-filter** — output filtering pipeline: OutputFilter trait, 4 base filters, FilterPipeline with catch_unwind, JSONL stats
 - **colmena-mcp** — MCP server: rmcp, stdio transport, exposes core functions as CC tools
 
-Two CC integration points:
-1. **Hook (reactive):** PreToolUse hook evaluates every tool call against YAML rules
-2. **MCP (proactive):** CC calls colmena tools natively (config_check, queue_list, delegate, evaluate)
+Three CC integration points:
+1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules
+2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
+3. **MCP (proactive):** CC calls colmena tools natively (config_check, queue_list, delegate, evaluate)
 
 Rule precedence: `blocked > delegations > agent_overrides > restricted > trust_circle > defaults`
 
@@ -60,6 +62,13 @@ Rule precedence: `blocked > delegations > agent_overrides > restricted > trust_c
 - Agent tool is in `restricted` (ask), not `trust_circle` (auto-approve)
 - Queue entries truncate tool_input: commands to 200 chars, Write content redacted
 - HOME fallback to /tmp is banned — fail explicitly if HOME is not set
+- PostToolUse hook must be as fast as PreToolUse (<100ms) — no network calls
+- PostToolUse safe fallback: any error → passthrough (return original output unchanged), never "ask" or "deny"
+- Filter pipeline order: ANSI strip → stderr-only → dedup → truncate (clean first, hard cap last)
+- Each filter wrapped in catch_unwind — a buggy filter never crashes the hook
+- FilterConfig max_output_chars (30K) must be < CC's internal limit (50K)
+- Filters only apply to Bash tool outputs (Read/Write/Edit don't need filtering)
+- Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl`
 - Review invariants are hardcoded in review.rs, not configurable: author!=reviewer, no reciprocal, min 2 scores, hash verification
 - ELO is append-only JSONL log — never mutable state. Rating calculated at read time with temporal decay
 - Review MCP tools (submit, evaluate) are in `restricted` — require human oversight
@@ -86,6 +95,7 @@ colmena library create-role --id X    # Scaffold new role template
 colmena review list [--state pending]  # List peer reviews
 colmena review show <review-id>        # Review detail
 colmena elo show                       # ELO leaderboard
+colmena stats                          # Filter token savings summary
 ```
 
 ## MCP Tools (M0.5)
@@ -130,15 +140,16 @@ findings_list      — list recent findings
 - **M0** Trust Firewall + Approval Hub (done)
 - **M0.5** Workspace refactor + MCP server (done)
 - **M1** Wisdom Library + Pattern Selector + RRA hardening (done)
-- **M2** Peer Review Protocol + ELO Engine + Findings Store (in progress)
+- **M2** Peer Review Protocol + ELO Engine + Findings Store (done)
+- **M2.5** Output Filtering — PostToolUse hook + colmena-filter pipeline (done)
 - **M3** Dynamic trust calibration (ELO → firewall rules)
 
-## Current State (2026-03-30)
+## Current State (2026-04-01)
 
-**Branch:** `feature/m2-peer-review-elo`
-**Done:** M0, M0.5, M1 (merged), RRA hardening (16 fixes)
-**In progress:** M2 — Peer Review Protocol + ELO Engine + Findings Store
-**Next:** Merge M2, then M3 (dynamic trust calibration)
+**Branch:** `feature/colmena-filter-post-tool-use`
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5 (output filtering)
+**In progress:** Documentation updates for M2.5
+**Next:** M3 (dynamic trust calibration — ELO → firewall rules)
 
 ## Key Docs
 

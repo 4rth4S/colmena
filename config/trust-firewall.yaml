@@ -105,7 +105,7 @@ blocked:
   # Never auto-approve — truly destructive operations (Fix 11: expanded patterns)
   - tools: [Bash]
     conditions:
-      bash_pattern: '^(git (push.*--force|push.*-f|reset --hard)|rm\s+-rf\s+/|shred\b|dd\s+if=|mkfs\b|find\s+.*-delete)'
+      bash_pattern: '^(git (push.*--force|push\s+-[A-Za-z]*f|reset --hard)|rm\s+-rf\s+/|shred\b|dd\s+if=|mkfs\b|find\s+.*-delete)'
     action: block
     reason: 'Destructive operation requires explicit human confirmation'
 
