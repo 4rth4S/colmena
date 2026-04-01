@@ -67,6 +67,8 @@ enum Commands {
         #[command(subcommand)]
         action: EloAction,
     },
+    /// Filter statistics (token savings)
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -195,6 +197,7 @@ fn main() {
         Commands::Elo { action } => match action {
             EloAction::Show => run_elo_show(),
         },
+        Commands::Stats => run_stats(),
     };
 
     if let Err(e) = result {
@@ -207,7 +210,7 @@ fn main() {
     }
 }
 
-/// Hook hot path: stdin → deserialize → evaluate → queue if ask → notify → stdout
+/// Hook hot path: stdin → deserialize → dispatch by event → stdout
 fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
     // 1. Read stdin with 10MB limit (Fix 7, DREAD 7.6)
     const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
@@ -230,6 +233,22 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
     // 1b. Settings.json integrity check (Fix 12, DREAD 7.8)
     check_hook_integrity();
 
+    // Dispatch by hook event
+    match payload.hook_event_name.as_str() {
+        "PreToolUse" => run_pre_tool_use_hook(payload, config_path),
+        "PostToolUse" => run_post_tool_use_hook(payload),
+        other => {
+            log_error(&format!("Unknown hook event: {other}"));
+            let response = hook::PostToolUseResponse::passthrough();
+            serde_json::to_writer(std::io::stdout(), &response)
+                .context("Failed to write passthrough response")?;
+            Ok(())
+        }
+    }
+}
+
+/// PreToolUse: evaluate tool call against trust firewall rules.
+fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf>) -> Result<()> {
     // 2. Resolve config path
     let config_file = config_path
         .or_else(|| std::env::var("COLMENA_CONFIG").ok().map(PathBuf::from))
@@ -298,6 +317,89 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
 
     serde_json::to_writer(std::io::stdout(), &response)
         .context("Failed to write hook response")?;
+
+    Ok(())
+}
+
+/// PostToolUse: filter tool output before CC processes it.
+/// Safe fallback: any error → passthrough (never "ask" or "deny").
+fn run_post_tool_use_hook(payload: hook::HookPayload) -> Result<()> {
+    match run_post_tool_use_hook_inner(&payload) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            log_error(&format!("PostToolUse filter error: {e:#}"));
+            let response = hook::PostToolUseResponse::passthrough();
+            serde_json::to_writer(std::io::stdout(), &response)
+                .context("Failed to write passthrough response")?;
+            Ok(())
+        }
+    }
+}
+
+fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
+    // Only filter Bash tool outputs
+    if payload.tool_name != "Bash" {
+        let response = hook::PostToolUseResponse::passthrough();
+        serde_json::to_writer(std::io::stdout(), &response)?;
+        return Ok(());
+    }
+
+    // Extract tool output
+    let tool_output = match &payload.tool_output {
+        Some(v) => v,
+        None => {
+            let response = hook::PostToolUseResponse::passthrough();
+            serde_json::to_writer(std::io::stdout(), &response)?;
+            return Ok(());
+        }
+    };
+
+    let stdout = tool_output.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = tool_output.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let exit_code = tool_output.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let command = payload.tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Load filter config (or use defaults)
+    let filter_config_path = colmena_core::paths::default_config_dir().join("filter-config.yaml");
+    let filter_config = colmena_filter::config::load_filter_config(&filter_config_path)
+        .unwrap_or_default();
+
+    if !filter_config.enabled {
+        let response = hook::PostToolUseResponse::passthrough();
+        serde_json::to_writer(std::io::stdout(), &response)?;
+        return Ok(());
+    }
+
+    // Build and run filter pipeline
+    let pipeline = colmena_filter::pipeline::FilterPipeline::from_config(&filter_config);
+    let result = pipeline.run(stdout, stderr, command, exit_code);
+
+    // If nothing changed, passthrough
+    if !result.modified {
+        let response = hook::PostToolUseResponse::passthrough();
+        serde_json::to_writer(std::io::stdout(), &response)?;
+        return Ok(());
+    }
+
+    // Log stats (best-effort)
+    let stats_path = colmena_core::paths::colmena_home().join("config/filter-stats.jsonl");
+    let _ = colmena_filter::stats::log_filter_stats(
+        &stats_path,
+        &colmena_filter::stats::FilterStatsEvent {
+            ts: chrono::Utc::now(),
+            session_id: payload.session_id.clone(),
+            tool_use_id: payload.tool_use_id.clone(),
+            command_prefix: command.chars().take(80).collect(),
+            original_chars: result.original_chars,
+            filtered_chars: result.filtered_chars,
+            chars_saved: result.original_chars.saturating_sub(result.filtered_chars),
+            filters_applied: result.notes,
+        },
+    );
+
+    // Write filtered response
+    let response = hook::PostToolUseResponse::with_output(result.output);
+    serde_json::to_writer(std::io::stdout(), &response)?;
 
     Ok(())
 }
@@ -876,6 +978,47 @@ fn run_elo_show() -> Result<()> {
     Ok(())
 }
 
+fn run_stats() -> Result<()> {
+    let stats_path = colmena_core::paths::colmena_home().join("config/filter-stats.jsonl");
+    let events = colmena_filter::stats::read_filter_stats(&stats_path)?;
+
+    if events.is_empty() {
+        println!("No filter stats yet. Stats are recorded when the PostToolUse hook filters output.");
+        return Ok(());
+    }
+
+    let summary = colmena_filter::stats::summarize(&events);
+
+    println!("Filter Stats Summary");
+    println!("====================");
+    println!("  Total filtered:     {} events", summary.total_events);
+    println!("  Total chars saved:  {}", format_chars(summary.total_chars_saved));
+    println!("  Est. tokens saved:  ~{}", summary.total_chars_saved / 4);
+    println!("  Avg reduction:      {:.1}%", summary.avg_reduction_pct);
+    println!();
+
+    if !summary.top_commands.is_empty() {
+        println!("Top commands by savings:");
+        println!("  {:<60} SAVED", "COMMAND");
+        println!("  {:-<60} {:-<10}", "", "");
+        for (cmd, saved) in &summary.top_commands {
+            println!("  {:<60} {}", cmd, format_chars(*saved));
+        }
+    }
+
+    Ok(())
+}
+
+fn format_chars(chars: usize) -> String {
+    if chars >= 1_000_000 {
+        format!("{:.1}M", chars as f64 / 1_000_000.0)
+    } else if chars >= 1_000 {
+        format!("{:.1}K", chars as f64 / 1_000.0)
+    } else {
+        format!("{chars}")
+    }
+}
+
 /// Format a ReviewState for display.
 fn format_review_state(state: &ReviewState) -> &'static str {
     match state {
@@ -919,17 +1062,19 @@ fn check_hook_integrity() {
         Err(_) => return,
     };
 
-    // Walk PreToolUse hooks to find our command
-    if let Some(hooks) = settings.get("hooks").and_then(|h| h.get("PreToolUse")).and_then(|p| p.as_array()) {
-        for entry in hooks {
-            if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
-                for h in inner_hooks {
-                    if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
-                        if cmd.contains("colmena hook") && !cmd.contains(&our_binary) {
-                            log_error(&format!(
-                                "Hook integrity warning: settings.json hook command '{}' does not match running binary '{}'",
-                                cmd, our_binary
-                            ));
+    // Walk PreToolUse and PostToolUse hooks to find our command
+    for event_name in &["PreToolUse", "PostToolUse"] {
+        if let Some(hooks) = settings.get("hooks").and_then(|h| h.get(*event_name)).and_then(|p| p.as_array()) {
+            for entry in hooks {
+                if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+                    for h in inner_hooks {
+                        if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                            if cmd.contains("colmena hook") && !cmd.contains(&our_binary) {
+                                log_error(&format!(
+                                    "Hook integrity warning: settings.json {event_name} hook command '{}' does not match running binary '{}'",
+                                    cmd, our_binary
+                                ));
+                            }
                         }
                     }
                 }
