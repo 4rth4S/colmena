@@ -1,5 +1,5 @@
 [workspace]
-members = ["colmena-core", "colmena-cli", "colmena-mcp"]
+members = ["colmena-core", "colmena-cli", "colmena-mcp", "colmena-filter"]
 resolver = "2"
 
 [workspace.package]

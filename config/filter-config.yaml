@@ -1,0 +1,10 @@
+# Output filter configuration for PostToolUse hook
+# Limits must be < CC's internal limits (50K chars) so semantic filtering
+# applies before CC's brute truncation.
+
+max_output_lines: 150
+max_output_chars: 30000
+dedup_threshold: 3
+error_only_on_failure: true
+strip_ansi: true
+enabled: true
