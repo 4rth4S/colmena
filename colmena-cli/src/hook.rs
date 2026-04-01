@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Payload received from Claude Code via stdin on every tool invocation.
+/// For PreToolUse: tool_output is absent.
+/// For PostToolUse: tool_output contains the tool's output (stdout, stderr, exitCode).
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HookPayload {
@@ -14,6 +16,8 @@ pub struct HookPayload {
     pub agent_type: Option<String>,
     pub cwd: String,
     pub permission_mode: Option<String>,
+    /// Present only for PostToolUse events.
+    pub tool_output: Option<Value>,
 }
 
 impl HookPayload {
@@ -73,6 +77,43 @@ impl HookResponse {
                 hook_event_name: "PreToolUse".to_string(),
                 permission_decision: "ask".to_string(),
                 permission_decision_reason: reason.into(),
+            },
+        }
+    }
+}
+
+/// Response for PostToolUse hooks — returns filtered output to CC.
+#[derive(Debug, Serialize)]
+pub struct PostToolUseResponse {
+    #[serde(rename = "hookSpecificOutput")]
+    pub hook_specific_output: PostToolUseOutput,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PostToolUseOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    #[serde(rename = "updatedMCPToolOutput", skip_serializing_if = "Option::is_none")]
+    pub updated_mcp_tool_output: Option<String>,
+}
+
+impl PostToolUseResponse {
+    /// Return filtered output to CC (replaces original).
+    pub fn with_output(output: String) -> Self {
+        Self {
+            hook_specific_output: PostToolUseOutput {
+                hook_event_name: "PostToolUse".to_string(),
+                updated_mcp_tool_output: Some(output),
+            },
+        }
+    }
+
+    /// Return no modification — CC keeps original output.
+    pub fn passthrough() -> Self {
+        Self {
+            hook_specific_output: PostToolUseOutput {
+                hook_event_name: "PostToolUse".to_string(),
+                updated_mcp_tool_output: None,
             },
         }
     }
@@ -151,6 +192,53 @@ mod tests {
         let resp = HookResponse::ask("Needs human review");
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "ask");
+    }
+
+    #[test]
+    fn test_deserialize_post_tool_use_payload() {
+        let input = json!({
+            "session_id": "abc123",
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo build"},
+            "tool_use_id": "tu_010",
+            "cwd": "/tmp",
+            "tool_output": {
+                "stdout": "Compiling...\nFinished",
+                "stderr": "",
+                "exitCode": 0
+            }
+        });
+
+        let payload: HookPayload = serde_json::from_value(input).unwrap();
+        assert_eq!(payload.hook_event_name, "PostToolUse");
+        assert!(payload.tool_output.is_some());
+        let output = payload.tool_output.unwrap();
+        assert_eq!(output["stdout"], "Compiling...\nFinished");
+        assert_eq!(output["exitCode"], 0);
+    }
+
+    #[test]
+    fn test_serialize_post_tool_use_with_output() {
+        let resp = PostToolUseResponse::with_output("filtered output".to_string());
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        assert_eq!(
+            json["hookSpecificOutput"]["updatedMCPToolOutput"],
+            "filtered output"
+        );
+    }
+
+    #[test]
+    fn test_serialize_post_tool_use_passthrough() {
+        let resp = PostToolUseResponse::passthrough();
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PostToolUse");
+        // updatedMCPToolOutput should be absent (skip_serializing_if None)
+        assert!(!json["hookSpecificOutput"]
+            .as_object()
+            .unwrap()
+            .contains_key("updatedMCPToolOutput"));
     }
 
     #[test]

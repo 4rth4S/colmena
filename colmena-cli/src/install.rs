@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-/// Register colmena as a PreToolUse hook in ~/.claude/settings.json.
+/// Register colmena as PreToolUse + PostToolUse hook in ~/.claude/settings.json.
 /// Preserves all existing content (hooks, env, plugins, statusLine, etc).
 pub fn run_install() -> Result<()> {
     let settings_path = settings_json_path();
@@ -63,21 +63,59 @@ pub fn run_install() -> Result<()> {
         }
     });
 
-    if already_installed {
-        println!("Colmena hook is already installed.");
-        return Ok(());
+    if !already_installed {
+        // Add the PreToolUse hook entry (CC hooks format: matcher + hooks array)
+        arr.push(json!({
+            "matcher": "",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_command
+                }
+            ]
+        }));
     }
 
-    // Add the hook entry (CC hooks format: matcher + hooks array)
-    arr.push(json!({
-        "matcher": "",
-        "hooks": [
-            {
-                "type": "command",
-                "command": hook_command
-            }
-        ]
-    }));
+    // Also register PostToolUse hook for output filtering
+    let post_tool_use = hooks_obj
+        .entry("PostToolUse")
+        .or_insert_with(|| json!([]));
+
+    let post_arr = post_tool_use
+        .as_array_mut()
+        .context("PostToolUse must be an array")?;
+
+    let already_installed_post = post_arr.iter().any(|entry| {
+        if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            inner_hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.contains("colmena hook"))
+            })
+        } else {
+            entry
+                .get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("colmena hook"))
+        }
+    });
+
+    if !already_installed_post {
+        post_arr.push(json!({
+            "matcher": "",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_command
+                }
+            ]
+        }));
+    }
+
+    if already_installed && already_installed_post {
+        println!("Colmena hooks are already installed (PreToolUse + PostToolUse).");
+        return Ok(());
+    }
 
     // Write back preserving formatting
     let json = serde_json::to_string_pretty(&settings)

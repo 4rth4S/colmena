@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 colmena-core = { path = "../colmena-core" }
+colmena-filter = { path = "../colmena-filter" }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

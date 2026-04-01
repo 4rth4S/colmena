@@ -13,6 +13,7 @@
 | **M0.5** | Workspace refactor + MCP server | DONE | pre-MR | 77 |
 | **M1** | Wisdom Library + Pattern Selector + RRA hardening | DONE | !1, !2 | 104 |
 | **M2** | Peer Review Protocol + ELO Engine + Findings Store | DONE | !3 | 133 |
+| **M2.5** | Output Filtering — PostToolUse hook + colmena-filter | DONE | PR#2 | 168 |
 | **M3** | Dynamic Trust Calibration | NEXT | - | - |
 
 ---
@@ -23,7 +24,7 @@
 |----------|-------|---------|
 | M2 = Knowledge Bus + Agent Spawn | M2 = Peer Review + ELO + Findings | CC ya tiene SendMessage (sync) y Agent tool. Bus async tiene mas contras que pros. |
 | M3 = ELO Engine + dynamic trust | M3 = Dynamic Trust Calibration (solo) | ELO se absorbio en M2 porque peer review sin ELO no tiene sentido. |
-| Knowledge Bus con PostToolUse hook | Descartado | CC no soporta PostToolUse hooks. |
+| Knowledge Bus con PostToolUse hook | Parcialmente implementado (M2.5) | CC SI soporta PostToolUse hooks con `updatedMCPToolOutput`. Usado para output filtering. |
 | mission_launch MCP tool | Descartado | CC Agent tool + worktrees cubre esto. |
 
 ---
@@ -66,6 +67,7 @@
 | ELO por categoria | Rating por dominio (web_vuln, compliance, etc) | Media — requiere datos |
 | Review protocol como lib | Extraer a proyecto independiente | Baja — solo si hay adopcion externa |
 | ELO per-category en pattern selector | Selector sugiere por ELO de categoria | Baja — depende de ELO por categoria |
+| Filtros semanticos (git, test, build) | Fase 2 de colmena-filter: parsear outputs especificos | Media — requiere validar Fase 1 primero |
 
 ---
 
