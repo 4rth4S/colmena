@@ -177,6 +177,12 @@ struct MissionDeactivateInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 struct CalibrateInput {}
 
+#[derive(Debug, Deserialize, JsonSchema)]
+struct SessionStatsInput {
+    /// Session ID to show stats for (uses current session if available)
+    session_id: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Server struct
 // ---------------------------------------------------------------------------
@@ -1005,6 +1011,70 @@ impl ColmenaServer {
             "\nTo apply calibration, run: colmena calibrate run\n\
              To reset all overrides:     colmena calibrate reset"
         );
+
+        Ok(output)
+    }
+
+    // ── Session Stats ────────────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Show Colmena session stats — prompts saved by auto-approve + tokens saved by output filtering. Call this before ending a session to show the value summary.")]
+    fn session_stats(
+        &self,
+        Parameters(input): Parameters<SessionStatsInput>,
+    ) -> Result<String, String> {
+        let audit_path = self.config_dir.join("audit.log");
+        let stats_path = self.config_dir.join("filter-stats.jsonl");
+
+        let audit = colmena_core::audit::session_stats(
+            &audit_path,
+            input.session_id.as_deref(),
+        );
+
+        let all_events = colmena_filter::stats::read_filter_stats(&stats_path)
+            .unwrap_or_default();
+
+        let session_events: Vec<_> = if let Some(ref sid) = input.session_id {
+            all_events.into_iter().filter(|e| e.session_id == *sid).collect()
+        } else {
+            all_events
+        };
+        let filter = colmena_filter::stats::summarize(&session_events);
+
+        let scope = if input.session_id.is_some() { "This Session" } else { "All Sessions" };
+
+        let auto_pct = if audit.total_decisions > 0 {
+            (audit.allow_count as f64 / audit.total_decisions as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let mut output = format!("Colmena Stats — {scope}\n{}\n\n",
+            "=".repeat(40));
+
+        output.push_str("  Firewall Decisions\n");
+        output.push_str(&format!("  Auto-approved:      {} ({:.0}%)\n", audit.allow_count, auto_pct));
+        output.push_str(&format!("  Asked human:        {}\n", audit.ask_count));
+        output.push_str(&format!("  Blocked:            {}\n", audit.deny_count));
+        output.push_str(&format!("  Total:              {}\n", audit.total_decisions));
+        output.push_str(&format!("  Unique agents:      {}\n", audit.unique_agents));
+        output.push_str(&format!("\n  → {} prompts saved (auto-approved without asking)\n\n", audit.allow_count));
+
+        output.push_str("  Output Filtering\n");
+        if filter.total_events > 0 {
+            let tokens_saved = filter.total_chars_saved / 4;
+            output.push_str(&format!("  Outputs filtered:   {}\n", filter.total_events));
+            output.push_str(&format!("  Chars saved:        {}\n", filter.total_chars_saved));
+            output.push_str(&format!("  Est. tokens saved:  ~{}\n", tokens_saved));
+            output.push_str(&format!("  Avg reduction:      {:.1}%\n", filter.avg_reduction_pct));
+        } else {
+            output.push_str("  No outputs filtered yet.\n");
+        }
+
+        output.push_str(&format!(
+            "\n  ════════════════════════════════════\n  Total value: {} prompts saved + ~{} tokens saved\n",
+            audit.allow_count,
+            filter.total_chars_saved / 4,
+        ));
 
         Ok(output)
     }
