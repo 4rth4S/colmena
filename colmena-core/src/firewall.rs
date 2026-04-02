@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use regex::Regex;
+
 use crate::config::{Action, Conditions, FirewallConfig, Rule};
 use crate::delegate::RuntimeDelegation;
 use crate::models::EvaluationInput;
@@ -19,12 +23,30 @@ pub struct Decision {
     pub priority: Priority,
 }
 
-/// Evaluate a hook payload against the firewall config and runtime delegations.
+/// Pre-compile regex patterns from delegation conditions.
+/// Returns a map keyed by delegation index → compiled Regex.
+pub fn compile_delegation_patterns(delegations: &[RuntimeDelegation]) -> HashMap<usize, Regex> {
+    let mut patterns = HashMap::new();
+    for (i, d) in delegations.iter().enumerate() {
+        if let Some(ref cond) = d.conditions {
+            if let Some(ref pat) = cond.bash_pattern {
+                if let Ok(re) = Regex::new(pat) {
+                    patterns.insert(i, re);
+                }
+                // Invalid regex silently skipped — delegation won't match Bash conditions
+            }
+        }
+    }
+    patterns
+}
+
+/// Evaluate a hook payload against the firewall config, runtime delegations,
+/// and ELO-calibrated overrides.
 ///
 /// Precedence order:
 /// 1. Blocked rules (non-overridable)
-/// 2. Runtime delegations (human trust expansion)
-/// 3. Agent overrides (per-agent rules, ready for M3/ELO)
+/// 2. Runtime delegations (human trust expansion + role-generated)
+/// 3. Agent overrides: YAML (human) first, then ELO-calibrated
 /// 4. Restricted rules
 /// 5. Trust circle rules
 /// 6. Defaults (fallback)
@@ -34,20 +56,40 @@ pub fn evaluate(
     delegations: &[RuntimeDelegation],
     payload: &EvaluationInput,
 ) -> Decision {
+    evaluate_with_elo(config, patterns, delegations, payload, &HashMap::new())
+}
+
+/// Full evaluation including ELO-calibrated overrides.
+pub fn evaluate_with_elo(
+    config: &FirewallConfig,
+    patterns: &crate::config::CompiledPatterns,
+    delegations: &[RuntimeDelegation],
+    payload: &EvaluationInput,
+    elo_overrides: &HashMap<String, Vec<Rule>>,
+) -> Decision {
     // 1. Blocked — first, non-overridable
     if let Some(decision) = check_rules(&config.blocked, payload, "blocked", patterns) {
         return decision;
     }
 
-    // 2. Runtime delegations
-    if let Some(decision) = check_delegations(delegations, payload) {
+    // 2. Runtime delegations (with conditions support)
+    let delegation_patterns = compile_delegation_patterns(delegations);
+    if let Some(decision) = check_delegations(delegations, payload, &delegation_patterns) {
         return decision;
     }
 
-    // 3. Agent overrides
+    // 3. Agent overrides — YAML (human) takes precedence over ELO
     if let Some(ref agent_id) = payload.agent_id {
+        // 3a. YAML-defined overrides (human always wins)
         if let Some(rules) = config.agent_overrides.get(agent_id) {
             let tier = format!("agent_override:{agent_id}");
+            if let Some(decision) = check_rules(rules, payload, &tier, patterns) {
+                return decision;
+            }
+        }
+        // 3b. ELO-calibrated overrides
+        if let Some(rules) = elo_overrides.get(agent_id) {
+            let tier = format!("elo_override:{agent_id}");
             if let Some(decision) = check_rules(rules, payload, &tier, patterns) {
                 return decision;
             }
@@ -73,8 +115,12 @@ pub fn evaluate(
     }
 }
 
-fn check_delegations(delegations: &[RuntimeDelegation], payload: &EvaluationInput) -> Option<Decision> {
-    for d in delegations {
+fn check_delegations(
+    delegations: &[RuntimeDelegation],
+    payload: &EvaluationInput,
+    delegation_patterns: &HashMap<usize, Regex>,
+) -> Option<Decision> {
+    for (i, d) in delegations.iter().enumerate() {
         if d.tool != payload.tool_name {
             continue;
         }
@@ -84,20 +130,77 @@ fn check_delegations(delegations: &[RuntimeDelegation], payload: &EvaluationInpu
                 continue;
             }
         }
-        // Fix 6: If delegation specifies a session_id, it must match
+        // If delegation specifies a session_id, it must match
         if let Some(ref delegation_session) = d.session_id {
             if &payload.session_id != delegation_session {
                 continue;
             }
         }
+        // If delegation has conditions, evaluate them
+        if let Some(ref cond) = d.conditions {
+            if !delegation_conditions_match(cond, payload, i, delegation_patterns) {
+                continue;
+            }
+        }
+        let source = d.source.as_deref().unwrap_or("human");
         return Some(Decision {
             action: d.action.clone(),
-            reason: format!("Runtime delegation for tool '{}'", d.tool),
+            reason: format!("Runtime delegation for tool '{}' (source: {})", d.tool, source),
             matched_rule: Some("runtime_delegation".to_string()),
             priority: Priority::Low,
         });
     }
     None
+}
+
+/// Evaluate delegation conditions against the payload.
+fn delegation_conditions_match(
+    cond: &crate::delegate::DelegationConditions,
+    payload: &EvaluationInput,
+    delegation_idx: usize,
+    delegation_patterns: &HashMap<usize, Regex>,
+) -> bool {
+    // Check bash_pattern (only for Bash tool)
+    if cond.bash_pattern.is_some() && payload.tool_name == "Bash" {
+        let command = payload
+            .tool_input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if let Some(re) = delegation_patterns.get(&delegation_idx) {
+            if !re.is_match(command) {
+                return false;
+            }
+        } else {
+            return false; // pattern couldn't be compiled
+        }
+    }
+
+    // Check path_within
+    let path = extract_path(payload).map(|p| normalize_path(&p));
+    if let Some(ref allowed_dirs) = cond.path_within {
+        if let Some(ref p) = path {
+            if !allowed_dirs.iter().any(|dir| p.starts_with(dir)) {
+                return false;
+            }
+        }
+        if path.is_none() {
+            return false;
+        }
+    }
+
+    // Check path_not_match
+    if let Some(ref blocked_patterns) = cond.path_not_match {
+        if let Some(ref p) = path {
+            for pattern in blocked_patterns {
+                if glob_match(pattern, p) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
 }
 
 fn check_rules(rules: &[Rule], payload: &EvaluationInput, tier: &str, patterns: &crate::config::CompiledPatterns) -> Option<Decision> {
@@ -356,6 +459,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
         };
         // A destructive bash command that would normally be "ask"
         let payload = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
@@ -376,6 +482,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
         };
         let payload = make_payload("Bash", json!({"command": "git push --force origin main"}));
         let decision = evaluate(&config, &patterns, &[delegation], &payload);
@@ -469,6 +578,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: Some("sess_A".to_string()),
+            source: None,
+            mission_id: None,
+            conditions: None,
         };
 
         // Payload from same session → should match
@@ -496,6 +608,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
         };
 
         let mut payload = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
