@@ -78,23 +78,26 @@ pub fn load_config(path: &Path, cwd: &str) -> Result<FirewallConfig> {
 /// Pre-compiled regex patterns for all rules. Keyed by "{tier}[{index}]".
 pub type CompiledPatterns = HashMap<String, Regex>;
 
+/// Compile regex patterns (bash_pattern) for a slice of rules into the patterns map.
+/// Keys are formatted as `"{tier_prefix}[{index}]"` matching the format used by `check_rules`.
+/// Returns an error if any pattern is invalid, naming the exact rule.
+pub fn compile_rules(rules: &[Rule], tier_prefix: &str, patterns: &mut CompiledPatterns) -> Result<()> {
+    for (i, rule) in rules.iter().enumerate() {
+        if let Some(ref cond) = rule.conditions {
+            if let Some(ref pat) = cond.bash_pattern {
+                let compiled = Regex::new(pat)
+                    .with_context(|| format!("Invalid regex in {tier_prefix}[{i}]: {pat}"))?;
+                patterns.insert(format!("{tier_prefix}[{i}]"), compiled);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Compile and validate all regex patterns in the config.
 /// Returns an error if any pattern is invalid, naming the exact rule.
 pub fn compile_config(config: &FirewallConfig) -> Result<CompiledPatterns> {
     let mut patterns = CompiledPatterns::new();
-
-    let compile_rules = |rules: &[Rule], tier: &str, patterns: &mut CompiledPatterns| -> Result<()> {
-        for (i, rule) in rules.iter().enumerate() {
-            if let Some(ref cond) = rule.conditions {
-                if let Some(ref pat) = cond.bash_pattern {
-                    let compiled = Regex::new(pat)
-                        .with_context(|| format!("Invalid regex in {tier}[{i}]: {pat}"))?;
-                    patterns.insert(format!("{tier}[{i}]"), compiled);
-                }
-            }
-        }
-        Ok(())
-    };
 
     compile_rules(&config.blocked, "blocked", &mut patterns)?;
     compile_rules(&config.restricted, "restricted", &mut patterns)?;
