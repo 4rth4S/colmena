@@ -12,7 +12,22 @@ pub const MAX_TTL_HOURS: i64 = 24;
 /// Default TTL for delegations: 4 hours.
 pub const DEFAULT_TTL_HOURS: i64 = 4;
 
-/// A runtime trust delegation added by the human during a session.
+/// Conditions that scope a delegation's applicability.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DelegationConditions {
+    /// Regex pattern matched against Bash tool_input["command"].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bash_pattern: Option<String>,
+    /// File path must start with one of these directories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_within: Option<Vec<String>>,
+    /// File path must NOT match any of these glob patterns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_not_match: Option<Vec<String>>,
+}
+
+/// A runtime trust delegation added by the human during a session,
+/// or auto-generated from role permissions at mission creation time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeDelegation {
     pub tool: String,
@@ -21,6 +36,15 @@ pub struct RuntimeDelegation {
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     pub session_id: Option<String>,
+    /// Provenance: "human" (CLI), "role" (mission generation), "elo" (calibration)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Links this delegation to a specific mission for bulk revocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission_id: Option<String>,
+    /// Optional conditions that scope when this delegation matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conditions: Option<DelegationConditions>,
 }
 
 /// Load runtime delegations from a JSON file, pruning any that have expired.
@@ -106,6 +130,22 @@ pub fn revoke_delegations(
                 None => false, // revoke all for this tool
             }
         })
+        .collect();
+
+    let revoked = before - remaining.len();
+    save_delegations(path, &remaining)?;
+    Ok(revoked)
+}
+
+/// Revoke all delegations associated with a specific mission.
+/// Returns the number of delegations revoked.
+pub fn revoke_by_mission(path: &Path, mission_id: &str) -> Result<usize> {
+    let delegations = load_delegations(path);
+    let before = delegations.len();
+
+    let remaining: Vec<RuntimeDelegation> = delegations
+        .into_iter()
+        .filter(|d| d.mission_id.as_deref() != Some(mission_id))
         .collect();
 
     let revoked = before - remaining.len();
@@ -206,6 +246,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
         }];
 
         save_delegations(&path, &delegations).unwrap();
@@ -223,6 +266,9 @@ mod tests {
             created_at: Utc::now(),
             expires_at: Some(Utc::now() + Duration::hours(4)),
             session_id: Some("sess_123".to_string()),
+            source: None,
+            mission_id: None,
+            conditions: None,
         };
 
         let json = serde_json::to_string(&d).unwrap();
@@ -259,6 +305,7 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
+                source: None, mission_id: None, conditions: None,
             },
             RuntimeDelegation {
                 tool: "WebFetch".to_string(),
@@ -267,6 +314,7 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
+                source: None, mission_id: None, conditions: None,
             },
         ];
 
@@ -294,6 +342,7 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
+                source: None, mission_id: None, conditions: None,
             },
             RuntimeDelegation {
                 tool: "Bash".to_string(),
@@ -302,6 +351,7 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
+                source: None, mission_id: None, conditions: None,
             },
         ];
 

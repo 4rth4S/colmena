@@ -67,6 +67,16 @@ enum Commands {
         #[command(subcommand)]
         action: EloAction,
     },
+    /// Mission management (delegations lifecycle)
+    Mission {
+        #[command(subcommand)]
+        action: MissionAction,
+    },
+    /// ELO-based trust calibration
+    Calibrate {
+        #[command(subcommand)]
+        action: CalibrateAction,
+    },
     /// Filter statistics (token savings)
     Stats,
 }
@@ -167,6 +177,28 @@ enum EloAction {
     Show,
 }
 
+#[derive(Subcommand)]
+enum MissionAction {
+    /// List active missions with delegation counts
+    List,
+    /// Deactivate a mission (revoke all its delegations)
+    Deactivate {
+        /// Mission ID (slug from mission directory name)
+        #[arg(long)]
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum CalibrateAction {
+    /// Run calibration from current ELO scores
+    Run,
+    /// Show current trust tiers per agent
+    Show,
+    /// Clear all ELO-based overrides
+    Reset,
+}
+
 fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
@@ -196,6 +228,15 @@ fn main() {
         },
         Commands::Elo { action } => match action {
             EloAction::Show => run_elo_show(),
+        },
+        Commands::Mission { action } => match action {
+            MissionAction::List => run_mission_list(),
+            MissionAction::Deactivate { id } => run_mission_deactivate(id),
+        },
+        Commands::Calibrate { action } => match action {
+            CalibrateAction::Run => run_calibrate(),
+            CalibrateAction::Show => run_calibrate_show(),
+            CalibrateAction::Reset => run_calibrate_reset(),
         },
         Commands::Stats => run_stats(),
     };
@@ -268,9 +309,18 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         .join("runtime-delegations.json");
     let delegations = colmena_core::delegate::load_delegations(&delegations_path);
 
+    // 3b. Load ELO-calibrated overrides (safe fallback: empty if missing)
+    let elo_overrides_path = config_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("elo-overrides.json");
+    let elo_overrides = colmena_core::calibrate::load_overrides(&elo_overrides_path);
+
     // 4. Map HookPayload to EvaluationInput and evaluate
     let eval_input = payload.to_evaluation_input();
-    let decision = colmena_core::firewall::evaluate(&cfg, &patterns, &delegations, &eval_input);
+    let decision = colmena_core::firewall::evaluate_with_elo(
+        &cfg, &patterns, &delegations, &eval_input, &elo_overrides,
+    );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
     let config_dir = config_file
@@ -468,6 +518,9 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<(
         created_at: now,
         expires_at,
         session_id: None,
+        source: Some("human".to_string()),
+        mission_id: None,
+        conditions: None,
     };
 
     delegations.push(new_delegation);
@@ -778,7 +831,21 @@ fn run_library_select(mission: String) -> Result<()> {
         &roles,
         &library_dir,
         &missions_dir,
+        None, // session_id: CLI doesn't have session context
     )?;
+
+    // Save role-generated delegations
+    if !mission_config.delegations.is_empty() {
+        let delegations_path = default_config_dir().join("runtime-delegations.json");
+        let mut existing = colmena_core::delegate::load_delegations(&delegations_path);
+        existing.extend(mission_config.delegations.clone());
+        colmena_core::delegate::save_delegations(&delegations_path, &existing)?;
+        println!(
+            "Created {} role-bound delegations ({}h TTL)",
+            mission_config.delegations.len(),
+            colmena_core::selector::DEFAULT_MISSION_TTL_HOURS
+        );
+    }
 
     println!();
     println!("Mission created: {}", mission_config.mission_dir.display());
@@ -1081,6 +1148,169 @@ fn check_hook_integrity() {
             }
         }
     }
+}
+
+// ── Mission subcommands ──────────────────────────────────────────────────────
+
+fn run_mission_list() -> Result<()> {
+    let config_dir = default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+
+    // Group delegations by mission_id
+    let mut missions: std::collections::HashMap<String, Vec<&RuntimeDelegation>> =
+        std::collections::HashMap::new();
+    for d in &delegations {
+        if let Some(ref mid) = d.mission_id {
+            missions.entry(mid.clone()).or_default().push(d);
+        }
+    }
+
+    if missions.is_empty() {
+        println!("No active missions with delegations.");
+        return Ok(());
+    }
+
+    println!("Active missions:\n");
+    for (mission_id, mission_delegations) in &missions {
+        let agents: std::collections::HashSet<&str> = mission_delegations.iter()
+            .filter_map(|d| d.agent_id.as_deref())
+            .collect();
+        let earliest_expiry = mission_delegations.iter()
+            .filter_map(|d| d.expires_at)
+            .min();
+        let expiry_str = earliest_expiry
+            .map(|e| e.format("%Y-%m-%d %H:%M UTC").to_string())
+            .unwrap_or_else(|| "no expiry".to_string());
+
+        println!("  {} — {} delegations, {} agents, expires ~{}",
+            mission_id,
+            mission_delegations.len(),
+            agents.len(),
+            expiry_str,
+        );
+    }
+    Ok(())
+}
+
+fn run_mission_deactivate(mission_id: String) -> Result<()> {
+    let config_dir = default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+
+    let revoked = colmena_core::delegate::revoke_by_mission(&delegations_path, &mission_id)?;
+
+    if revoked == 0 {
+        println!("No delegations found for mission '{}'.", mission_id);
+    } else {
+        println!("Revoked {} delegations for mission '{}'.", revoked, mission_id);
+
+        // Audit log
+        let audit_path = config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::MissionDeactivate {
+                mission_id: &mission_id,
+                revoked,
+            },
+        );
+    }
+    Ok(())
+}
+
+// ── Calibrate subcommands ────────────────────────────────────────────────────
+
+fn run_calibrate() -> Result<()> {
+    let config_dir = default_config_dir();
+    let library_dir = default_library_dir();
+    let elo_log_path = config_dir.join("elo-events.jsonl");
+    let overrides_path = config_dir.join("elo-overrides.json");
+
+    let roles = load_roles(&library_dir)?;
+    let events = elo::read_elo_log(&elo_log_path)?;
+    let baselines: Vec<(String, u32)> = roles.iter()
+        .map(|r| (r.id.clone(), r.elo.initial))
+        .collect();
+    let ratings = elo::leaderboard(&events, &baselines);
+
+    let previous = colmena_core::calibrate::load_overrides(&overrides_path);
+    let thresholds = colmena_core::calibrate::TrustThresholds::default();
+    let result = colmena_core::calibrate::calibrate(&ratings, &roles, &thresholds, &previous);
+
+    colmena_core::calibrate::save_overrides(&overrides_path, &result)?;
+
+    if result.changes.is_empty() {
+        println!("No trust tier changes.");
+    } else {
+        println!("Trust tier changes:\n");
+        let audit_path = config_dir.join("audit.log");
+        for change in &result.changes {
+            println!("  {} — {} → {} (ELO: {})",
+                change.agent,
+                change.old_tier.as_str(),
+                change.new_tier.as_str(),
+                change.elo,
+            );
+            let _ = colmena_core::audit::log_event(
+                &audit_path,
+                &colmena_core::audit::AuditEvent::Calibration {
+                    agent: &change.agent,
+                    old_tier: change.old_tier.as_str(),
+                    new_tier: change.new_tier.as_str(),
+                    elo: change.elo,
+                },
+            );
+        }
+    }
+
+    println!("\nOverrides saved to {}", overrides_path.display());
+    Ok(())
+}
+
+fn run_calibrate_show() -> Result<()> {
+    let config_dir = default_config_dir();
+    let library_dir = default_library_dir();
+    let elo_log_path = config_dir.join("elo-events.jsonl");
+
+    let roles = load_roles(&library_dir)?;
+    let events = elo::read_elo_log(&elo_log_path)?;
+    let baselines: Vec<(String, u32)> = roles.iter()
+        .map(|r| (r.id.clone(), r.elo.initial))
+        .collect();
+    let ratings = elo::leaderboard(&events, &baselines);
+
+    let thresholds = colmena_core::calibrate::TrustThresholds::default();
+
+    println!("Agent trust tiers (calibration thresholds: elevated≥{}, restrict<{}, floor<{}, min_reviews={}):\n",
+        thresholds.elevate_elo, thresholds.restrict_elo, thresholds.floor_elo, thresholds.min_reviews_to_calibrate);
+
+    for rating in &ratings {
+        let tier = colmena_core::calibrate::determine_tier(rating, &thresholds);
+        println!("  {:<25} ELO:{:<6} reviews:{:<3} tier:{}",
+            rating.agent,
+            rating.elo,
+            rating.review_count,
+            tier.as_str().to_uppercase(),
+        );
+    }
+
+    if ratings.is_empty() {
+        println!("  No agents with ELO history.");
+    }
+    Ok(())
+}
+
+fn run_calibrate_reset() -> Result<()> {
+    let config_dir = default_config_dir();
+    let overrides_path = config_dir.join("elo-overrides.json");
+
+    if overrides_path.exists() {
+        std::fs::remove_file(&overrides_path)
+            .context("Failed to remove ELO overrides file")?;
+        println!("ELO overrides cleared. All agents return to default trust rules.");
+    } else {
+        println!("No ELO overrides file found — already at defaults.");
+    }
+    Ok(())
 }
 
 /// Best-effort append to colmena error log. Never panics.

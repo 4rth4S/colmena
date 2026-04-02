@@ -17,7 +17,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 
 Rust workspace with 4 crates:
 
-- **colmena-core** — shared library: config, firewall, delegate, queue, models, paths. Zero platform deps.
+- **colmena-core** — shared library: config, firewall, delegate, calibrate, queue, models, paths. Zero platform deps.
 - **colmena-cli** — CLI binary: Pre/PostToolUse hooks, clap subcommands, notifications (no-op placeholder), install
 - **colmena-filter** — output filtering pipeline: OutputFilter trait, 4 base filters, FilterPipeline with catch_unwind, JSONL stats
 - **colmena-mcp** — MCP server: rmcp, stdio transport, exposes core functions as CC tools
@@ -76,6 +76,15 @@ Rule precedence: `blocked > delegations > agent_overrides > restricted > trust_c
 - rmcp MCP server: uses `#[tool_router]` on impl + `#[tool_handler(router = self.tool_router)]` on ServerHandler
 - CLI maps `HookPayload` → `colmena_core::models::EvaluationInput` before calling core (protocol-agnostic boundary)
 - Integration test paths: use `Path::parent()` for workspace root, never string concat with `..`
+- Role `permissions` block is optional — existing roles without it parse fine (backward compatible)
+- RuntimeDelegation has optional `source`, `mission_id`, `conditions` fields (serde(default))
+- Mission delegations are session-bound when session_id is provided at generate_mission()
+- ELO overrides stored separately in `config/elo-overrides.json`, never pollute trust-firewall.yaml
+- YAML agent_overrides take precedence over ELO overrides (human always wins)
+- Calibration warm-up: agents need min_reviews_to_calibrate (default 3) before ELO trust applies
+- TrustTier: Uncalibrated → Standard → Elevated/Restricted/Probation
+- `colmena calibrate reset` instantly revokes all ELO-based trust
+- Mission delegation TTL default: 8h (DEFAULT_MISSION_TTL_HOURS), max 24h
 
 ## CLI Subcommands
 
@@ -95,6 +104,11 @@ colmena library create-role --id X    # Scaffold new role template
 colmena review list [--state pending]  # List peer reviews
 colmena review show <review-id>        # Review detail
 colmena elo show                       # ELO leaderboard
+colmena mission list                   # List active missions with delegation counts
+colmena mission deactivate --id X      # Revoke all delegations for a mission
+colmena calibrate run                  # Run ELO-based trust calibration
+colmena calibrate show                 # Show current trust tiers per agent
+colmena calibrate reset                # Clear all ELO-based overrides
 colmena stats                          # Filter token savings summary
 ```
 
@@ -130,6 +144,13 @@ findings_query     — search findings by role/category/severity/date/mission
 findings_list      — list recent findings
 ```
 
+## MCP Tools (M3)
+
+```
+mission_deactivate — request mission deactivation (returns CLI command, read-only)
+calibrate          — show ELO-based trust calibration state + recommend CLI commands
+```
+
 ## Environment Variables
 
 - `COLMENA_HOME` — Override project root (default: auto-detected from binary)
@@ -142,14 +163,14 @@ findings_list      — list recent findings
 - **M1** Wisdom Library + Pattern Selector + RRA hardening (done)
 - **M2** Peer Review Protocol + ELO Engine + Findings Store (done)
 - **M2.5** Output Filtering — PostToolUse hook + colmena-filter pipeline (done)
-- **M3** Dynamic trust calibration (ELO → firewall rules)
+- **M3** Dynamic trust calibration — role-bound permissions + ELO → firewall rules (done)
+- **M4** TBD
 
 ## Current State (2026-04-01)
 
 **Branch:** `feature/colmena-filter-post-tool-use`
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5 (output filtering)
-**In progress:** Documentation updates for M2.5
-**Next:** M3 (dynamic trust calibration — ELO → firewall rules)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3 (role-bound permissions + ELO calibration)
+**Next:** M4 (TBD)
 
 ## Key Docs
 

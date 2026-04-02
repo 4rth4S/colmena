@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod calibrate;
 pub mod config;
 pub mod elo;
 pub mod delegate;
