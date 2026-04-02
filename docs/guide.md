@@ -44,6 +44,42 @@ That's it. Next time you open a Claude Code session, colmena is active.
 
 ---
 
+## 1.5 Upgrading
+
+### From 0.1.0 to 0.2.0
+
+**Rebuild:**
+
+```bash
+cd ~/colmena
+git pull
+cargo build --release
+```
+
+No need to re-run `colmena install` -- hook registration is unchanged.
+
+**Config:** No changes required. Your `trust-firewall.yaml` (version: 1) works as-is. M3 features use new files that are created automatically when needed:
+- `config/elo-overrides.json` -- created by `colmena calibrate run` (does not exist until you run it)
+- Role `permissions` block -- optional, existing roles without it continue to work normally
+
+**Runtime data:** No migration needed. `runtime-delegations.json` has new optional fields that are backward-compatible.
+
+**New capabilities available after upgrade:**
+- `colmena mission list / deactivate` -- mission lifecycle management
+- `colmena calibrate run / show / reset` -- ELO-based trust calibration
+- 2 new MCP tools: `mission_deactivate`, `calibrate`
+- Role-bound permissions in library role YAML files
+
+**Verify:**
+
+```bash
+colmena --version          # should show 0.2.0
+colmena config check       # should pass
+colmena calibrate show     # shows "No agents with ELO history" if fresh
+```
+
+---
+
 ## 2. What Changes In Your Workflow
 
 ### Before colmena
@@ -743,7 +779,7 @@ This means an agent that was great 3 months ago but poor recently will have a de
 - **Below 1450** -- declining performance, may need attention
 - **Below 1400** -- consistent quality issues
 
-In M3 (upcoming), ELO ratings will drive automatic trust decisions: high-ELO agents get expanded delegations, low-ELO agents get more review checkpoints.
+ELO ratings drive automatic trust decisions via the calibration system (see Section 10.5 below).
 
 ### Via MCP
 
@@ -752,6 +788,160 @@ mcp__colmena__elo_ratings()
 ```
 
 Returns the full leaderboard as structured data, usable by orchestrating agents to make assignment decisions.
+
+---
+
+## 10.5 Dynamic Trust Calibration
+
+After agents accumulate enough peer reviews (default: 3), their ELO score determines a **trust tier**. Running `colmena calibrate run` converts those tiers into firewall agent overrides stored in `config/elo-overrides.json`.
+
+### Trust tiers
+
+| Tier | ELO Range | Reviews | Effect |
+|------|-----------|---------|--------|
+| Uncalibrated | any | < 3 | Default firewall rules (warm-up period) |
+| Elevated | >= 1600 | 3+ | Auto-approve role's tools_allowed |
+| Standard | 1300-1599 | 3+ | Default firewall rules (no overrides) |
+| Restricted | 1100-1299 | 3+ | Ask for everything |
+| Probation | < 1100 | 3+ | Block Bash + WebFetch, ask for everything else |
+
+### Walkthrough
+
+Continuing the payments API audit example: after the pentester completes 3+ missions with peer reviews and scores an average of 8.5:
+
+```bash
+# Check current tiers
+colmena calibrate show
+#  pentester             ELO:1650  reviews:5   tier:ELEVATED
+#  researcher            ELO:1480  reviews:4   tier:STANDARD
+#  new-agent             ELO:1500  reviews:1   tier:UNCALIBRATED
+
+# Apply calibration
+colmena calibrate run
+#  Trust tier changes:
+#    pentester -- standard -> elevated (ELO: 1650)
+
+# Now pentester's role tools are auto-approved in future sessions
+# (scoped by bash_patterns if the role defines them)
+```
+
+If an agent consistently performs poorly:
+
+```bash
+colmena calibrate show
+#  bad-agent             ELO:1050  reviews:5   tier:PROBATION
+
+colmena calibrate run
+#  bad-agent -- standard -> probation (ELO: 1050)
+# Bash and WebFetch blocked for this agent, everything else requires approval
+```
+
+### Safety properties
+
+- **Blocked rules always win** -- ELO cannot override blocked operations (force push, rm -rf, etc.)
+- **YAML overrides ELO** -- human-defined `agent_overrides` in trust-firewall.yaml take precedence over ELO-calibrated overrides
+- **Kill switch** -- `colmena calibrate reset` instantly clears all ELO overrides
+- **Separate storage** -- ELO overrides live in `config/elo-overrides.json`, never pollute `trust-firewall.yaml`
+- **Warm-up** -- agents need 3+ peer reviews before calibration applies (no blind trust)
+
+---
+
+## 10.7 Role Permissions
+
+Roles in the wisdom library can define an optional `permissions` block that scopes what operations get auto-approved when the role is used in a mission.
+
+### Defining permissions
+
+Edit any role YAML in `config/library/roles/`:
+
+```yaml
+# config/library/roles/pentester.yaml
+permissions:
+  bash_patterns:
+    - '^nmap\b'
+    - '^nikto\b'
+    - '^python\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+```
+
+- **bash_patterns**: regex patterns for auto-approved Bash commands. Without this, Bash gets blanket auto-approve (if in tools_allowed).
+- **path_within**: restrict file operations to these directories. `${MISSION_DIR}` resolves to the mission directory.
+- **path_not_match**: always exclude these file patterns regardless of other permissions.
+
+### Creating a custom role
+
+```bash
+colmena library create-role --id api-triager --description "API vulnerability triage"
+# Edit config/library/roles/api-triager.yaml to add:
+#   tools_allowed: [Bash, Read, Write, Glob, Grep, WebFetch]
+#   permissions:
+#     bash_patterns: ['^python ', '^uv ', '^curl ']
+```
+
+### How permissions become delegations
+
+When `library_generate` creates a mission, it produces one `RuntimeDelegation` per tool per agent from the role's `tools_allowed` and `permissions`:
+
+- Bash tool + bash_patterns defined: one delegation per pattern (scoped)
+- Bash tool + no bash_patterns: one blanket delegation (all Bash)
+- File tools (Read, Write, Edit, Glob, Grep) + path_within: delegation with path conditions
+- Other tools: delegation with no conditions (all uses)
+
+All delegations have:
+- `agent_id` = role ID (scoped to this agent only)
+- `source: "role"` (provenance tracking)
+- `mission_id` (linkable for bulk revocation)
+- `session_id` (optional, if session binding is used)
+- TTL: 8 hours default (24h max)
+
+---
+
+## 10.8 Mission Lifecycle
+
+Missions are a first-class concept with full lifecycle management.
+
+### Creating a mission
+
+Use `library_generate` (MCP) or the library select workflow (CLI). This creates:
+1. Per-agent `CLAUDE.md` files with role context, team roster, and **pre-approved operations** section
+2. `permissions.yaml` in the mission directory as audit record
+3. Role-bound delegations in `runtime-delegations.json`
+
+### Listing active missions
+
+```bash
+colmena mission list
+# Active missions:
+#   2026-04-01-audit-payments -- 12 delegations, 3 agents, expires ~2026-04-01 20:00 UTC
+#   2026-04-01-triage-reports -- 8 delegations, 2 agents, expires ~2026-04-01 22:00 UTC
+```
+
+### Deactivating a mission
+
+When a mission is complete (or something goes wrong), revoke all its delegations instantly:
+
+```bash
+colmena mission deactivate --id 2026-04-01-audit-payments
+# Revoked 12 delegations for mission '2026-04-01-audit-payments'.
+```
+
+Via MCP, `mission_deactivate` returns the CLI command for human confirmation (read-only pattern, consistent with delegate/revoke).
+
+### Full lifecycle
+
+```
+1. library_select  --> choose pattern for mission
+2. library_generate --> creates CLAUDE.md + role-bound delegations (human approves once)
+3. agents work      --> delegations auto-approve scoped operations for 8h
+4. peer review      --> review_submit + review_evaluate --> ELO updates
+5. mission complete --> colmena mission deactivate (or delegations expire)
+6. calibrate run    --> ELO-based trust persists beyond the mission
+```
 
 ---
 
@@ -934,6 +1124,11 @@ All delegations expire automatically (max 24h).
 | `colmena review list --state pending` | List pending reviews |
 | `colmena review show <id>` | View review details |
 | `colmena elo show` | View ELO leaderboard |
+| `colmena mission list` | List active missions with delegation counts |
+| `colmena mission deactivate --id X` | Revoke all delegations for a mission |
+| `colmena calibrate run` | Apply ELO-based trust tiers |
+| `colmena calibrate show` | Show current trust tier per agent |
+| `colmena calibrate reset` | Clear all ELO-based overrides |
 | `colmena stats` | View filter token savings |
 
 | MCP Tool | What it does |
@@ -955,6 +1150,8 @@ All delegations expire automatically (max 24h).
 | `elo_ratings` | Get ELO leaderboard |
 | `findings_query` | Query findings by criteria |
 | `findings_list` | List all findings |
+| `mission_deactivate` | Show deactivation CLI command (read-only) |
+| `calibrate` | Show calibration state and actions |
 
 | Sound | Meaning |
 |-------|---------|
