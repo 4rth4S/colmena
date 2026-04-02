@@ -501,6 +501,17 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<(
         eprintln!("WARNING: {w}");
     }
 
+    // Fix #4: Bash delegations via CLI currently have no conditions support,
+    // so block them with an explanatory message directing users to add scope.
+    if tool == "Bash" {
+        anyhow::bail!(
+            "Bash delegations require scope conditions (--bash-pattern or --path-within). \
+             Unscoped Bash delegations auto-approve ALL commands and are not allowed.\n\
+             Hint: use trust-firewall.yaml agent_overrides for scoped Bash access, \
+             or create role-based delegations via 'colmena library select --mission'."
+        );
+    }
+
     let ttl = colmena_core::delegate::validate_ttl(ttl_hours)?;
 
     let config_dir = colmena_core::paths::default_config_dir();
