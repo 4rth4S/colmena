@@ -278,14 +278,15 @@ colmena stats                             # Filter token savings summary
 | `findings_query` | Query findings by criteria |
 | `findings_list` | List all findings |
 
-### Dynamic Trust (M3) — 2 tools
+### Dynamic Trust (M3) — 3 tools
 
 | Tool | Description |
 |------|-------------|
 | `mission_deactivate` | Show deactivation CLI command (read-only) |
 | `calibrate` | Show calibration state and recommend actions |
+| `session_stats` | Show prompts saved + tokens saved (call before ending session) |
 
-**22 tools total** across all milestones.
+**20 tools total** across all milestones.
 
 ## Configuration
 
@@ -358,7 +359,7 @@ colmena/
 │           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
-│       └── main.rs            # rmcp server, stdio transport, 22 tools
+│       └── main.rs            # rmcp server, stdio transport, 20 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
 │   ├── filter-config.yaml     # Output filter settings
