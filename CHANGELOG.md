@@ -6,6 +6,23 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-02
+
+### Added
+- **Plug-and-play onboarding (M5):** `colmena setup` replaces 4 manual steps with one command
+  - Auto-detects repo mode (developer clone) vs standalone mode (release binary)
+  - Embeds all 22 default config + library files (~46KB) in binary via `include_str!()`
+  - Merge inteligente: copies new defaults, preserves custom files (saves new defaults to `.defaults/`)
+  - Registers Pre/PostToolUse hooks (delegates to `install`)
+  - Registers MCP server globally in `~/.mcp.json` with absolute path
+  - Verifies config, library, hooks, and MCP binary with formatted checklist
+  - `--dry-run` previews all actions without modifying, `--force` overwrites everything
+  - New files: `colmena-cli/src/setup.rs`, `colmena-cli/src/defaults.rs`
+
+### Changed
+- `install.rs`: `colmena_binary_path()` and `settings_json_path()` now `pub(crate)` for setup reuse
+- Tests: 202 (was 193), 9 new tests for setup merge logic and MCP registration
+
 ## [0.4.0] - 2026-04-02
 
 ### Added

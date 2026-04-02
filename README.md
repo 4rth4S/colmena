@@ -59,14 +59,13 @@ CC: "submit this review with scores and findings"
 # Build all binaries
 cargo build --release
 
-# Register PreToolUse + PostToolUse hooks
-./target/release/colmena install
-
-# Verify
-./target/release/colmena config check
+# One-command setup: hooks + MCP + config verification
+./target/release/colmena setup
 ```
 
-The MCP server is auto-discovered via `.mcp.json` in the project root.
+That's it. `setup` registers the PreToolUse + PostToolUse hooks in `~/.claude/settings.json`, registers the MCP server in `~/.mcp.json`, validates config and library, and prints a checklist. Restart Claude Code to pick up the MCP server.
+
+For standalone installs (release binary, no repo), `setup` embeds all default config and library files — the binary is self-contained.
 
 ## Features
 
@@ -215,7 +214,8 @@ over time        --> colmena calibrate run (ELO-based trust persists)
 ```
 colmena hook                              # Hot path: CC hook (stdin JSON)
 colmena config check                      # Validate trust-firewall.yaml
-colmena install                           # Register hook in ~/.claude/settings.json
+colmena install                           # Register hooks in ~/.claude/settings.json
+colmena setup [--dry-run] [--force]       # One-command onboarding: config + hooks + MCP
 
 colmena queue list                        # Pending approval items
 colmena queue prune --older-than 7        # Prune entries older than N days
@@ -399,13 +399,13 @@ colmena/
 | M3.5 | Done | Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead |
 | M4 | Done | Mentor prompt refinement — debate pattern for prompt improvement suggestions |
 | M4.1 | Done | Caido-native pentester roles — web_pentester + api_pentester for bug bounty with Caido MCP |
-| M5 | Next | Plug-and-play onboarding — `colmena setup` command |
+| M5 | Done | Plug-and-play onboarding — `colmena setup` (config, hooks, MCP in one command) |
 
 ## Docs
 
 - [Changelog](CHANGELOG.md) — version history and upgrade notes
 - [Contributing](CONTRIBUTING.md) — branching, PRs, versioning, releasing
-- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M3
+- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M5
 - [Design Spec](docs/specs/2026-03-29-hivemind-design.md) — full M0-M3 design
 - [Dark Corners](docs/dark-corners.md) — M0 edge case analysis
 - [Dark Corners M1](docs/dark-corners-m1.md) — M1 edge case analysis
