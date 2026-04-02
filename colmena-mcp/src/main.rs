@@ -535,6 +535,15 @@ impl ColmenaServer {
             role_assignments,
         };
 
+        // Query ELO ratings for reviewer lead assignment
+        let elo_dir = self.config_dir.join("elo");
+        let elo_log_path = elo_dir.join("elo-log.jsonl");
+        let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
+        let baselines: Vec<(String, u32)> = roles.iter()
+            .map(|r| (r.id.clone(), r.elo.initial))
+            .collect();
+        let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
+
         let mission_config = colmena_core::selector::generate_mission(
             &input.mission,
             &recommendation,
@@ -542,6 +551,7 @@ impl ColmenaServer {
             &library_dir,
             &missions_dir,
             None, // session_id: MCP context doesn't have session binding
+            &elo_ratings,
         )
         .map_err(|e| format!("Mission generation failed: {e}"))?;
 
@@ -554,6 +564,29 @@ impl ColmenaServer {
             output.push_str(&format!(
                 "  {} — {}\n",
                 agent.role_id,
+                agent.claude_md_path.display()
+            ));
+        }
+
+        // Show reviewer lead assignment
+        if let Some(ref lead) = mission_config.reviewer_lead {
+            output.push_str(&format!(
+                "\n## Review Lead\n\nAssigned: {} (ELO: {}, reviews: {})\n\
+                Escalation: scores < 7.0 or critical findings → human review\n",
+                lead.role_name, lead.elo, lead.review_count,
+            ));
+        }
+
+        // Agent prompts section
+        output.push_str("\n## Agent Prompts (ready for Agent tool)\n\n");
+        for agent in &mission_config.agent_configs {
+            let is_lead = mission_config.reviewer_lead.as_ref()
+                .map(|l| l.role_id == agent.role_id)
+                .unwrap_or(false);
+            let role_label = if is_lead { " [REVIEWER]" } else { "" };
+            output.push_str(&format!(
+                "### {} {}{}\nPrompt: {}\n\n",
+                agent.role_id, agent.role_name, role_label,
                 agent.claude_md_path.display()
             ));
         }
