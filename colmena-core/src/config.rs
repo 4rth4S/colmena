@@ -62,9 +62,33 @@ pub struct FirewallConfig {
     pub notifications: Option<NotificationsConfig>,
 }
 
+/// Validate the cwd before using it as ${PROJECT_DIR}.
+///
+/// H3: A crafted cwd (e.g. "/") would expand path_within to match the entire filesystem.
+/// Require at least 2 normal path components so "/" and "/tmp" are rejected.
+fn validate_cwd(cwd: &str) -> Result<()> {
+    use std::path::Component;
+    let normal_count = std::path::Path::new(cwd)
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .count();
+    if normal_count < 2 {
+        anyhow::bail!(
+            "cwd '{}' is too shallow ({} components) — possible ${{PROJECT_DIR}} injection",
+            cwd,
+            normal_count
+        );
+    }
+    Ok(())
+}
+
 /// Load and parse the firewall config from a YAML file.
 /// Resolves `${PROJECT_DIR}` placeholders in path_within values against the given `cwd`.
 pub fn load_config(path: &Path, cwd: &str) -> Result<FirewallConfig> {
+    // H3: Validate cwd depth before substituting into path_within rules.
+    // If cwd is "/" or "/tmp" the path_within rules become trivially bypassable.
+    validate_cwd(cwd).with_context(|| format!("Rejecting unsafe cwd '{cwd}'"))?;
+
     let contents = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 
@@ -329,6 +353,32 @@ action: auto-approve
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
+    }
+
+    // ── H3: cwd validation tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_cwd_root_rejected() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        // "/" has 0 normal components — must be rejected to prevent PROJECT_DIR injection
+        let result = load_config(&config_path, "/");
+        assert!(result.is_err(), "cwd '/' must be rejected");
+    }
+
+    #[test]
+    fn test_cwd_shallow_rejected() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        // "/tmp" has 1 normal component — must be rejected
+        let result = load_config(&config_path, "/tmp");
+        assert!(result.is_err(), "cwd '/tmp' must be rejected");
+    }
+
+    #[test]
+    fn test_cwd_valid_accepted() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        // "/home/edgar" has 2 normal components — must be accepted
+        let result = load_config(&config_path, "/home/edgar");
+        assert!(result.is_ok(), "cwd '/home/edgar' must be accepted: {:?}", result.err());
     }
 
     #[test]
