@@ -21,11 +21,12 @@ Three integration points with Claude Code:
 ```
 CC tool call --> colmena hook (stdin JSON)
                     |
-                    |-- blocked?    --> deny  (force push, rm -rf)
-                    |-- delegated?  --> allow (human expanded trust)
-                    |-- restricted? --> ask   (rm, docker, external comms)
-                    |-- trusted?    --> allow (reads, greps, project writes)
-                    +-- default     --> ask
+                    |-- blocked?       --> deny  (force push, rm -rf)
+                    |-- delegated?     --> allow (human or role-bound trust)
+                    |-- agent override --> allow/ask/block (YAML then ELO)
+                    |-- restricted?    --> ask   (rm, docker, external comms)
+                    |-- trusted?       --> allow (reads, greps, project writes)
+                    +-- default        --> ask
 ```
 
 **2. PostToolUse Hook (reactive — after execution)** — Filters Bash tool outputs before CC processes them. Strips ANSI, deduplicates repeated lines, extracts only stderr on failures, and applies smart truncation. Saves 30-50% tokens per output.
@@ -164,6 +165,51 @@ strip_ansi: true
 enabled: true
 ```
 
+### Dynamic Trust Calibration (M3)
+
+Two mechanisms that eliminate approval fatigue for multi-agent missions:
+
+**Role-bound mission delegations (temporary)** -- When `library_generate` creates a mission, it auto-generates scoped delegations from each agent's role permissions. The human approves once at mission creation; agents run without repeated prompts.
+
+```yaml
+# config/library/roles/pentester.yaml (optional permissions block)
+permissions:
+  bash_patterns:
+    - '^nmap\b'
+    - '^nikto\b'
+    - '^python\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+```
+
+Delegations are agent-scoped, session-bound, and time-limited (8h default, 24h max). Blocked rules always win.
+
+**ELO-driven trust tiers (persistent)** -- After enough peer reviews, agent ELO scores determine their trust level. Running `colmena calibrate run` converts scores into firewall overrides.
+
+| Tier | ELO | Effect |
+|------|-----|--------|
+| Uncalibrated | < 3 reviews | Default rules (warm-up) |
+| Elevated | >= 1600 | Auto-approve role's tools |
+| Standard | 1300-1599 | Default rules |
+| Restricted | 1100-1299 | Ask for everything |
+| Probation | < 1100 | Block dangerous tools |
+
+ELO overrides are stored separately in `config/elo-overrides.json`. YAML agent_overrides always take precedence (human wins). `colmena calibrate reset` instantly revokes all ELO-based trust.
+
+### Mission Lifecycle (M3)
+
+Missions are now a first-class concept with full lifecycle management:
+
+```
+library_generate --> creates CLAUDE.md + role-bound delegations
+agents work      --> delegations auto-approve scoped operations
+mission complete --> colmena mission deactivate --id X
+over time        --> colmena calibrate run (ELO-based trust persists)
+```
+
 ## CLI Reference
 
 ```
@@ -187,6 +233,13 @@ colmena review list [--state pending]     # List peer reviews
 colmena review show <review-id>           # Review detail
 
 colmena elo show                          # ELO leaderboard
+
+colmena mission list                      # Active missions with delegation counts
+colmena mission deactivate --id X         # Revoke all mission delegations
+
+colmena calibrate run                     # Apply ELO-based trust tiers
+colmena calibrate show                    # Show trust tier per agent
+colmena calibrate reset                   # Clear all ELO overrides
 
 colmena stats                             # Filter token savings summary
 ```
@@ -225,7 +278,14 @@ colmena stats                             # Filter token savings summary
 | `findings_query` | Query findings by criteria |
 | `findings_list` | List all findings |
 
-**20 tools total** across all milestones.
+### Dynamic Trust (M3) — 2 tools
+
+| Tool | Description |
+|------|-------------|
+| `mission_deactivate` | Show deactivation CLI command (read-only) |
+| `calibrate` | Show calibration state and recommend actions |
+
+**22 tools total** across all milestones.
 
 ## Configuration
 
@@ -298,12 +358,13 @@ colmena/
 │           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
-│       └── main.rs            # rmcp server, stdio transport, 20 tools
+│       └── main.rs            # rmcp server, stdio transport, 22 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
 │   ├── filter-config.yaml     # Output filter settings
 │   ├── review-config.yaml     # Review thresholds
-│   ├── runtime-delegations.json
+│   ├── runtime-delegations.json  # Active trust delegations
+│   ├── elo-overrides.json       # ELO-calibrated agent overrides (auto-generated)
 │   ├── queue/
 │   │   ├── pending/           # Approval items awaiting decision
 │   │   └── decided/           # Resolved items
@@ -333,11 +394,14 @@ colmena/
 | M1 | Done | Wisdom Library + Pattern Selector + RRA security hardening |
 | M2 | Done | Peer Review Protocol + ELO Engine + Findings Store |
 | M2.5 | Done | Output Filtering — PostToolUse hook + colmena-filter pipeline |
-| M3 | Next | Dynamic trust calibration — ELO-driven auto-delegation, mentoring, demotion |
+| M3 | Done | Dynamic trust calibration — role-bound permissions, ELO-driven firewall rules, mission lifecycle |
+| M4 | Next | TBD |
 
 ## Docs
 
-- [User Guide](docs/guide.md) — setup, daily workflow, payments API audit walkthrough, M1 + M2 features
+- [Changelog](CHANGELOG.md) — version history and upgrade notes
+- [Contributing](CONTRIBUTING.md) — branching, PRs, versioning, releasing
+- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M3
 - [Design Spec](docs/specs/2026-03-29-hivemind-design.md) — full M0-M3 design
 - [Dark Corners](docs/dark-corners.md) — M0 edge case analysis
 - [Dark Corners M1](docs/dark-corners-m1.md) — M1 edge case analysis
