@@ -166,6 +166,17 @@ struct LibraryCreateRoleInput {
     description: String,
 }
 
+// ── Mission + Calibration input types ────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MissionDeactivateInput {
+    /// Mission ID (slug from mission directory name, e.g. "2026-04-01-audit-payments")
+    mission_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CalibrateInput {}
+
 // ---------------------------------------------------------------------------
 // Server struct
 // ---------------------------------------------------------------------------
@@ -524,8 +535,18 @@ impl ColmenaServer {
             &roles,
             &library_dir,
             &missions_dir,
+            None, // session_id: MCP context doesn't have session binding
         )
         .map_err(|e| format!("Mission generation failed: {e}"))?;
+
+        // Save role-generated delegations to runtime-delegations.json
+        if !mission_config.delegations.is_empty() {
+            let config_dir = colmena_core::paths::default_config_dir();
+            let delegations_path = config_dir.join("runtime-delegations.json");
+            let mut existing = colmena_core::delegate::load_delegations(&delegations_path);
+            existing.extend(mission_config.delegations.clone());
+            let _ = colmena_core::delegate::save_delegations(&delegations_path, &existing);
+        }
 
         let mut output = format!(
             "Mission generated: {}\n\nFiles created:\n  {}\n",
@@ -897,6 +918,70 @@ impl ColmenaServer {
         }
 
         serde_json::to_string_pretty(&records).map_err(|e| format!("Error: {e}"))
+    }
+
+    // ── Mission management ───────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Deactivate a mission — returns CLI command to revoke all its delegations (read-only, requires human confirmation)")]
+    fn mission_deactivate(
+        &self,
+        Parameters(input): Parameters<MissionDeactivateInput>,
+    ) -> Result<String, String> {
+        let cmd = format!("colmena mission deactivate --id {}", input.mission_id);
+        Ok(format!(
+            "Mission deactivation requested for '{}'.\n\n\
+             To confirm, run this command in the terminal:\n\n  {}\n\n\
+             MCP tools cannot deactivate missions directly — human confirmation required.",
+            input.mission_id, cmd
+        ))
+    }
+
+    // ── Calibration ──────────────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Show current ELO-based trust calibration state — which agents are elevated, restricted, or on probation")]
+    fn calibrate(
+        &self,
+        Parameters(_input): Parameters<CalibrateInput>,
+    ) -> Result<String, String> {
+        let library_dir = colmena_core::library::default_library_dir();
+        let elo_log_path = self.config_dir.join("elo-events.jsonl");
+
+        let roles = colmena_core::library::load_roles(&library_dir)
+            .map_err(|e| format!("Error loading roles: {e}"))?;
+        let events = colmena_core::elo::read_elo_log(&elo_log_path)
+            .map_err(|e| format!("Error reading ELO log: {e}"))?;
+
+        let baselines: Vec<(String, u32)> = roles.iter()
+            .map(|r| (r.id.clone(), r.elo.initial))
+            .collect();
+        let ratings = colmena_core::elo::leaderboard(&events, &baselines);
+        let thresholds = colmena_core::calibrate::TrustThresholds::default();
+
+        let mut output = format!(
+            "Trust calibration (thresholds: elevated>={}, restrict<{}, floor<{}, min_reviews={}):\n\n",
+            thresholds.elevate_elo, thresholds.restrict_elo, thresholds.floor_elo,
+            thresholds.min_reviews_to_calibrate,
+        );
+
+        if ratings.is_empty() {
+            output.push_str("No agents with ELO history.\n");
+        } else {
+            for rating in &ratings {
+                let tier = colmena_core::calibrate::determine_tier(rating, &thresholds);
+                output.push_str(&format!(
+                    "  {:<25} ELO:{:<6} reviews:{:<3} tier:{}\n",
+                    rating.agent, rating.elo, rating.review_count,
+                    tier.as_str().to_uppercase(),
+                ));
+            }
+        }
+
+        output.push_str(
+            "\nTo apply calibration, run: colmena calibrate run\n\
+             To reset all overrides:     colmena calibrate reset"
+        );
+
+        Ok(output)
     }
 }
 

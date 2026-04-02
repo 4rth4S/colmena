@@ -57,6 +57,24 @@ pub enum AuditEvent<'a> {
         review_id: &'a str,
         outcome: &'a str,
     },
+    /// Mission activated with role-bound delegations
+    MissionActivate {
+        mission_id: &'a str,
+        agent_count: usize,
+        delegation_count: usize,
+    },
+    /// Mission deactivated (all delegations revoked)
+    MissionDeactivate {
+        mission_id: &'a str,
+        revoked: usize,
+    },
+    /// ELO calibration changed an agent's trust tier
+    Calibration {
+        agent: &'a str,
+        old_tier: &'a str,
+        new_tier: &'a str,
+        elo: i32,
+    },
 }
 
 /// Format an audit event as a single log line.
@@ -97,6 +115,15 @@ fn format_event(event: &AuditEvent) -> String {
         }
         AuditEvent::ReviewCompleted { review_id, outcome } => {
             format!("[{ts}] REVIEW_COMPLETED review={review_id} outcome={outcome}")
+        }
+        AuditEvent::MissionActivate { mission_id, agent_count, delegation_count } => {
+            format!("[{ts}] MISSION_ACTIVATE mission={mission_id} agents={agent_count} delegations={delegation_count}")
+        }
+        AuditEvent::MissionDeactivate { mission_id, revoked } => {
+            format!("[{ts}] MISSION_DEACTIVATE mission={mission_id} revoked={revoked}")
+        }
+        AuditEvent::Calibration { agent, old_tier, new_tier, elo } => {
+            format!("[{ts}] CALIBRATION agent={agent} old_tier={old_tier} new_tier={new_tier} elo={elo}")
         }
     }
 }
