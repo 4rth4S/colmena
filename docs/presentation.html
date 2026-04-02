@@ -452,26 +452,30 @@
   <img src="colmena-banner.png" alt="Colmena" class="banner-img" onerror="this.style.display='none'">
   <h1>Colmena</h1>
   <p class="subtitle">Capa de orquestacion multi-agente para Claude Code</p>
-  <div class="grid-4" style="margin-top: 32px; max-width: 900px;">
+  <div class="grid-4" style="margin-top: 32px; max-width: 1100px;">
     <div style="text-align: center;">
       <p style="font-size: 1.1rem; font-weight: 600;">Trust Firewall</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Auto-approve 80%+ de tool calls</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Wisdom Library</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Peer Review + ELO</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Calidad medible entre agentes</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Peer Review</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Mission Bridge</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Spawn → Work → Review → ELO</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">ELO Engine</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Output Filtering</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Token savings automatico</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
   </div>
   <p class="dim" style="margin-top: 40px; font-size: 0.9rem;">
-    Hooks + MCP + YAML  |  Una sola sesion CC orquesta todo
+    v0.3.0  |  4 crates Rust  |  20 MCP tools  |  Hooks + MCP + YAML
   </p>
 </div>
 
@@ -552,17 +556,21 @@
 <span class="comment">         +---------------------------------+</span></div>
     </div>
     <div>
-      <div class="card amber-border" style="margin-bottom: 16px;">
-        <h3 style="font-size: 1rem;">Hook (reactivo)</h3>
-        <p style="font-size: 0.95rem;">PreToolUse hook evalua cada tool call contra reglas YAML. Decide <code>allow</code>, <code>deny</code> o <code>ask</code> en &lt;15ms. Sin llamadas de red.</p>
+      <div class="card amber-border" style="margin-bottom: 12px;">
+        <h3 style="font-size: 1rem;">PreToolUse (reactivo)</h3>
+        <p style="font-size: 0.9rem;">Evalua cada tool call contra reglas YAML. Decide <code>allow</code>, <code>deny</code> o <code>ask</code> en &lt;15ms. Sin llamadas de red.</p>
       </div>
-      <div class="card green-border" style="margin-bottom: 16px;">
+      <div class="card purple-border" style="margin-bottom: 12px;">
+        <h3 style="font-size: 1rem;">PostToolUse (filtrado)</h3>
+        <p style="font-size: 0.9rem;">Filtra outputs de Bash: strip ANSI, dedup lineas repetidas, truncado inteligente. Ahorra tokens automaticamente.</p>
+      </div>
+      <div class="card green-border" style="margin-bottom: 12px;">
         <h3 style="font-size: 1rem; color: var(--green);">MCP (proactivo)</h3>
-        <p style="font-size: 0.95rem;">CC llama herramientas de Colmena nativamente: seleccionar patrones, generar instrucciones, gestionar reviews, consultar findings.</p>
+        <p style="font-size: 0.9rem;">CC llama 20 herramientas nativamente: patterns, misiones, reviews, ELO, findings, stats, calibracion.</p>
       </div>
-      <div class="card" style="padding: 20px;">
+      <div class="card" style="padding: 16px;">
         <h3 style="font-size: 1rem;">Principio de diseno</h3>
-        <p style="font-size: 0.95rem;">Todo es filesystem. Sin base de datos, sin Docker, sin servicios externos. Git-versionable. Superficie de ataque minima.</p>
+        <p style="font-size: 0.9rem;">Todo filesystem. Sin DB, sin Docker, sin servicios. 4 crates Rust: core, cli, filter, mcp.</p>
       </div>
     </div>
   </div>
@@ -586,7 +594,7 @@
                             <span class="keyword">default</span>     --> ask   (fallback seguro)
 
 <span class="comment"># Precedencia:</span>
-<span class="string">blocked > delegations > agent_overrides > restricted > trust_circle > defaults</span></div>
+<span class="string">blocked > delegations > agent_overrides > ELO overrides > restricted > trust_circle > defaults</span></div>
       <div class="card" style="margin-top: 16px; padding: 16px;">
         <h3 style="font-size: 0.95rem;">Garantia de seguridad</h3>
         <p style="font-size: 0.9rem;">Cualquier falla del hook retorna <code>"ask"</code>, nunca <code>"deny"</code>. El humano siempre tiene la ultima palabra en casos borde.</p>
@@ -626,7 +634,7 @@
           <tr>
             <td>Delegacion en runtime</td>
             <td>No existe</td>
-            <td class="green">TTL-scoped, 4h max</td>
+            <td class="green">TTL-scoped, max 24h</td>
           </tr>
           <tr>
             <td>Audit trail</td>
@@ -639,7 +647,46 @@
   </div>
 </div>
 
-<!-- Slide 6: Wisdom Library -->
+<!-- Slide 6: Resultados Reales -->
+<div class="slide" id="s6">
+  <span class="tag green">Resultados Reales</span>
+  <h2 style="margin-top: 20px;">Datos de una sesion real: <span class="highlight">security hardening sprint</span></h2>
+  <p style="margin-bottom: 24px; font-size: 1.05rem;">Sesion de ~3 horas. Threat model STRIDE/DREAD, 4 squads paralelos, 8 fixes de seguridad.</p>
+  <div class="grid-4">
+    <div class="card" style="text-align: center;">
+      <div class="stat-number green" style="font-size: 3rem;">80%</div>
+      <div class="stat-label">Auto-aprobado</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">1,335 de 1,675 tool calls sin preguntarle al humano</p>
+    </div>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number red" style="font-size: 3rem;">53</div>
+      <div class="stat-label">Bloqueados</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Comandos destructivos frenados automaticamente</p>
+    </div>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number cyan" style="font-size: 3rem;">29</div>
+      <div class="stat-label">Agentes</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Agentes unicos gestionados en la sesion</p>
+    </div>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number purple" style="font-size: 3rem;">0</div>
+      <div class="stat-label">Merge conflicts</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">4 squads en worktrees aislados, zero colisiones</p>
+    </div>
+  </div>
+  <div class="grid-2" style="margin-top: 24px;">
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">El caso: security hardening</h3>
+      <p style="font-size: 0.9rem;">Un agente AppSec corrio STRIDE+DREAD (25 amenazas). Un Security Architect hizo validacion independiente. Se armaron 4 dev squads priorizados por ownership de archivos. Los 4 corrieron en paralelo. Merge limpio.</p>
+    </div>
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Resultado medible</h3>
+      <p style="font-size: 0.9rem;">DREAD maximo: <span class="red">9.4</span> → <span class="green">6.2</span> post-fix. 0 findings Critical. 0 findings High. 184 tests, clippy limpio. Todo en una sesion con un humano.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Slide 7: Wisdom Library -->
 <div class="slide" id="s6">
   <span class="tag green">Wisdom Library</span>
   <h2 style="margin-top: 20px;">Roles + Patterns: <span class="highlight">quien</span> y <span class="highlight">como</span></h2>
@@ -672,9 +719,11 @@
         <div class="flow-connector" style="text-align: center;">|</div>
         <div class="flow-step" style="width: 100%;"><h4>2. library_select</h4><p>Evalua 6 patterns, retorna los mejores matches con asignacion de roles</p></div>
         <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>3. library_generate</h4><p>Crea CLAUDE.md por agente con contexto de mision, instrucciones de rol, reglas de coordinacion</p></div>
+        <div class="flow-step" style="width: 100%;"><h4>3. library_generate</h4><p>Crea CLAUDE.md por agente + asigna reviewer lead por ELO + instrucciones de review</p></div>
         <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">4. Agent tool</h4><p>CC lanza sub-agentes en la misma sesion con las instrucciones generadas</p></div>
+        <div class="flow-step" style="width: 100%;"><h4>4. Confirmar delegaciones</h4><p>Humano ejecuta CLI commands para activar permisos scoped (read-only MCP)</p></div>
+        <div class="flow-connector" style="text-align: center;">|</div>
+        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">5. Agent tool</h4><p>CC lanza sub-agentes → trabajan → review_submit → reviewer evalua → ELO actualizado</p></div>
       </div>
     </div>
   </div>
@@ -869,30 +918,30 @@
   <p style="margin-bottom: 16px; font-size: 1.05rem;">Hardening via analisis STRIDE+DREAD. Cada componente construido con least-privilege y auditabilidad.</p>
   <div class="grid-3">
     <div class="card">
-      <h3 style="color: var(--red);">Validacion de input</h3>
+      <h3 style="color: var(--red);">Validacion hardened</h3>
       <ul style="font-size: 0.9rem;">
-        <li>Prevencion de path traversal (normalizacion por componentes)</li>
-        <li>Inyeccion de comandos bloqueada (regex patterns YAML, sin shell expansion)</li>
-        <li>Proteccion de overwrite en templates de la library</li>
-        <li>Verificacion de integridad via SHA256</li>
+        <li>Path traversal bloqueado (normalizacion por componentes)</li>
+        <li>Config files protegidos via path_not_match</li>
+        <li>Bash delegations requieren scope obligatorio</li>
+        <li>Severity validada contra enum cerrado</li>
       </ul>
     </div>
     <div class="card">
       <h3 style="color: var(--amber);">Trust Boundaries</h3>
       <ul style="font-size: 0.9rem;">
-        <li>MCP delegate es read-only por defecto</li>
-        <li>TTL de delegacion capped a 4 horas</li>
+        <li>Todos los MCP tools son read-only (retornan CLI commands)</li>
+        <li>TTL de delegacion max 24h, delegaciones sin TTL ignoradas</li>
         <li>Reglas blocked son no-overridables</li>
         <li>Falla del hook retorna "ask" (fallback seguro)</li>
       </ul>
     </div>
     <div class="card">
-      <h3 style="color: var(--green);">Audit Trail</h3>
+      <h3 style="color: var(--green);">STRIDE+DREAD validado</h3>
       <ul style="font-size: 0.9rem;">
-        <li>Cada decision del firewall logueada</li>
-        <li>Cada evento del ciclo de review registrado</li>
-        <li>Log ELO es append-only (sin mutacion)</li>
-        <li>Findings store es durable y consultable</li>
+        <li>25 amenazas identificadas, 8 fixes aplicados</li>
+        <li>DREAD maximo: 9.4 → 6.2 post-hardening</li>
+        <li>0 findings Critical, 0 findings High</li>
+        <li>Review independiente del Security Architect</li>
       </ul>
     </div>
   </div>
@@ -920,7 +969,7 @@
           <div class="stat-label">Hook latency</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number green" style="font-size: 3rem;">133</div>
+          <div class="stat-number green" style="font-size: 3rem;">184</div>
           <div class="stat-label">Tests passing</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
@@ -928,7 +977,7 @@
           <div class="stat-label">MCP tools</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number amber" style="font-size: 3rem;">3</div>
+          <div class="stat-number amber" style="font-size: 3rem;">4</div>
           <div class="stat-label">Rust crates</div>
         </div>
       </div>
@@ -938,13 +987,13 @@
           <span class="tag amber" style="font-size: 0.7rem;">Firewall</span> config_check, evaluate, delegate, delegate_list, delegate_revoke, queue_list<br>
           <span class="tag green" style="font-size: 0.7rem;">Library</span> library_list, library_show, library_select, library_generate, library_create_role<br>
           <span class="tag blue" style="font-size: 0.7rem;">Review</span> review_submit, review_list, review_evaluate<br>
-          <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings<br>
-          <span class="tag cyan" style="font-size: 0.7rem;">Findings</span> findings_query, findings_list
+          <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings, findings_query, findings_list<br>
+          <span class="tag cyan" style="font-size: 0.7rem;">Ops</span> mission_deactivate, calibrate, session_stats
         </p>
       </div>
       <div class="card" style="margin-top: 12px; padding: 16px;">
         <h3 style="font-size: 0.95rem;">Tech stack</h3>
-        <p style="font-size: 0.85rem;">Rust 2021, rmcp (MCP stdio), serde, clap, tokio, regex pre-compilado, escrituras atomicas (temp + rename)</p>
+        <p style="font-size: 0.85rem;">Rust 2021, rmcp (MCP stdio), serde, clap, tokio, regex pre-compilado. 4 crates: core, cli, filter, mcp</p>
       </div>
     </div>
     <div>
@@ -971,11 +1020,25 @@
             <p style="font-size: 0.85rem; color: var(--text-dim);">Cross-review, trust gate, ELO con temporal decay, findings store</p>
           </div>
         </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M3</span> Dynamic Trust + Security Hardening</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO calibration, STRIDE/DREAD hardening (8 fixes), output filtering, session stats</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M3.5</span> Mission Bridge</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO reviewer lead, review instructions en CLAUDE.md, pipeline spawn → review → learn</p>
+          </div>
+        </div>
         <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0;">
           <span class="tag amber" style="font-size: 0.7rem; min-width: 50px; text-align: center;">NEXT</span>
           <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M3</span> Dynamic Trust Calibration</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO scores influyen reglas del firewall. Agentes de alto rating ganan autonomia.</p>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M4</span> Mentor Prompt Refinement</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Debate pattern para mejora de prompts. Agentes sugieren, humanos deciden.</p>
           </div>
         </div>
       </div>
@@ -997,8 +1060,8 @@
       <p class="mono" style="font-size: 0.9rem;">Rust + MCP + YAML</p>
     </div>
     <div class="card" style="padding: 16px 28px; text-align: center;">
-      <p style="font-size: 0.85rem; color: var(--text-dim);">Crates</p>
-      <p class="mono" style="font-size: 0.9rem;">colmena-core, colmena-cli, colmena-mcp</p>
+      <p style="font-size: 0.85rem; color: var(--text-dim);">v0.3.0</p>
+      <p class="mono" style="font-size: 0.9rem;">4 crates, 184 tests, 20 MCP tools</p>
     </div>
   </div>
   <p style="margin-top: 40px; font-size: 1rem; color: var(--text-dim);">
@@ -1008,7 +1071,7 @@
 
 <!-- Navigation -->
 <div class="progress-bar" id="progressBar"></div>
-<div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">12</span></div>
+<div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">13</span></div>
 <div class="nav">
   <button id="btnPrev">&#8592;</button>
   <button id="btnNext">&#8594;</button>
