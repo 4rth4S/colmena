@@ -77,8 +77,12 @@ enum Commands {
         #[command(subcommand)]
         action: CalibrateAction,
     },
-    /// Filter statistics (token savings)
-    Stats,
+    /// Colmena statistics (firewall decisions + token savings)
+    Stats {
+        /// Show stats for a specific session ID only
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -238,7 +242,10 @@ fn main() {
             CalibrateAction::Show => run_calibrate_show(),
             CalibrateAction::Reset => run_calibrate_reset(),
         },
-        Commands::Stats => run_stats(),
+        Commands::Stats { session } => match session {
+            Some(sid) => run_session_stats(&sid),
+            None => run_stats(),
+        },
     };
 
     if let Err(e) = result {
@@ -394,8 +401,8 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
         return Ok(());
     }
 
-    // Extract tool output
-    let tool_output = match &payload.tool_output {
+    // Extract tool response (CC sends "tool_response", not "tool_output")
+    let tool_response = match &payload.tool_response {
         Some(v) => v,
         None => {
             let response = hook::PostToolUseResponse::passthrough();
@@ -404,9 +411,14 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
         }
     };
 
-    let stdout = tool_output.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    let stderr = tool_output.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-    let exit_code = tool_output.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let stdout = tool_response.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = tool_response.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    // CC sends "interrupted" (bool), not "exitCode" (int). Treat interrupted=true as exit code 1.
+    let exit_code = tool_response.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32)
+        .or_else(|| {
+            tool_response.get("interrupted").and_then(|v| v.as_bool())
+                .map(|interrupted| if interrupted { 1 } else { 0 })
+        });
     let command = payload.tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
     // Load filter config (or use defaults)
@@ -1057,34 +1069,93 @@ fn run_elo_show() -> Result<()> {
 }
 
 fn run_stats() -> Result<()> {
-    let stats_path = colmena_core::paths::colmena_home().join("config/filter-stats.jsonl");
-    let events = colmena_filter::stats::read_filter_stats(&stats_path)?;
+    let config_dir = colmena_core::paths::default_config_dir();
+    let audit_path = config_dir.join("audit.log");
+    let stats_path = config_dir.join("filter-stats.jsonl");
 
-    if events.is_empty() {
-        println!("No filter stats yet. Stats are recorded when the PostToolUse hook filters output.");
-        return Ok(());
-    }
+    // Audit stats (all sessions)
+    let audit = colmena_core::audit::session_stats(&audit_path, None);
+    let filter_events = colmena_filter::stats::read_filter_stats(&stats_path)?;
+    let filter = colmena_filter::stats::summarize(&filter_events);
 
-    let summary = colmena_filter::stats::summarize(&events);
-
-    println!("Filter Stats Summary");
-    println!("====================");
-    println!("  Total filtered:     {} events", summary.total_events);
-    println!("  Total chars saved:  {}", format_chars(summary.total_chars_saved));
-    println!("  Est. tokens saved:  ~{}", summary.total_chars_saved / 4);
-    println!("  Avg reduction:      {:.1}%", summary.avg_reduction_pct);
-    println!();
-
-    if !summary.top_commands.is_empty() {
-        println!("Top commands by savings:");
-        println!("  {:<60} SAVED", "COMMAND");
-        println!("  {:-<60} {:-<10}", "", "");
-        for (cmd, saved) in &summary.top_commands {
-            println!("  {:<60} {}", cmd, format_chars(*saved));
-        }
-    }
+    print_combined_stats(&audit, &filter, "All Sessions");
 
     Ok(())
+}
+
+fn run_session_stats(session_id: &str) -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let audit_path = config_dir.join("audit.log");
+    let stats_path = config_dir.join("filter-stats.jsonl");
+
+    // Audit stats for this session
+    let audit = colmena_core::audit::session_stats(&audit_path, Some(session_id));
+
+    // Filter stats for this session
+    let all_events = colmena_filter::stats::read_filter_stats(&stats_path)?;
+    let session_events: Vec<_> = all_events
+        .into_iter()
+        .filter(|e| e.session_id == session_id)
+        .collect();
+    let filter = colmena_filter::stats::summarize(&session_events);
+
+    print_combined_stats(&audit, &filter, "This Session");
+
+    Ok(())
+}
+
+fn print_combined_stats(
+    audit: &colmena_core::audit::SessionStats,
+    filter: &colmena_filter::stats::FilterStatsSummary,
+    scope: &str,
+) {
+    println!("Colmena Stats — {scope}");
+    println!("{}", "=".repeat(40));
+    println!();
+
+    // Firewall stats
+    if audit.total_decisions > 0 {
+        let auto_pct = if audit.total_decisions > 0 {
+            (audit.allow_count as f64 / audit.total_decisions as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        println!("  Firewall Decisions");
+        println!("  ──────────────────");
+        println!("  Auto-approved:      {} ({:.0}%)", audit.allow_count, auto_pct);
+        println!("  Asked human:        {}", audit.ask_count);
+        println!("  Blocked:            {}", audit.deny_count);
+        println!("  Total:              {}", audit.total_decisions);
+        println!("  Delegation matches: {}", audit.delegation_matches);
+        println!("  Unique agents:      {}", audit.unique_agents);
+        println!("  Unique tools:       {}", audit.unique_tools);
+        println!();
+        println!("  → {} prompts saved (auto-approved without asking)", audit.allow_count);
+    } else {
+        println!("  No firewall decisions recorded.");
+    }
+
+    println!();
+
+    // Filter stats
+    if filter.total_events > 0 {
+        println!("  Output Filtering");
+        println!("  ────────────────");
+        println!("  Outputs filtered:   {}", filter.total_events);
+        println!("  Chars saved:        {}", format_chars(filter.total_chars_saved));
+        println!("  Est. tokens saved:  ~{}", filter.total_chars_saved / 4);
+        println!("  Avg reduction:      {:.1}%", filter.avg_reduction_pct);
+    } else {
+        println!("  No output filtering recorded yet.");
+    }
+
+    println!();
+    println!("  ════════════════════════════════════");
+    println!("  Total value: {} prompts saved + ~{} tokens saved",
+        audit.allow_count,
+        filter.total_chars_saved / 4,
+    );
 }
 
 fn format_chars(chars: usize) -> String {

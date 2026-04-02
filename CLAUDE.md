@@ -2,6 +2,11 @@
 
 Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary + MCP server. Auto-approves routine operations, exposes trust management as native CC tools.
 
+## Session Protocol
+
+- **Before ending a session:** Always call `mcp__colmena__session_stats` to show the value summary (prompts saved + tokens saved). This helps the user understand Colmena's impact.
+- **Before spawning agents:** Call `mcp__colmena__library_select` to check if there's an appropriate role. If there is, use the Colmena-generated prompt for the agent.
+
 ## Quick Reference
 
 - **Build:** `cargo build --workspace --release`
@@ -111,7 +116,8 @@ colmena mission deactivate --id X      # Revoke all delegations for a mission
 colmena calibrate run                  # Run ELO-based trust calibration
 colmena calibrate show                 # Show current trust tiers per agent
 colmena calibrate reset                # Clear all ELO-based overrides
-colmena stats                          # Filter token savings summary
+colmena stats                          # Combined firewall + filter savings summary
+colmena stats --session <id>           # Stats for a specific session
 ```
 
 ## MCP Tools (M0.5)
@@ -151,6 +157,7 @@ findings_list      — list recent findings
 ```
 mission_deactivate — request mission deactivation (returns CLI command, read-only)
 calibrate          — show ELO-based trust calibration state + recommend CLI commands
+session_stats      — show prompts saved + tokens saved (call before ending session)
 ```
 
 ## Environment Variables
