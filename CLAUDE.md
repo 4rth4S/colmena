@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.2.0 (semver, single workspace version)
+- **Version:** 0.3.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -173,13 +173,14 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M2** Peer Review Protocol + ELO Engine + Findings Store (done)
 - **M2.5** Output Filtering — PostToolUse hook + colmena-filter pipeline (done)
 - **M3** Dynamic trust calibration — role-bound permissions + ELO → firewall rules (done)
-- **M4** TBD
+- **M3.5** Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead (done)
+- **M4** Mentor prompt refinement — debate pattern for prompt improvement suggestions
 
-## Current State (2026-04-01)
+## Current State (2026-04-02)
 
-**Branch:** `main` (v0.2.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3 (role-bound permissions + ELO calibration)
-**Next:** M4 (TBD) — threat modeling of M3 pending
+**Branch:** `main` (v0.3.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5 (security hardening + mission bridge)
+**Next:** M4 — mentor prompt refinement via debate pattern + ELO-driven suggestions
 
 ## Key Docs
 
@@ -190,3 +191,4 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/security/RRA_Summary_JIRA_colmena.md` — STRIDE+DREAD threat model (NOT committed, gitignored)
 - `docs/guide.md` — User guide with payments API audit walkthrough
 - `docs/presentation.html` — Overview deck (open in browser)
+- `docs/superpowers/specs/2026-04-02-mission-bridge-design.md` — Mission bridge spec (agent spawn → review → ELO)
