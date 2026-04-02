@@ -539,15 +539,6 @@ impl ColmenaServer {
         )
         .map_err(|e| format!("Mission generation failed: {e}"))?;
 
-        // Save role-generated delegations to runtime-delegations.json
-        if !mission_config.delegations.is_empty() {
-            let config_dir = colmena_core::paths::default_config_dir();
-            let delegations_path = config_dir.join("runtime-delegations.json");
-            let mut existing = colmena_core::delegate::load_delegations(&delegations_path);
-            existing.extend(mission_config.delegations.clone());
-            let _ = colmena_core::delegate::save_delegations(&delegations_path, &existing);
-        }
-
         let mut output = format!(
             "Mission generated: {}\n\nFiles created:\n  {}\n",
             mission_config.mission_dir.display(),
@@ -559,6 +550,34 @@ impl ColmenaServer {
                 agent.role_id,
                 agent.claude_md_path.display()
             ));
+        }
+
+        // Generate CLI commands for delegations (read-only: never persist from MCP)
+        if !mission_config.delegations.is_empty() {
+            output.push_str("\n\n## Delegations (require human confirmation)\n\nRun the following commands to activate mission delegations:\n\n```\n");
+            for d in &mission_config.delegations {
+                let hours = d
+                    .expires_at
+                    .map(|exp| {
+                        let dur = exp - d.created_at;
+                        let h = dur.num_hours();
+                        if h < 1 { 1 } else { h }
+                    })
+                    .unwrap_or(colmena_core::selector::DEFAULT_MISSION_TTL_HOURS);
+
+                let mut cmd = format!("colmena delegate add --tool {}", d.tool);
+                if let Some(ref agent) = d.agent_id {
+                    cmd.push_str(&format!(" --agent {}", agent));
+                }
+                cmd.push_str(&format!(" --ttl {}", hours));
+                if let Some(ref conds) = d.conditions {
+                    if let Some(ref bp) = conds.bash_pattern {
+                        cmd.push_str(&format!(" --bash-pattern \"{}\"", bp));
+                    }
+                }
+                output.push_str(&format!("{}\n", cmd));
+            }
+            output.push_str("```");
         }
 
         Ok(output)
@@ -669,6 +688,12 @@ impl ColmenaServer {
     ) -> Result<String, String> {
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
+
+        // Validate severity values before processing
+        for f in &input.findings {
+            colmena_core::findings::validate_severity(&f.severity)
+                .map_err(|e| e.to_string())?;
+        }
 
         // Convert FindingInput → colmena_core::findings::Finding
         let findings: Vec<colmena_core::findings::Finding> = input
