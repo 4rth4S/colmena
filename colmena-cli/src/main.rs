@@ -394,8 +394,8 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
         return Ok(());
     }
 
-    // Extract tool output
-    let tool_output = match &payload.tool_output {
+    // Extract tool response (CC sends "tool_response", not "tool_output")
+    let tool_response = match &payload.tool_response {
         Some(v) => v,
         None => {
             let response = hook::PostToolUseResponse::passthrough();
@@ -404,9 +404,14 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
         }
     };
 
-    let stdout = tool_output.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    let stderr = tool_output.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-    let exit_code = tool_output.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let stdout = tool_response.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+    let stderr = tool_response.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    // CC sends "interrupted" (bool), not "exitCode" (int). Treat interrupted=true as exit code 1.
+    let exit_code = tool_response.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32)
+        .or_else(|| {
+            tool_response.get("interrupted").and_then(|v| v.as_bool())
+                .map(|interrupted| if interrupted { 1 } else { 0 })
+        });
     let command = payload.tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
 
     // Load filter config (or use defaults)
