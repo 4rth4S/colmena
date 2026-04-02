@@ -9,8 +9,10 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
+- **Version:** 0.2.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
+- **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
 - **Repo:** `git@github.com:4rth4S/colmena.git`
 
 ## Architecture
@@ -27,7 +29,7 @@ Three CC integration points:
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
 3. **MCP (proactive):** CC calls colmena tools natively (config_check, queue_list, delegate, evaluate)
 
-Rule precedence: `blocked > delegations > agent_overrides > restricted > trust_circle > defaults`
+Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > trust_circle > defaults`
 
 ## Tech Stack
 
@@ -168,9 +170,9 @@ calibrate          — show ELO-based trust calibration state + recommend CLI co
 
 ## Current State (2026-04-01)
 
-**Branch:** `feature/colmena-filter-post-tool-use`
+**Branch:** `main` (v0.2.0)
 **Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3 (role-bound permissions + ELO calibration)
-**Next:** M4 (TBD)
+**Next:** M4 (TBD) — threat modeling of M3 pending
 
 ## Key Docs
 
