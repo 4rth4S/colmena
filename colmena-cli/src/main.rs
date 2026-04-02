@@ -865,6 +865,7 @@ fn run_library_select(mission: String) -> Result<()> {
         &missions_dir,
         None, // session_id: CLI doesn't have session context
         &elo_ratings,
+        Some(&default_config_dir()),
     )?;
 
     // Save role-generated delegations
