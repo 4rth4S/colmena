@@ -6,6 +6,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-02
+
+### Added
+- **Security hardening sprint:** 8 STRIDE/DREAD fixes resolving all Critical and High findings
+  - Removed `curl -s` from pipe auto-approve pattern (DREAD 9.4 → 2.0)
+  - `library_generate` MCP now read-only — returns CLI commands, never persists delegations
+  - Config files protected via `path_not_match` (trust-firewall.yaml, runtime-delegations.json, audit.log, etc.)
+  - Bash delegations require mandatory scope conditions (bash_pattern or path_within)
+  - ELO override regex patterns now compiled in evaluation flow
+  - Finding severity validated against closed enum [critical, high, medium, low]
+  - Delegations without `expires_at` skipped on load with warning
+- **PostToolUse filter fix:** aligned payload with CC actual format (`tool_response` not `tool_output`, `interrupted` not `exitCode`). Output filtering now works.
+- **Session stats:** `colmena stats` shows combined firewall + filter savings. `colmena stats --session <id>` for per-session view.
+- **`session_stats` MCP tool:** on-demand access to prompts saved + tokens saved summary (20 MCP tools total)
+- **Mission bridge:** `library_generate` now queries ELO ratings to assign reviewer lead (highest ELO). Generated CLAUDE.md files include post-work review protocol for workers and review responsibility for the lead.
+- **Review instruction templates:** `config/library/prompts/review-worker-instructions.md` and `review-lead-instructions.md`
+- **Session protocol in CLAUDE.md:** instructions to call `session_stats` before ending and `library_select` before spawning agents
+
+### Changed
+- `generate_mission()` now accepts `elo_ratings` parameter for reviewer lead assignment
+- `MissionConfig` includes `reviewer_lead: Option<ReviewerLead>` field
+- Security reports (`docs/security/`) removed from git tracking, gitignored
+
+### Fixed
+- PostToolUse hook silently passed through all outputs since M2.5 due to payload field mismatch
+- `config/trust-firewall.yaml` Write auto-approve exposed Colmena's own config files to agent modification
+
 ## [0.2.0] - 2026-04-01
 
 ### Added
@@ -24,7 +51,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **Delegation conditions:** `RuntimeDelegation` supports `conditions` field for fine-grained matching (bash_pattern, path_within, path_not_match)
 - **Delegation provenance:** `RuntimeDelegation.source` tracks origin ("human", "role", "elo") and `mission_id` links to missions for bulk revocation
 - **Pre-Approved Operations section** in generated CLAUDE.md files -- agents know what they can do without asking
-- **2 new MCP tools:** `mission_deactivate`, `calibrate` (22 tools total)
+- **2 new MCP tools:** `mission_deactivate`, `calibrate` (19 tools total)
 - **3 new audit events:** MISSION_ACTIVATE, MISSION_DEACTIVATE, CALIBRATION
 - **New crate module:** `colmena-core/src/calibrate.rs` -- TrustThresholds, TrustTier, calibrate(), save/load overrides
 

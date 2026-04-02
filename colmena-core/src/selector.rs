@@ -1,5 +1,6 @@
 use crate::config::Action;
 use crate::delegate::{DelegationConditions, RuntimeDelegation};
+use crate::elo::AgentRating;
 use crate::library::{Role, Pattern};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -37,6 +38,8 @@ pub struct MissionConfig {
     pub agent_configs: Vec<AgentConfig>,
     /// Auto-generated delegations from role permissions
     pub delegations: Vec<RuntimeDelegation>,
+    /// Reviewer lead assigned by ELO (highest-rated agent in the squad)
+    pub reviewer_lead: Option<ReviewerLead>,
 }
 
 #[derive(Debug)]
@@ -44,6 +47,15 @@ pub struct AgentConfig {
     pub role_id: String,
     pub role_name: String,
     pub claude_md_path: PathBuf,
+}
+
+/// Reviewer lead assignment based on ELO
+#[derive(Debug, Clone)]
+pub struct ReviewerLead {
+    pub role_id: String,
+    pub role_name: String,
+    pub elo: i32,
+    pub review_count: u32,
 }
 
 // ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -206,6 +218,7 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 /// Generate a mission directory with CLAUDE.md per agent and role-bound delegations.
 ///
 /// If `session_id` is provided, all generated delegations are scoped to that session.
+/// If `elo_ratings` is provided, the highest-ELO agent is assigned as reviewer lead.
 pub fn generate_mission(
     mission: &str,
     recommendation: &Recommendation,
@@ -213,8 +226,12 @@ pub fn generate_mission(
     library_dir: &Path,
     missions_dir: &Path,
     session_id: Option<&str>,
+    elo_ratings: &[AgentRating],
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    // Assign reviewer lead: highest ELO among mission roles, or fallback to high trust level
+    let reviewer_lead = assign_reviewer_lead(recommendation, &role_map, elo_ratings);
 
     // Create mission directory with date prefix
     let date = Utc::now().format("%Y-%m-%d");
@@ -287,12 +304,20 @@ pub fn generate_mission(
         // Build pre-approved operations section
         let pre_approved = format_pre_approved_ops(role);
 
-        // Build CLAUDE.md combining role prompt + mission context + permissions
+        // Build review instructions based on role
+        let review_section = build_review_section(
+            &assignment.role_id,
+            &reviewer_lead,
+            &mission_name,
+            &recommendation.role_assignments,
+        );
+
+        // Build CLAUDE.md combining role prompt + mission context + permissions + review
         let claude_md = format!(
             "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
             You are the **{}** ({}) in a **{}** pattern.\n\
             Your slot: **{}**\n\n\
-            ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n",
+            ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n",
             system_prompt,
             mission,
             assignment.role_name,
@@ -305,6 +330,7 @@ pub fn generate_mission(
                 .join("\n"),
             role.default_trust_level,
             pre_approved,
+            review_section,
         );
 
         let claude_md_path = agent_dir.join("CLAUDE.md");
@@ -321,6 +347,7 @@ pub fn generate_mission(
         mission_dir,
         agent_configs,
         delegations,
+        reviewer_lead,
     })
 }
 
@@ -460,6 +487,126 @@ fn format_pre_approved_ops(role: &Role) -> String {
     lines.push("- Force push, destructive filesystem operations, etc.".to_string());
 
     lines.join("\n")
+}
+
+// ── Reviewer Lead Assignment ─────────────────────────────────────────────────
+
+/// Assign reviewer lead based on ELO ratings. Highest ELO wins.
+/// Fallback: role with default_trust_level "high" (typically security_architect).
+/// Single-agent missions return None.
+fn assign_reviewer_lead(
+    recommendation: &Recommendation,
+    role_map: &HashMap<&str, &Role>,
+    elo_ratings: &[AgentRating],
+) -> Option<ReviewerLead> {
+    if recommendation.role_assignments.len() <= 1 {
+        return None; // Single-agent mission: no review needed
+    }
+
+    let rating_map: HashMap<&str, &AgentRating> = elo_ratings
+        .iter()
+        .map(|r| (r.agent.as_str(), r))
+        .collect();
+
+    // Find highest ELO among mission roles
+    let mut best: Option<(&RoleAssignment, i32, u32)> = None;
+    for assignment in &recommendation.role_assignments {
+        let (elo, reviews) = rating_map
+            .get(assignment.role_id.as_str())
+            .map(|r| (r.elo, r.review_count))
+            .unwrap_or((1500, 0));
+
+        match &best {
+            None => best = Some((assignment, elo, reviews)),
+            Some((_, best_elo, _)) => {
+                if elo > *best_elo {
+                    best = Some((assignment, elo, reviews));
+                }
+            }
+        }
+    }
+
+    // If all agents have the same ELO (uncalibrated), pick the one with highest trust level
+    let all_same_elo = recommendation.role_assignments.iter().all(|a| {
+        let elo = rating_map.get(a.role_id.as_str()).map(|r| r.elo).unwrap_or(1500);
+        let best_elo = best.as_ref().map(|(_, e, _)| *e).unwrap_or(1500);
+        elo == best_elo
+    });
+
+    if all_same_elo {
+        // Fallback: pick role with default_trust_level "high"
+        for assignment in &recommendation.role_assignments {
+            if let Some(role) = role_map.get(assignment.role_id.as_str()) {
+                if role.default_trust_level == "high" {
+                    return Some(ReviewerLead {
+                        role_id: assignment.role_id.clone(),
+                        role_name: assignment.role_name.clone(),
+                        elo: 1500,
+                        review_count: 0,
+                    });
+                }
+            }
+        }
+    }
+
+    best.map(|(assignment, elo, reviews)| ReviewerLead {
+        role_id: assignment.role_id.clone(),
+        role_name: assignment.role_name.clone(),
+        elo,
+        review_count: reviews,
+    })
+}
+
+/// Build review instructions section for a CLAUDE.md based on the agent's role.
+fn build_review_section(
+    role_id: &str,
+    reviewer_lead: &Option<ReviewerLead>,
+    mission_id: &str,
+    all_assignments: &[RoleAssignment],
+) -> String {
+    let reviewer_lead = match reviewer_lead {
+        Some(rl) => rl,
+        None => return String::new(), // Single-agent, no review section
+    };
+
+    let available_roles: Vec<String> = all_assignments
+        .iter()
+        .map(|a| format!("\"{}\"", a.role_id))
+        .collect();
+    let roles_list = available_roles.join(", ");
+
+    if role_id == reviewer_lead.role_id {
+        // This agent IS the reviewer lead
+        format!(
+            "## Review Responsibility\n\n\
+            You are the designated reviewer (highest ELO in this squad, ELO: {}).\n\
+            When you receive review assignments via `mcp__colmena__review_list`:\n\
+            1. Read the artifact (diff/commit) thoroughly\n\
+            2. Call `mcp__colmena__review_evaluate` with scores and findings\n\
+            3. If score < 7.0 or any critical finding: flag for human review, do NOT auto-complete\n\
+            4. Use category `prompt_improvement` for suggestions about the agent's approach or prompt\n\
+            5. Be constructive — findings feed into ELO and help calibrate trust over time",
+            reviewer_lead.elo,
+        )
+    } else {
+        // This agent is a worker — should submit for review
+        format!(
+            "## Post-Work Protocol\n\n\
+            When your work is complete:\n\
+            1. Commit all changes to your worktree branch\n\
+            2. Call `mcp__colmena__review_submit` with:\n\
+            \x20\x20\x20- artifact_path: your worktree branch path or the diff of your changes\n\
+            \x20\x20\x20- author_role: \"{role_id}\"\n\
+            \x20\x20\x20- mission: \"{mission_id}\"\n\
+            \x20\x20\x20- available_roles: [{roles_list}]\n\
+            3. Your work will be reviewed by **{reviewer_name}** (ELO: {elo})",
+            role_id = role_id,
+            mission_id = mission_id,
+            roles_list = roles_list,
+            reviewer_name = reviewer_lead.role_name,
+            elo = reviewer_lead.elo,
+        )
+    }
 }
 
 // ── Role Scaffold Generator ───────────────────────────────────────────────────
@@ -829,6 +976,7 @@ mod tests {
             &library_dir,
             &missions_dir,
             None,
+            &[], // no ELO ratings — uncalibrated
         )
         .expect("generate_mission should succeed");
 
