@@ -173,6 +173,81 @@ pub fn extract_key_field(tool_name: &str, tool_input: &serde_json::Value) -> Str
     }
 }
 
+/// Session-level statistics parsed from the audit log.
+#[derive(Debug, Default)]
+pub struct SessionStats {
+    pub total_decisions: usize,
+    pub allow_count: usize,
+    pub ask_count: usize,
+    pub deny_count: usize,
+    pub unique_agents: usize,
+    pub unique_tools: usize,
+    pub delegation_matches: usize,
+}
+
+/// Parse audit log and compute stats for a specific session (or all sessions if None).
+pub fn session_stats(audit_log: &Path, session_id: Option<&str>) -> SessionStats {
+    let contents = match std::fs::read_to_string(audit_log) {
+        Ok(c) => c,
+        Err(_) => return SessionStats::default(),
+    };
+
+    let mut stats = SessionStats::default();
+    let mut agents = std::collections::HashSet::new();
+    let mut tools = std::collections::HashSet::new();
+
+    for line in contents.lines() {
+        // Filter by session if provided
+        if let Some(sid) = session_id {
+            if !line.contains(&format!("session={sid}")) {
+                // Also count non-session lines like DELEGATE_MATCH
+                if line.contains("DELEGATE_MATCH") {
+                    stats.delegation_matches += 1;
+                }
+                continue;
+            }
+        }
+
+        if line.contains("] ALLOW ") {
+            stats.allow_count += 1;
+            stats.total_decisions += 1;
+        } else if line.contains("] ASK ") || line.contains("] ASK  ") {
+            stats.ask_count += 1;
+            stats.total_decisions += 1;
+        } else if line.contains("] DENY ") {
+            stats.deny_count += 1;
+            stats.total_decisions += 1;
+        } else if line.contains("DELEGATE_MATCH") {
+            stats.delegation_matches += 1;
+            continue;
+        } else {
+            continue;
+        }
+
+        // Extract agent
+        if let Some(start) = line.find("agent=") {
+            let rest = &line[start + 6..];
+            let agent = rest.split_whitespace().next().unwrap_or("*");
+            if agent != "*" {
+                agents.insert(agent.to_string());
+            }
+        }
+
+        // Extract tool
+        if let Some(start) = line.find("tool=") {
+            let rest = &line[start + 5..];
+            let tool = rest.split_whitespace().next().unwrap_or("");
+            if !tool.is_empty() {
+                tools.insert(tool.to_string());
+            }
+        }
+    }
+
+    stats.unique_agents = agents.len();
+    stats.unique_tools = tools.len();
+    stats
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
