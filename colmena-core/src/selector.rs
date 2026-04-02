@@ -1,6 +1,8 @@
+use crate::calibrate::{TrustThresholds, determine_tier};
 use crate::config::Action;
 use crate::delegate::{DelegationConditions, RuntimeDelegation};
 use crate::elo::AgentRating;
+use crate::findings::{FindingsFilter, load_findings};
 use crate::library::{Role, Pattern};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -219,6 +221,9 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 ///
 /// If `session_id` is provided, all generated delegations are scoped to that session.
 /// If `elo_ratings` is provided, the highest-ELO agent is assigned as reviewer lead.
+/// If `config_dir` is provided and mission text matches prompt review keywords,
+/// the prompt review context is injected into all agents' CLAUDE.md files.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_mission(
     mission: &str,
     recommendation: &Recommendation,
@@ -227,11 +232,20 @@ pub fn generate_mission(
     missions_dir: &Path,
     session_id: Option<&str>,
     elo_ratings: &[AgentRating],
+    config_dir: Option<&Path>,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
     // Assign reviewer lead: highest ELO among mission roles, or fallback to high trust level
     let reviewer_lead = assign_reviewer_lead(recommendation, &role_map, elo_ratings);
+
+    // Detect if this is a prompt review mission
+    let prompt_review_context = config_dir.and_then(|cd| {
+        detect_prompt_review_target(mission, roles).and_then(|target_role_id| {
+            generate_prompt_review_context(&target_role_id, roles, library_dir, cd, elo_ratings)
+                .ok()
+        })
+    });
 
     // Create mission directory with date prefix
     let date = Utc::now().format("%Y-%m-%d");
@@ -312,26 +326,52 @@ pub fn generate_mission(
             &recommendation.role_assignments,
         );
 
+        // Append prompt review context if this is a prompt review mission
+        let review_context_section = prompt_review_context.as_deref().unwrap_or("");
+
         // Build CLAUDE.md combining role prompt + mission context + permissions + review
-        let claude_md = format!(
-            "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
-            You are the **{}** ({}) in a **{}** pattern.\n\
-            Your slot: **{}**\n\n\
-            ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n",
-            system_prompt,
-            mission,
-            assignment.role_name,
-            assignment.icon,
-            recommendation.pattern_name,
-            assignment.slot,
-            recommendation.role_assignments.iter()
-                .map(|a| format!("- {} {} ({})", a.icon, a.role_name, a.slot))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            role.default_trust_level,
-            pre_approved,
-            review_section,
-        );
+        let claude_md = if review_context_section.is_empty() {
+            format!(
+                "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
+                You are the **{}** ({}) in a **{}** pattern.\n\
+                Your slot: **{}**\n\n\
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n",
+                system_prompt,
+                mission,
+                assignment.role_name,
+                assignment.icon,
+                recommendation.pattern_name,
+                assignment.slot,
+                recommendation.role_assignments.iter()
+                    .map(|a| format!("- {} {} ({})", a.icon, a.role_name, a.slot))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                role.default_trust_level,
+                pre_approved,
+                review_section,
+            )
+        } else {
+            format!(
+                "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
+                You are the **{}** ({}) in a **{}** pattern.\n\
+                Your slot: **{}**\n\n\
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n\n---\n\n{}\n",
+                system_prompt,
+                mission,
+                assignment.role_name,
+                assignment.icon,
+                recommendation.pattern_name,
+                assignment.slot,
+                recommendation.role_assignments.iter()
+                    .map(|a| format!("- {} {} ({})", a.icon, a.role_name, a.slot))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                role.default_trust_level,
+                pre_approved,
+                review_section,
+                review_context_section,
+            )
+        };
 
         let claude_md_path = agent_dir.join("CLAUDE.md");
         std::fs::write(&claude_md_path, &claude_md)?;
@@ -607,6 +647,163 @@ fn build_review_section(
             elo = reviewer_lead.elo,
         )
     }
+}
+
+// ── Prompt Review Context ────────────────────────────────────────────────────
+
+/// Detect if a mission text is a prompt review request and extract the target role ID.
+///
+/// Matches patterns like:
+/// - "review pentester prompt"
+/// - "improve auditor instructions"
+/// - "why is pentester scoring low"
+/// - "refine researcher approach"
+///
+/// Returns `Some(role_id)` if a known role is detected, `None` otherwise.
+pub fn detect_prompt_review_target(mission: &str, roles: &[Role]) -> Option<String> {
+    let lower = mission.to_lowercase();
+
+    // Patterns: "{keyword} {role} {suffix}" or "{prefix} {role} {suffix}"
+    let patterns: &[(&[&str], &[&str])] = &[
+        // "review {role} prompt"
+        (&["review"], &["prompt", "instructions", "approach", "system"]),
+        // "improve {role} instructions"
+        (&["improve", "refine", "enhance", "fix", "update"], &["prompt", "instructions", "approach"]),
+        // "why is {role} scoring low"
+        (&["why"], &["scoring", "low", "underperforming", "failing"]),
+    ];
+
+    for role in roles {
+        let role_lower = role.id.to_lowercase();
+        let name_lower = role.name.to_lowercase();
+
+        // Check if the role is mentioned in the mission text
+        if !lower.contains(&role_lower) && !lower.contains(&name_lower) {
+            continue;
+        }
+
+        // Check if the mission matches any prompt review pattern
+        for (prefixes, suffixes) in patterns {
+            let has_prefix = prefixes.iter().any(|p| lower.contains(p));
+            let has_suffix = suffixes.iter().any(|s| lower.contains(s));
+            if has_prefix && has_suffix {
+                return Some(role.id.clone());
+            }
+        }
+    }
+
+    None
+}
+
+/// Generate prompt review context for debate/mentor agents to analyze a target role's prompt.
+///
+/// Loads the target role's system prompt, ELO performance, and recent findings,
+/// then formats them using the prompt-review-context template.
+///
+/// Returns the formatted context string to inject into agent CLAUDE.md files.
+pub fn generate_prompt_review_context(
+    target_role_id: &str,
+    roles: &[Role],
+    library_dir: &Path,
+    config_dir: &Path,
+    elo_ratings: &[AgentRating],
+) -> Result<String> {
+    // Find the target role
+    let role = roles.iter().find(|r| r.id == target_role_id)
+        .ok_or_else(|| anyhow::anyhow!(
+            "Target role '{}' not found in library", target_role_id
+        ))?;
+
+    // Load the target role's current system prompt
+    let current_prompt = crate::library::load_prompt(library_dir, &role.system_prompt_ref)
+        .unwrap_or_else(|_| format!("(prompt file not found: {})", role.system_prompt_ref));
+
+    // Get ELO rating for the target role
+    let rating = elo_ratings.iter().find(|r| r.agent == target_role_id);
+    let (elo, trend, review_count) = match rating {
+        Some(r) => (r.elo, r.trend_7d, r.review_count),
+        None => (1500, 0, 0),
+    };
+
+    // Determine trust tier
+    let thresholds = TrustThresholds::default();
+    let tier = match rating {
+        Some(r) => determine_tier(r, &thresholds).as_str().to_string(),
+        None => "UNCALIBRATED".to_string(),
+    };
+
+    // Format trend with sign
+    let trend_str = if trend > 0 {
+        format!("+{}", trend)
+    } else {
+        format!("{}", trend)
+    };
+
+    // Load recent findings where the target role was the author (last 10)
+    let findings_dir = config_dir.join("findings");
+    let filter = FindingsFilter {
+        author_role: Some(target_role_id.to_string()),
+        limit: Some(10),
+        ..Default::default()
+    };
+    let findings_section = match load_findings(&findings_dir, &filter) {
+        Ok(records) if records.is_empty() => {
+            "No findings yet for this agent.".to_string()
+        }
+        Ok(records) => {
+            let mut lines = Vec::new();
+            for record in &records {
+                for finding in &record.findings {
+                    lines.push(format!(
+                        "- [{}] **{}**: {} (mission: {}, reviewer: {})",
+                        finding.severity,
+                        finding.category,
+                        finding.description,
+                        record.mission,
+                        record.reviewer_role,
+                    ));
+                }
+            }
+            if lines.is_empty() {
+                "No findings yet for this agent.".to_string()
+            } else {
+                lines.join("\n")
+            }
+        }
+        Err(_) => "No findings yet for this agent.".to_string(),
+    };
+
+    // Build the context section
+    let context = format!(
+        "## Prompt Review Context\n\n\
+        You are reviewing the prompt for: **{}** ({})\n\n\
+        ### Current Prompt\n{}\n\n\
+        ### Recent ELO Performance\n\
+        - Current ELO: {}\n\
+        - Trend (7d): {}\n\
+        - Review count: {}\n\
+        - Trust tier: {}\n\n\
+        ### Recent Findings Against This Agent\n{}\n\n\
+        ### Your Task\n\
+        Analyze this agent's prompt and recent performance. Submit findings with\n\
+        category \"prompt_improvement\" for any weaknesses or gaps you identify.\n\
+        Focus on actionable, specific suggestions — not vague advice.\n\n\
+        Each finding should include:\n\
+        - `category`: \"prompt_improvement\"\n\
+        - `severity`: \"medium\" or \"low\" (these are suggestions, not bugs)\n\
+        - `description`: what is weak or missing in the current prompt\n\
+        - `recommendation`: specific text or structural change to the prompt",
+        role.name,
+        target_role_id,
+        current_prompt,
+        elo,
+        trend_str,
+        review_count,
+        tier,
+        findings_section,
+    );
+
+    Ok(context)
 }
 
 // ── Role Scaffold Generator ───────────────────────────────────────────────────
@@ -977,6 +1174,7 @@ mod tests {
             &missions_dir,
             None,
             &[], // no ELO ratings — uncalibrated
+            None, // no config_dir — no prompt review detection
         )
         .expect("generate_mission should succeed");
 
@@ -1115,5 +1313,379 @@ mod tests {
             empty_output.contains("No matching patterns"),
             "empty recs should say no matching patterns"
         );
+    }
+
+    // ── 10. detect_prompt_review_target ──────────────────────────────────────
+
+    #[test]
+    fn test_detect_prompt_review_positive() {
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+            make_role("auditor", "Auditor", vec!["compliance"]),
+        ];
+
+        // "review {role} prompt"
+        assert_eq!(
+            detect_prompt_review_target("review pentester prompt", &roles),
+            Some("pentester".to_string()),
+        );
+
+        // "improve {role} instructions"
+        assert_eq!(
+            detect_prompt_review_target("improve auditor instructions", &roles),
+            Some("auditor".to_string()),
+        );
+
+        // "why is {role} scoring low"
+        assert_eq!(
+            detect_prompt_review_target("why is pentester scoring low", &roles),
+            Some("pentester".to_string()),
+        );
+
+        // "refine {role} approach"
+        assert_eq!(
+            detect_prompt_review_target("refine pentester approach", &roles),
+            Some("pentester".to_string()),
+        );
+
+        // Case insensitive
+        assert_eq!(
+            detect_prompt_review_target("Review Pentester Prompt", &roles),
+            Some("pentester".to_string()),
+        );
+    }
+
+    #[test]
+    fn test_detect_prompt_review_negative() {
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+            make_role("auditor", "Auditor", vec!["compliance"]),
+        ];
+
+        // Normal mission text — no prompt review keywords
+        assert_eq!(
+            detect_prompt_review_target("audit PCI-DSS compliance of payments API", &roles),
+            None,
+        );
+
+        // Mentions a role but no review keyword
+        assert_eq!(
+            detect_prompt_review_target("pentester should check the API", &roles),
+            None,
+        );
+
+        // Has keywords but no valid role
+        assert_eq!(
+            detect_prompt_review_target("review ghost_agent prompt", &roles),
+            None,
+        );
+
+        // Empty mission
+        assert_eq!(
+            detect_prompt_review_target("", &roles),
+            None,
+        );
+    }
+
+    // ── 11. generate_prompt_review_context ───────────────────────────────────
+
+    #[test]
+    fn test_generate_prompt_review_context_valid_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+
+        // Write a prompt file for the target role
+        std::fs::write(
+            library_dir.join("prompts/pentester.md"),
+            "# Pentester\n\nYou find vulnerabilities.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        let context = generate_prompt_review_context(
+            "pentester",
+            &roles,
+            &library_dir,
+            config_dir,
+            &[], // no ELO ratings
+        ).expect("should succeed");
+
+        assert!(context.contains("Prompt Review Context"), "should contain header");
+        assert!(context.contains("**Pentester** (pentester)"), "should contain role name and id");
+        assert!(context.contains("You find vulnerabilities"), "should contain prompt text");
+        assert!(context.contains("Current ELO: 1500"), "should show default ELO");
+        assert!(context.contains("UNCALIBRATED"), "should show uncalibrated tier");
+        assert!(context.contains("No findings yet"), "should show no findings");
+        assert!(context.contains("prompt_improvement"), "should mention finding category");
+    }
+
+    #[test]
+    fn test_generate_prompt_review_context_no_findings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/auditor.md"),
+            "# Auditor\n\nYou audit code.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("auditor", "Auditor", vec!["compliance"]),
+        ];
+
+        // Create empty findings dir
+        std::fs::create_dir_all(config_dir.join("findings")).unwrap();
+
+        let context = generate_prompt_review_context(
+            "auditor",
+            &roles,
+            &library_dir,
+            config_dir,
+            &[],
+        ).expect("should succeed");
+
+        assert!(context.contains("No findings yet"), "should show no findings for empty store");
+    }
+
+    #[test]
+    fn test_generate_prompt_review_context_uncalibrated_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/pentester.md"),
+            "# Pentester\n\nPrompt content.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        // No ELO ratings = uncalibrated
+        let context = generate_prompt_review_context(
+            "pentester",
+            &roles,
+            &library_dir,
+            config_dir,
+            &[],
+        ).expect("should succeed");
+
+        assert!(context.contains("ELO: 1500"), "uncalibrated should show 1500");
+        assert!(context.contains("UNCALIBRATED"), "should show UNCALIBRATED tier");
+        assert!(context.contains("Review count: 0"), "should show 0 reviews");
+    }
+
+    #[test]
+    fn test_generate_prompt_review_context_with_elo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/pentester.md"),
+            "# Pentester\n\nPrompt content.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        let elo_ratings = vec![
+            AgentRating {
+                agent: "pentester".to_string(),
+                elo: 1650,
+                trend_7d: 15,
+                review_count: 5,
+                last_active: Some(Utc::now()),
+            },
+        ];
+
+        let context = generate_prompt_review_context(
+            "pentester",
+            &roles,
+            &library_dir,
+            config_dir,
+            &elo_ratings,
+        ).expect("should succeed");
+
+        assert!(context.contains("ELO: 1650"), "should show actual ELO");
+        assert!(context.contains("+15"), "should show positive trend");
+        assert!(context.contains("Review count: 5"), "should show review count");
+        assert!(context.contains("elevated"), "1650 should be elevated tier");
+    }
+
+    #[test]
+    fn test_generate_prompt_review_context_unknown_role() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+
+        let roles = vec![
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        let result = generate_prompt_review_context(
+            "ghost_agent",
+            &roles,
+            &library_dir,
+            config_dir,
+            &[],
+        );
+
+        assert!(result.is_err(), "unknown role should return error");
+        assert!(result.unwrap_err().to_string().contains("not found"), "error should mention not found");
+    }
+
+    // ── 12. generate_mission with prompt review context ─────────────────────
+
+    #[test]
+    fn test_generate_mission_with_prompt_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        // Write prompt files
+        std::fs::write(
+            library_dir.join("prompts/security_architect.md"),
+            "# Security Architect\n\nSystem prompt.",
+        ).unwrap();
+        std::fs::write(
+            library_dir.join("prompts/pentester.md"),
+            "# Pentester\n\nYou find vulnerabilities.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("security_architect", "Security Architect", vec!["audit"]),
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        let rec = Recommendation {
+            pattern_id: "debate".to_string(),
+            pattern_name: "Debate".to_string(),
+            score: 4.0,
+            matched_criteria: vec![],
+            anti_matched: vec![],
+            role_assignments: vec![
+                RoleAssignment {
+                    slot: "debater_offense".to_string(),
+                    role_id: "pentester".to_string(),
+                    role_name: "Pentester".to_string(),
+                    icon: "🗡️".to_string(),
+                },
+                RoleAssignment {
+                    slot: "judge".to_string(),
+                    role_id: "security_architect".to_string(),
+                    role_name: "Security Architect".to_string(),
+                    icon: "🔒".to_string(),
+                },
+            ],
+        };
+
+        // Prompt review mission — "review pentester prompt"
+        let mission_config = generate_mission(
+            "review pentester prompt — scoring low on thoroughness",
+            &rec,
+            &roles,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            Some(config_dir),
+        ).expect("generate_mission should succeed");
+
+        // All agents should have prompt review context
+        for agent in &mission_config.agent_configs {
+            let contents = std::fs::read_to_string(&agent.claude_md_path).unwrap();
+            assert!(
+                contents.contains("Prompt Review Context"),
+                "CLAUDE.md for {} should contain prompt review context",
+                agent.role_id
+            );
+            assert!(
+                contents.contains("You find vulnerabilities"),
+                "should contain pentester's prompt text for {}",
+                agent.role_id
+            );
+        }
+    }
+
+    #[test]
+    fn test_generate_mission_normal_no_prompt_review() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        let config_dir = tmp.path();
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/security_architect.md"),
+            "# Security Architect\n\nSystem prompt.",
+        ).unwrap();
+        std::fs::write(
+            library_dir.join("prompts/auditor.md"),
+            "# Auditor\n\nAudit prompt.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("security_architect", "Security Architect", vec!["audit"]),
+            make_role("auditor", "Auditor", vec!["compliance"]),
+        ];
+
+        let rec = Recommendation {
+            pattern_id: "oracle_workers".to_string(),
+            pattern_name: "Oracle + Workers".to_string(),
+            score: 4.5,
+            matched_criteria: vec![],
+            anti_matched: vec![],
+            role_assignments: vec![
+                RoleAssignment {
+                    slot: "oracle".to_string(),
+                    role_id: "security_architect".to_string(),
+                    role_name: "Security Architect".to_string(),
+                    icon: "🔒".to_string(),
+                },
+                RoleAssignment {
+                    slot: "worker1".to_string(),
+                    role_id: "auditor".to_string(),
+                    role_name: "Auditor".to_string(),
+                    icon: "📋".to_string(),
+                },
+            ],
+        };
+
+        // Normal mission — should NOT have prompt review context
+        let mission_config = generate_mission(
+            "audit PCI-DSS compliance of payments API",
+            &rec,
+            &roles,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            Some(config_dir),
+        ).expect("generate_mission should succeed");
+
+        for agent in &mission_config.agent_configs {
+            let contents = std::fs::read_to_string(&agent.claude_md_path).unwrap();
+            assert!(
+                !contents.contains("Prompt Review Context"),
+                "CLAUDE.md for {} should NOT contain prompt review context in normal mission",
+                agent.role_id
+            );
+        }
     }
 }
