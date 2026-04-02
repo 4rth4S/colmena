@@ -10,7 +10,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 ## Quick Reference
 
 - **Build:** `cargo build --workspace --release`
-- **Test:** `cargo test --workspace`
+- **Test:** `cargo test --workspace` (single crate: `cargo test -p colmena-core`)
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
@@ -32,7 +32,7 @@ Rust workspace with 4 crates:
 Three CC integration points:
 1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
-3. **MCP (proactive):** CC calls colmena tools natively (config_check, queue_list, delegate, evaluate)
+3. **MCP (proactive):** CC calls 20 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
 
 Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > trust_circle > defaults`
 
@@ -92,6 +92,13 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - TrustTier: Uncalibrated → Standard → Elevated/Restricted/Probation
 - `colmena calibrate reset` instantly revokes all ELO-based trust
 - Mission delegation TTL default: 8h (DEFAULT_MISSION_TTL_HOURS), max 24h
+- Bash delegations require mandatory conditions (bash_pattern or path_within) — enforced in save_delegations and CLI
+- Delegations without `expires_at` are skipped on load with warning (no permanent delegations via JSON injection)
+- Finding severity validated against closed enum: `["critical", "high", "medium", "low"]`
+- `library_generate` MCP is read-only — returns CLI commands for delegations, never persists directly
+- `generate_mission()` accepts ELO ratings to assign reviewer lead (highest ELO in squad)
+- CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
+- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json)
 
 ## CLI Subcommands
 
@@ -188,7 +195,8 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/plans/2026-03-29-full-roadmap.md` — Full roadmap with MCP integration
 - `docs/dark-corners.md` — M0 edge case analysis
 - `docs/dark-corners-m1.md` — M1 edge case analysis
-- `docs/security/RRA_Summary_JIRA_colmena.md` — STRIDE+DREAD threat model (NOT committed, gitignored)
+- `docs/security/` — STRIDE+DREAD threat model reports (gitignored, local reference only)
 - `docs/guide.md` — User guide with payments API audit walkthrough
 - `docs/presentation.html` — Overview deck (open in browser)
 - `docs/superpowers/specs/2026-04-02-mission-bridge-design.md` — Mission bridge spec (agent spawn → review → ELO)
+- `docs/superpowers/specs/2026-04-02-mentor-prompt-refinement-design.md` — M4 spec (debate pattern for prompt improvement)
