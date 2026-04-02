@@ -46,6 +46,38 @@ That's it. Next time you open a Claude Code session, colmena is active.
 
 ## 1.5 Upgrading
 
+### From 0.3.0 to 0.4.0
+
+**Rebuild:**
+
+```bash
+cd ~/colmena
+git pull
+cargo build --release
+```
+
+No need to re-run `colmena install` -- hook registration is unchanged.
+
+**Config:** No changes required. Your `trust-firewall.yaml` (version: 1) works as-is. The `gh pr merge` blocked rule is added to the default config but does not affect existing custom configs.
+
+**New library content (available immediately after rebuild):**
+- 2 new roles: `web_pentester` (Caido-native web attacker) and `api_pentester` (Caido-native API attacker)
+- 1 new pattern: `caido-pentest` (recommended for web/API bug bounty missions using Caido)
+- 1 new prompt template: `prompt-review-context.md` (used by M4 prompt review missions)
+
+**New capabilities:**
+- `library_select` recommends `caido-pentest` pattern for missions mentioning web pentest, API testing, bug bounty, or Caido
+- Prompt review missions: describe a mission like "review pentester prompt" and debate/mentor agents receive the target role's prompt, ELO, and recent findings for structured analysis
+- Prompt improvement suggestions stored as findings with `category: "prompt_improvement"` -- query with `findings_query`
+
+**Verify:**
+
+```bash
+colmena library list           # should show 6 roles, 7 patterns
+colmena library show web_pentester   # Caido-native web pentester role
+colmena library show api_pentester   # Caido-native API pentester role
+```
+
 ### From 0.1.0 to 0.2.0
 
 **Rebuild:**

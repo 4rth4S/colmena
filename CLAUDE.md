@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.3.0 (semver, single workspace version)
+- **Version:** 0.4.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -99,6 +99,12 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - `generate_mission()` accepts ELO ratings to assign reviewer lead (highest ELO in squad)
 - CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
 - Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json)
+- `gh pr merge` is blocked in firewall — PRs are merged by human only, never by Claude or agents
+- `generate_mission()` accepts optional `config_dir` for M4 prompt review detection — `None` skips detection (backward compatible)
+- Prompt review detection uses compound keyword matching: prefix ("review", "improve", "refine") + role name/id + suffix ("prompt", "instructions", "approach") — all three required to avoid false positives
+- Findings with `category: "prompt_improvement"` are suggestions from debate/mentor agents about role prompts — queryable via `findings_query`, human decides what to apply
+- Wisdom Library has 6 roles (pentester, auditor, researcher, security_architect, web_pentester, api_pentester) and 7 patterns (+ caido-pentest)
+- Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools, designed for bug bounty missions
 
 ## CLI Subcommands
 
@@ -181,13 +187,15 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M2.5** Output Filtering — PostToolUse hook + colmena-filter pipeline (done)
 - **M3** Dynamic trust calibration — role-bound permissions + ELO → firewall rules (done)
 - **M3.5** Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead (done)
-- **M4** Mentor prompt refinement — debate pattern for prompt improvement suggestions
+- **M4** Mentor prompt refinement — debate pattern for prompt improvement suggestions (done)
+- **M4.1** Caido-native pentester roles — web_pentester + api_pentester + caido-pentest pattern (done)
+- **M5** Plug-and-play onboarding — `colmena setup` command
 
 ## Current State (2026-04-02)
 
-**Branch:** `main` (v0.3.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5 (security hardening + mission bridge)
-**Next:** M4 — mentor prompt refinement via debate pattern + ELO-driven suggestions
+**Branch:** `main` (v0.4.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M4 (prompt refinement), M4.1 (Caido pentester roles)
+**Next:** M5 — `colmena setup` plug-and-play onboarding (config copy, library sync, MCP registration)
 
 ## Key Docs
 
@@ -200,3 +208,4 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/presentation.html` — Overview deck (open in browser)
 - `docs/superpowers/specs/2026-04-02-mission-bridge-design.md` — Mission bridge spec (agent spawn → review → ELO)
 - `docs/superpowers/specs/2026-04-02-mentor-prompt-refinement-design.md` — M4 spec (debate pattern for prompt improvement)
+- `docs/caido-pentester-roles-plan.md` — M4.1 plan (Caido-native web_pentester + api_pentester roles)
