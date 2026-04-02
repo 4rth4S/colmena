@@ -169,7 +169,7 @@ pub fn run_install() -> Result<()> {
     Ok(())
 }
 
-fn settings_json_path() -> PathBuf {
+pub(crate) fn settings_json_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| {
         eprintln!("ERROR: HOME environment variable is not set.");
         std::process::exit(1);
@@ -177,7 +177,7 @@ fn settings_json_path() -> PathBuf {
     PathBuf::from(home).join(".claude/settings.json")
 }
 
-fn colmena_binary_path() -> String {
+pub(crate) fn colmena_binary_path() -> String {
     std::env::current_exe()
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| {
