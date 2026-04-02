@@ -260,6 +260,24 @@ fn main() {
 
 /// Hook hot path: stdin → deserialize → dispatch by event → stdout
 fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
+    // M6: Watchdog thread — if stdin doesn't close within 5s, output an 'ask' response
+    // and exit. Prevents the hook from blocking the entire CC session indefinitely
+    // if Claude Code hangs or does not close stdin properly.
+    let watchdog_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    {
+        let flag = std::sync::Arc::clone(&watchdog_active);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stdout(),
+                    b"{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Hook stdin timeout (5s)\"}}",
+                );
+                std::process::exit(0);
+            }
+        });
+    }
+
     // 1. Read stdin with 10MB limit (Fix 7, DREAD 7.6)
     const MAX_STDIN_BYTES: u64 = 10 * 1024 * 1024;
     let mut input = String::new();
@@ -267,6 +285,9 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
         .take(MAX_STDIN_BYTES + 1)
         .read_to_string(&mut input)
         .context("Failed to read stdin")?;
+
+    // Disarm watchdog — stdin read completed successfully
+    watchdog_active.store(false, std::sync::atomic::Ordering::Relaxed);
 
     if bytes_read as u64 > MAX_STDIN_BYTES {
         let response = hook::HookResponse::ask("Stdin payload exceeds 10MB limit");
