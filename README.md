@@ -112,8 +112,8 @@ Every firewall decision is logged to `config/audit.log`:
 
 Curated role definitions and orchestration patterns for multi-agent missions.
 
-- **4 roles:** security_architect, pentester, auditor, researcher — each with system prompt, tools, and trust config
-- **6 patterns:** pipeline, oracle-workers, debate, plan-then-execute, mentored-execution, swarm-consensus
+- **6 roles:** security_architect, pentester, auditor, researcher, web_pentester, api_pentester — each with system prompt, tools, and trust config
+- **7 patterns:** pipeline, oracle-workers, debate, plan-then-execute, mentored-execution, swarm-consensus, caido-pentest
 - **Pattern selector:** keyword scoring recommends the right pattern for your mission
 - **Mission generator:** produces per-agent CLAUDE.md files with role-specific instructions
 
@@ -396,7 +396,10 @@ colmena/
 | M2 | Done | Peer Review Protocol + ELO Engine + Findings Store |
 | M2.5 | Done | Output Filtering — PostToolUse hook + colmena-filter pipeline |
 | M3 | Done | Dynamic trust calibration — role-bound permissions, ELO-driven firewall rules, mission lifecycle |
-| M4 | Next | TBD |
+| M3.5 | Done | Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead |
+| M4 | Done | Mentor prompt refinement — debate pattern for prompt improvement suggestions |
+| M4.1 | Done | Caido-native pentester roles — web_pentester + api_pentester for bug bounty with Caido MCP |
+| M5 | Next | Plug-and-play onboarding — `colmena setup` command |
 
 ## Docs
 
