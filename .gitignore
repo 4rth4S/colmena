@@ -7,8 +7,8 @@ config/audit.log
 config/queue/pending/
 config/queue/processed/
 
-# Security — never commit
-docs/security/RRA_Summary_JIRA_colmena.md
+# Security — local reference only
+docs/security/
 
 # OS files
 .DS_Store
