@@ -848,6 +848,15 @@ fn run_library_select(mission: String) -> Result<()> {
     println!("Selected: {}", selected.pattern_name);
 
     let missions_dir = default_config_dir().join("missions");
+
+    // Query ELO ratings for reviewer lead assignment
+    let elo_log_path = default_config_dir().join("elo/elo-log.jsonl");
+    let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
+    let baselines: Vec<(String, u32)> = roles.iter()
+        .map(|r| (r.id.clone(), r.elo.initial))
+        .collect();
+    let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
+
     let mission_config = generate_mission(
         &mission,
         selected,
@@ -855,6 +864,7 @@ fn run_library_select(mission: String) -> Result<()> {
         &library_dir,
         &missions_dir,
         None, // session_id: CLI doesn't have session context
+        &elo_ratings,
     )?;
 
     // Save role-generated delegations
