@@ -67,8 +67,19 @@ pub fn evaluate_with_elo(
     payload: &EvaluationInput,
     elo_overrides: &HashMap<String, Vec<Rule>>,
 ) -> Decision {
+    // Compile ELO override regex patterns and merge with existing patterns.
+    // ELO overrides loaded from JSON don't go through compile_config, so their
+    // bash_pattern regex must be compiled here before check_rules can match them.
+    let mut all_patterns = patterns.clone();
+    for (agent_id, rules) in elo_overrides {
+        let tier = format!("elo_override:{agent_id}");
+        // Silently skip invalid regex — same safety contract as delegation patterns.
+        // An invalid pattern means the rule won't match (safe fallback to ask).
+        let _ = crate::config::compile_rules(rules, &tier, &mut all_patterns);
+    }
+
     // 1. Blocked — first, non-overridable
-    if let Some(decision) = check_rules(&config.blocked, payload, "blocked", patterns) {
+    if let Some(decision) = check_rules(&config.blocked, payload, "blocked", &all_patterns) {
         return decision;
     }
 
@@ -83,26 +94,26 @@ pub fn evaluate_with_elo(
         // 3a. YAML-defined overrides (human always wins)
         if let Some(rules) = config.agent_overrides.get(agent_id) {
             let tier = format!("agent_override:{agent_id}");
-            if let Some(decision) = check_rules(rules, payload, &tier, patterns) {
+            if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
                 return decision;
             }
         }
         // 3b. ELO-calibrated overrides
         if let Some(rules) = elo_overrides.get(agent_id) {
             let tier = format!("elo_override:{agent_id}");
-            if let Some(decision) = check_rules(rules, payload, &tier, patterns) {
+            if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
                 return decision;
             }
         }
     }
 
     // 4. Restricted
-    if let Some(decision) = check_rules(&config.restricted, payload, "restricted", patterns) {
+    if let Some(decision) = check_rules(&config.restricted, payload, "restricted", &all_patterns) {
         return decision;
     }
 
     // 5. Trust circle
-    if let Some(decision) = check_rules(&config.trust_circle, payload, "trust_circle", patterns) {
+    if let Some(decision) = check_rules(&config.trust_circle, payload, "trust_circle", &all_patterns) {
         return decision;
     }
 
