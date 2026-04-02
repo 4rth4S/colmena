@@ -552,6 +552,7 @@ impl ColmenaServer {
             &missions_dir,
             None, // session_id: MCP context doesn't have session binding
             &elo_ratings,
+            Some(&self.config_dir),
         )
         .map_err(|e| format!("Mission generation failed: {e}"))?;
 
