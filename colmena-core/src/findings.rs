@@ -5,6 +5,22 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Valid severity levels for findings.
+pub const VALID_SEVERITIES: &[&str] = &["critical", "high", "medium", "low"];
+
+/// Validate that a severity string is one of the allowed values.
+pub fn validate_severity(severity: &str) -> anyhow::Result<()> {
+    if VALID_SEVERITIES.contains(&severity) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "invalid severity '{}': must be one of {:?}",
+            severity,
+            VALID_SEVERITIES
+        )
+    }
+}
+
 /// A single finding within a review.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
