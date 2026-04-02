@@ -1,4 +1,7 @@
+use crate::config::Action;
+use crate::delegate::{DelegationConditions, RuntimeDelegation};
 use crate::library::{Role, Pattern};
+use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
@@ -24,11 +27,16 @@ pub struct RoleAssignment {
     pub icon: String,
 }
 
+/// Default TTL for mission-generated delegations: 8 hours.
+pub const DEFAULT_MISSION_TTL_HOURS: i64 = 8;
+
 /// Generated mission configuration
 #[derive(Debug)]
 pub struct MissionConfig {
     pub mission_dir: PathBuf,
     pub agent_configs: Vec<AgentConfig>,
+    /// Auto-generated delegations from role permissions
+    pub delegations: Vec<RuntimeDelegation>,
 }
 
 #[derive(Debug)]
@@ -195,18 +203,21 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 
 // ── Mission Config Generator ──────────────────────────────────────────────────
 
-/// Generate a mission directory with CLAUDE.md per agent
+/// Generate a mission directory with CLAUDE.md per agent and role-bound delegations.
+///
+/// If `session_id` is provided, all generated delegations are scoped to that session.
 pub fn generate_mission(
     mission: &str,
     recommendation: &Recommendation,
     roles: &[Role],
     library_dir: &Path,
     missions_dir: &Path,
+    session_id: Option<&str>,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
     // Create mission directory with date prefix
-    let date = chrono::Utc::now().format("%Y-%m-%d");
+    let date = Utc::now().format("%Y-%m-%d");
     let mission_slug: String = mission
         .to_lowercase()
         .split_whitespace()
@@ -234,7 +245,7 @@ pub fn generate_mission(
         mission.replace('"', "\\\""),
         recommendation.pattern_id,
         recommendation.pattern_name,
-        chrono::Utc::now().to_rfc3339(),
+        Utc::now().to_rfc3339(),
         recommendation.role_assignments.iter()
             .map(|a| format!("  - role: {}\n    slot: {}", a.role_id, a.slot))
             .collect::<Vec<_>>()
@@ -242,8 +253,12 @@ pub fn generate_mission(
     );
     std::fs::write(mission_dir.join("mission.yaml"), &mission_yaml)?;
 
-    // Generate CLAUDE.md per agent
+    // Generate CLAUDE.md per agent + role-bound delegations
     let mut agent_configs = Vec::new();
+    let mut delegations = Vec::new();
+    let now = Utc::now();
+    let ttl = chrono::Duration::hours(DEFAULT_MISSION_TTL_HOURS);
+
     for assignment in &recommendation.role_assignments {
         let agent_dir = agents_dir.join(&assignment.role_id);
         std::fs::create_dir_all(&agent_dir)?;
@@ -254,16 +269,30 @@ pub fn generate_mission(
                 recommendation.pattern_id, assignment.role_id, assignment.role_id
             ))?;
 
+        // Generate delegations from role's tools_allowed + permissions
+        let role_delegations = generate_role_delegations(
+            role,
+            &mission_name,
+            &mission_dir,
+            session_id,
+            now,
+            ttl,
+        );
+        delegations.extend(role_delegations);
+
         // Load the system prompt
         let system_prompt = crate::library::load_prompt(library_dir, &role.system_prompt_ref)
             .with_context(|| format!("Failed to load prompt for role '{}'", assignment.role_id))?;
 
-        // Build CLAUDE.md combining role prompt + mission context
+        // Build pre-approved operations section
+        let pre_approved = format_pre_approved_ops(role);
+
+        // Build CLAUDE.md combining role prompt + mission context + permissions
         let claude_md = format!(
             "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
             You are the **{}** ({}) in a **{}** pattern.\n\
             Your slot: **{}**\n\n\
-            ## Team\n\n{}\n\n## Trust Level\n\n{}\n",
+            ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n",
             system_prompt,
             mission,
             assignment.role_name,
@@ -275,6 +304,7 @@ pub fn generate_mission(
                 .collect::<Vec<_>>()
                 .join("\n"),
             role.default_trust_level,
+            pre_approved,
         );
 
         let claude_md_path = agent_dir.join("CLAUDE.md");
@@ -290,7 +320,146 @@ pub fn generate_mission(
     Ok(MissionConfig {
         mission_dir,
         agent_configs,
+        delegations,
     })
+}
+
+/// Generate RuntimeDelegations from a role's tools_allowed and permissions.
+fn generate_role_delegations(
+    role: &Role,
+    mission_id: &str,
+    mission_dir: &Path,
+    session_id: Option<&str>,
+    now: chrono::DateTime<Utc>,
+    ttl: chrono::Duration,
+) -> Vec<RuntimeDelegation> {
+    let mut delegations = Vec::new();
+    let mission_dir_str = mission_dir.to_string_lossy().to_string();
+
+    // File-based tools that support path_within scoping
+    let file_tools: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep"];
+
+    for tool in &role.tools_allowed {
+        if tool == "Bash" {
+            // Bash: if role has bash_patterns, create one delegation per pattern
+            if let Some(ref perms) = role.permissions {
+                if !perms.bash_patterns.is_empty() {
+                    for pattern in &perms.bash_patterns {
+                        delegations.push(RuntimeDelegation {
+                            tool: "Bash".to_string(),
+                            agent_id: Some(role.id.clone()),
+                            action: Action::AutoApprove,
+                            created_at: now,
+                            expires_at: Some(now + ttl),
+                            session_id: session_id.map(|s| s.to_string()),
+                            source: Some("role".to_string()),
+                            mission_id: Some(mission_id.to_string()),
+                            conditions: Some(DelegationConditions {
+                                bash_pattern: Some(pattern.clone()),
+                                path_within: None,
+                                path_not_match: None,
+                            }),
+                        });
+                    }
+                    continue; // bash_patterns defined, don't add a blanket Bash delegation
+                }
+            }
+            // No bash_patterns: auto-approve all Bash for this agent
+            delegations.push(RuntimeDelegation {
+                tool: "Bash".to_string(),
+                agent_id: Some(role.id.clone()),
+                action: Action::AutoApprove,
+                created_at: now,
+                expires_at: Some(now + ttl),
+                session_id: session_id.map(|s| s.to_string()),
+                source: Some("role".to_string()),
+                mission_id: Some(mission_id.to_string()),
+                conditions: None,
+            });
+        } else {
+            // Non-Bash tool: check if it supports path scoping
+            let conditions = if file_tools.contains(&tool.as_str()) {
+                // Apply path_within from role permissions if defined
+                role.permissions.as_ref().and_then(|perms| {
+                    if perms.path_within.is_empty() && perms.path_not_match.is_empty() {
+                        None
+                    } else {
+                        let path_within = if perms.path_within.is_empty() {
+                            None
+                        } else {
+                            Some(perms.path_within.iter()
+                                .map(|p| p.replace("${MISSION_DIR}", &mission_dir_str))
+                                .collect())
+                        };
+                        Some(DelegationConditions {
+                            bash_pattern: None,
+                            path_within,
+                            path_not_match: if perms.path_not_match.is_empty() {
+                                None
+                            } else {
+                                Some(perms.path_not_match.clone())
+                            },
+                        })
+                    }
+                })
+            } else {
+                None
+            };
+
+            delegations.push(RuntimeDelegation {
+                tool: tool.clone(),
+                agent_id: Some(role.id.clone()),
+                action: Action::AutoApprove,
+                created_at: now,
+                expires_at: Some(now + ttl),
+                session_id: session_id.map(|s| s.to_string()),
+                source: Some("role".to_string()),
+                mission_id: Some(mission_id.to_string()),
+                conditions,
+            });
+        }
+    }
+
+    delegations
+}
+
+/// Format a "Pre-Approved Operations" section for CLAUDE.md
+fn format_pre_approved_ops(role: &Role) -> String {
+    let mut lines = vec!["## Pre-Approved Operations".to_string()];
+    lines.push(String::new());
+    lines.push("The following operations are pre-approved for your role in this mission:".to_string());
+
+    for tool in &role.tools_allowed {
+        if tool == "Bash" {
+            if let Some(ref perms) = role.permissions {
+                if !perms.bash_patterns.is_empty() {
+                    let patterns: Vec<String> = perms.bash_patterns.iter()
+                        .map(|p| format!("`{}`", p))
+                        .collect();
+                    lines.push(format!("- **Bash**: commands matching {}", patterns.join(", ")));
+                    continue;
+                }
+            }
+            lines.push("- **Bash**: all commands".to_string());
+        } else {
+            let scope = if let Some(ref perms) = role.permissions {
+                if !perms.path_within.is_empty() && ["Read", "Write", "Edit", "Glob", "Grep"].contains(&tool.as_str()) {
+                    format!(" (within: {})", perms.path_within.join(", "))
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            lines.push(format!("- **{}**{}", tool, scope));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Blocked operations (always require human approval):".to_string());
+    lines.push("- Force push, destructive filesystem operations, etc.".to_string());
+
+    lines.join("\n")
 }
 
 // ── Role Scaffold Generator ───────────────────────────────────────────────────
@@ -335,6 +504,13 @@ tools_allowed: [Read, Glob, Grep, WebFetch, WebSearch]
 
 specializations: []
 
+# Firewall permissions — auto-generated as delegations when a mission uses this role.
+# Uncomment and customize to define what this role can do without asking.
+# permissions:
+#   bash_patterns: []
+#   path_within: ['${{MISSION_DIR}}']
+#   path_not_match: ['*.env', '*credentials*', '*.key']
+
 elo:
   initial: 1500
   categories: {{}}
@@ -348,10 +524,17 @@ mentoring:
         description = description.replace('"', "\\\""),
     );
 
+    let name = id.replace(['_', '-'], " ");
     let prompt_md = format!(
-        "# {}\n\n{}\n\n## Output Format\n\nTODO: Define expected output format.\n\n## Tools\n\nTODO: Define tool usage guidance.\n",
-        id.replace(['_', '-'], " "),
-        description
+        "# {name}\n\n{description}\n\n\
+        ## Tools Available\n\n\
+        The following tools are pre-approved for your role:\n\
+        - Read, Glob, Grep — codebase exploration\n\
+        - WebFetch, WebSearch — external research\n\n\
+        Customize this list in `roles/{id}.yaml` under `tools_allowed`.\n\
+        Add `permissions.bash_patterns` to define auto-approved Bash commands.\n\n\
+        ## Output Format\n\n\
+        TODO: Define expected output format.\n",
     );
 
     std::fs::write(&role_path, role_yaml)?;
@@ -427,6 +610,7 @@ mod tests {
                 initial: 1500,
                 categories: Default::default(),
             },
+            permissions: None,
             mentoring: MentoringConfig {
                 can_mentor: vec![],
                 mentored_by: vec![],
@@ -644,6 +828,7 @@ mod tests {
             &roles,
             &library_dir,
             &missions_dir,
+            None,
         )
         .expect("generate_mission should succeed");
 
