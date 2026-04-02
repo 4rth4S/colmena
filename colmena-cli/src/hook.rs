@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Payload received from Claude Code via stdin on every tool invocation.
-/// For PreToolUse: tool_output is absent.
-/// For PostToolUse: tool_output contains the tool's output (stdout, stderr, exitCode).
+/// For PreToolUse: tool_response is absent.
+/// For PostToolUse: tool_response contains the tool's output (stdout, stderr, interrupted).
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct HookPayload {
@@ -16,8 +16,9 @@ pub struct HookPayload {
     pub agent_type: Option<String>,
     pub cwd: String,
     pub permission_mode: Option<String>,
-    /// Present only for PostToolUse events.
-    pub tool_output: Option<Value>,
+    pub transcript_path: Option<String>,
+    /// Present only for PostToolUse events (CC sends "tool_response", not "tool_output").
+    pub tool_response: Option<Value>,
 }
 
 impl HookPayload {
@@ -203,19 +204,20 @@ mod tests {
             "tool_input": {"command": "cargo build"},
             "tool_use_id": "tu_010",
             "cwd": "/tmp",
-            "tool_output": {
+            "transcript_path": "/home/user/.claude/projects/test/abc123.jsonl",
+            "tool_response": {
                 "stdout": "Compiling...\nFinished",
                 "stderr": "",
-                "exitCode": 0
+                "interrupted": false
             }
         });
 
         let payload: HookPayload = serde_json::from_value(input).unwrap();
         assert_eq!(payload.hook_event_name, "PostToolUse");
-        assert!(payload.tool_output.is_some());
-        let output = payload.tool_output.unwrap();
-        assert_eq!(output["stdout"], "Compiling...\nFinished");
-        assert_eq!(output["exitCode"], 0);
+        assert!(payload.tool_response.is_some());
+        let response = payload.tool_response.unwrap();
+        assert_eq!(response["stdout"], "Compiling...\nFinished");
+        assert_eq!(response["interrupted"], false);
     }
 
     #[test]
