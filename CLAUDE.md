@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.4.0 (semver, single workspace version)
+- **Version:** 0.5.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -105,6 +105,10 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - Findings with `category: "prompt_improvement"` are suggestions from debate/mentor agents about role prompts — queryable via `findings_query`, human decides what to apply
 - Wisdom Library has 6 roles (pentester, auditor, researcher, security_architect, web_pentester, api_pentester) and 7 patterns (+ caido-pentest)
 - Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools, designed for bug bounty missions
+- `colmena setup` embeds all 22 default config + library files via `include_str!()` (~46KB) — binary is self-contained
+- Setup detects repo mode (Cargo.toml nearby) vs standalone mode (release binary) automatically
+- Setup merge strategy: new defaults copied, custom files preserved (new defaults saved to `.defaults/` for reference)
+- `~/.mcp.json` is the global MCP registration target — setup writes absolute path to colmena-mcp binary
 
 ## CLI Subcommands
 
@@ -117,6 +121,7 @@ colmena delegate list                 # List active delegations
 colmena delegate revoke --tool X      # Revoke a delegation
 colmena config check                  # Validate trust-firewall.yaml
 colmena install                       # Register hook in ~/.claude/settings.json
+colmena setup [--dry-run] [--force]   # One-command onboarding: config + hooks + MCP
 colmena library list                  # List roles + patterns
 colmena library show <id>             # Show role or pattern details
 colmena library select --mission "…"  # Pattern selector + mission generator
@@ -189,13 +194,13 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M3.5** Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead (done)
 - **M4** Mentor prompt refinement — debate pattern for prompt improvement suggestions (done)
 - **M4.1** Caido-native pentester roles — web_pentester + api_pentester + caido-pentest pattern (done)
-- **M5** Plug-and-play onboarding — `colmena setup` command
+- **M5** Plug-and-play onboarding — `colmena setup` command (done)
 
 ## Current State (2026-04-02)
 
-**Branch:** `main` (v0.4.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M4 (prompt refinement), M4.1 (Caido pentester roles)
-**Next:** M5 — `colmena setup` plug-and-play onboarding (config copy, library sync, MCP registration)
+**Branch:** `main` (v0.5.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M4, M4.1, M5 (colmena setup)
+**Next:** TBD
 
 ## Key Docs
 
@@ -209,3 +214,4 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/superpowers/specs/2026-04-02-mission-bridge-design.md` — Mission bridge spec (agent spawn → review → ELO)
 - `docs/superpowers/specs/2026-04-02-mentor-prompt-refinement-design.md` — M4 spec (debate pattern for prompt improvement)
 - `docs/caido-pentester-roles-plan.md` — M4.1 plan (Caido-native web_pentester + api_pentester roles)
+- `docs/superpowers/specs/2026-04-02-colmena-setup-design.md` — M5 spec (colmena setup onboarding command)
