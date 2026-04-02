@@ -72,6 +72,14 @@ pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Ve
     let mut expired = Vec::new();
 
     for d in delegations {
+        // Fix #8: reject delegations without expires_at (TTL is mandatory)
+        if d.expires_at.is_none() {
+            eprintln!(
+                "[colmena] WARNING: skipping delegation for tool '{}' without expires_at (TTL required)",
+                d.tool
+            );
+            continue;
+        }
         match d.expires_at {
             Some(exp) if exp <= now => expired.push(d),
             _ => active.push(d),
@@ -82,7 +90,12 @@ pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Ve
 }
 
 /// Save delegations atomically — write to temp file then rename.
+/// Validates all delegations before persisting (e.g., Bash scope check).
 pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Result<()> {
+    for d in delegations {
+        validate_bash_delegation(d)?;
+    }
+
     let json = serde_json::to_string_pretty(delegations)
         .context("Failed to serialize delegations")?;
 
@@ -96,6 +109,33 @@ pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Resul
         .with_context(|| format!("Failed to rename temp delegations file to {}", path.display()))?;
 
     Ok(())
+}
+
+/// Validate that Bash delegations have at least one scope condition.
+/// Unscoped Bash delegations are extremely dangerous as they auto-approve ALL commands.
+pub fn validate_bash_delegation(delegation: &RuntimeDelegation) -> Result<()> {
+    if delegation.tool != "Bash" {
+        return Ok(());
+    }
+    match &delegation.conditions {
+        Some(conditions) => {
+            if conditions.bash_pattern.is_none() && conditions.path_within.is_none() {
+                anyhow::bail!(
+                    "Bash delegations require at least one scope condition: \
+                     --bash-pattern or --path-within. \
+                     Unscoped Bash delegations auto-approve ALL commands."
+                )
+            }
+            Ok(())
+        }
+        None => {
+            anyhow::bail!(
+                "Bash delegations require at least one scope condition: \
+                 --bash-pattern or --path-within. \
+                 Unscoped Bash delegations auto-approve ALL commands."
+            )
+        }
+    }
 }
 
 /// Validate TTL hours: must be between 1 and MAX_TTL_HOURS.
@@ -248,7 +288,11 @@ mod tests {
             session_id: None,
             source: None,
             mission_id: None,
-            conditions: None,
+            conditions: Some(DelegationConditions {
+                bash_pattern: Some("^cargo test".to_string()),
+                path_within: None,
+                path_not_match: None,
+            }),
         }];
 
         save_delegations(&path, &delegations).unwrap();
@@ -299,7 +343,7 @@ mod tests {
 
         let delegations = vec![
             RuntimeDelegation {
-                tool: "Bash".to_string(),
+                tool: "Read".to_string(),
                 agent_id: None,
                 action: Action::AutoApprove,
                 created_at: Utc::now(),
@@ -320,8 +364,8 @@ mod tests {
 
         save_delegations(&path, &delegations).unwrap();
 
-        // Revoke Bash (all agents)
-        let revoked = revoke_delegations(&path, "Bash", None).unwrap();
+        // Revoke Read (all agents)
+        let revoked = revoke_delegations(&path, "Read", None).unwrap();
         assert_eq!(revoked, 1);
 
         let remaining = load_delegations(&path);
@@ -342,7 +386,12 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None, conditions: None,
+                source: None, mission_id: None,
+                conditions: Some(DelegationConditions {
+                    bash_pattern: Some("^cargo".to_string()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
             },
             RuntimeDelegation {
                 tool: "Bash".to_string(),
@@ -351,7 +400,12 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None, conditions: None,
+                source: None, mission_id: None,
+                conditions: Some(DelegationConditions {
+                    bash_pattern: Some("^cargo".to_string()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
             },
         ];
 
@@ -372,7 +426,120 @@ mod tests {
         let path = tmp.path().join("delegations.json");
 
         save_delegations(&path, &[]).unwrap();
-        let revoked = revoke_delegations(&path, "Bash", None).unwrap();
+        let revoked = revoke_delegations(&path, "Read", None).unwrap();
         assert_eq!(revoked, 0);
+    }
+
+    #[test]
+    fn test_validate_bash_delegation_without_conditions_fails() {
+        let d = RuntimeDelegation {
+            tool: "Bash".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
+        };
+        let result = validate_bash_delegation(&d);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("scope condition"));
+
+        // Also test with empty conditions (both fields None)
+        let d2 = RuntimeDelegation {
+            tool: "Bash".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: Some(DelegationConditions {
+                bash_pattern: None,
+                path_within: None,
+                path_not_match: None,
+            }),
+        };
+        let result2 = validate_bash_delegation(&d2);
+        assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_validate_bash_delegation_with_pattern_succeeds() {
+        let d = RuntimeDelegation {
+            tool: "Bash".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: Some(DelegationConditions {
+                bash_pattern: Some("^cargo test".to_string()),
+                path_within: None,
+                path_not_match: None,
+            }),
+        };
+        assert!(validate_bash_delegation(&d).is_ok());
+
+        // Also test with path_within
+        let d2 = RuntimeDelegation {
+            tool: "Bash".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: Some(DelegationConditions {
+                bash_pattern: None,
+                path_within: Some(vec!["/home/user/project".to_string()]),
+                path_not_match: None,
+            }),
+        };
+        assert!(validate_bash_delegation(&d2).is_ok());
+    }
+
+    #[test]
+    fn test_validate_non_bash_delegation_without_conditions_succeeds() {
+        let d = RuntimeDelegation {
+            tool: "Read".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
+        };
+        assert!(validate_bash_delegation(&d).is_ok());
+    }
+
+    #[test]
+    fn test_load_delegations_skips_missing_expires_at() {
+        // Simulate a manually-injected delegation without expires_at
+        let delegations = json!([
+            {
+                "tool": "WebFetch",
+                "agent_id": null,
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": null
+            },
+            make_delegation("Read", Some(4)),
+        ]);
+
+        let mut tmp = NamedTempFile::new().unwrap();
+        write!(tmp, "{}", delegations).unwrap();
+
+        let (active, _expired) = load_delegations_with_expired(tmp.path());
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].tool, "Read");
     }
 }
