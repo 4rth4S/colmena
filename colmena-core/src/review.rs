@@ -19,6 +19,10 @@ pub const AUTO_APPROVE_FLOOR: f64 = 5.0;
 /// Minimum number of score dimensions required in a review.
 pub const MIN_SCORE_DIMENSIONS: usize = 2;
 
+/// Maximum allowed value for any individual review score.
+/// M1: Prevents u32 overflow on sum() and ELO inflation via absurdly large scores.
+pub const MAX_REVIEW_SCORE: u32 = 10;
+
 // ── Types ──────────────────────────────────────────────────────────
 
 /// State machine for a review lifecycle.
@@ -151,6 +155,16 @@ pub fn evaluate_review(
             "Review requires at least {} score dimensions, got {}",
             MIN_SCORE_DIMENSIONS,
             scores.len()
+        );
+    }
+
+    // M1: Validate score range to prevent u32 overflow on sum() and ELO inflation.
+    if let Some((dim, &val)) = scores.iter().find(|(_, &v)| v > MAX_REVIEW_SCORE) {
+        bail!(
+            "Score '{}' = {} exceeds maximum allowed value of {}",
+            dim,
+            val,
+            MAX_REVIEW_SCORE
         );
     }
 
@@ -630,5 +644,82 @@ mod tests {
 
         // Sorted by created_at DESC — most recent first
         assert!(all[0].created_at >= all[1].created_at);
+    }
+
+    // ── M1: Score bounds tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_evaluate_rejects_score_above_max() {
+        // M1: A score > MAX_REVIEW_SCORE (10) must be rejected to prevent u32 overflow and ELO inflation.
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        )
+        .unwrap();
+
+        // Score of u32::MAX triggers overflow on sum() without bounds check
+        let mut scores = HashMap::new();
+        scores.insert("correctness".to_string(), u32::MAX);
+        scores.insert("security".to_string(), 8);
+
+        let result = evaluate_review(
+            &review_dir,
+            &entry.review_id,
+            "pentester",
+            scores,
+            vec![],
+            &artifact,
+        );
+
+        assert!(result.is_err(), "score above MAX_REVIEW_SCORE must be rejected");
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("exceeds maximum"), "error message should mention limit: {msg}");
+    }
+
+    #[test]
+    fn test_evaluate_accepts_max_score() {
+        // M1 non-regression: score equal to MAX_REVIEW_SCORE (10) must be accepted
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        )
+        .unwrap();
+
+        let mut scores = HashMap::new();
+        scores.insert("correctness".to_string(), MAX_REVIEW_SCORE);
+        scores.insert("security".to_string(), MAX_REVIEW_SCORE);
+
+        let result = evaluate_review(
+            &review_dir,
+            &entry.review_id,
+            "pentester",
+            scores,
+            vec![],
+            &artifact,
+        );
+
+        assert!(result.is_ok(), "score equal to MAX_REVIEW_SCORE must be accepted");
     }
 }
