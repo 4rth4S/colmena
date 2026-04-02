@@ -6,6 +6,26 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-02
+
+### Added
+- **Caido-native pentester roles (M4.1):** two new specialized roles for bug bounty missions using Caido MCP tools
+  - `web_pentester`: XSS, CSRF, CORS, IDOR, session management, clickjacking, open redirect — Caido-native methodology with HTTPQL examples
+  - `api_pentester`: BOLA, broken auth, injection, mass assignment, business logic, rate limiting, GraphQL — OWASP API Security Top 10 coverage
+  - `caido-pentest` pattern: connects new roles to the pattern selector (`library_select` recommends it for web/API/bug bounty missions)
+  - Both roles include mission setup protocol, safety rails, scope enforcement, and finding output format mapped to `caido_create_finding()`
+- **Mentor prompt refinement (M4):** debate pattern for prompt improvement suggestions
+  - `generate_prompt_review_context()` loads target role's prompt, ELO performance, and recent findings
+  - Compound keyword detection: triggers only when mission text contains prefix + role name + suffix (e.g., "review pentester prompt")
+  - Context injected into debate/mentor agents' CLAUDE.md for structured analysis
+  - Suggestions stored as findings with `category: "prompt_improvement"` — human decides what to apply
+- **Firewall hardening:** `gh pr merge` blocked — PRs are merged by human only
+
+### Changed
+- `generate_mission()` now accepts optional `config_dir: Option<&Path>` for prompt review detection (backward compatible — `None` skips detection)
+- Wisdom Library: 6 roles (was 4), 7 patterns (was 6)
+- Tests: 193 (was 184), 9 new tests for prompt review keyword detection and context generation
+
 ## [0.3.0] - 2026-04-02
 
 ### Added
