@@ -109,6 +109,13 @@ blocked:
     action: block
     reason: 'Destructive operation requires explicit human confirmation'
 
+  # PR merges are human-only — Claude creates PRs, Coco merges
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^gh pr merge\b'
+    action: block
+    reason: 'PR merges are human-initiated only — Claude pushes branches and creates PRs'
+
 # Per-agent overrides (used by ELO engine in M3)
 agent_overrides: {}
 
