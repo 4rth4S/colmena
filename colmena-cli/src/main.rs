@@ -1,6 +1,8 @@
+mod defaults;
 mod hook;
 mod install;
 mod notify;
+mod setup;
 
 use std::io::{BufReader, Read as _};
 use std::path::PathBuf;
@@ -82,6 +84,15 @@ enum Commands {
         /// Show stats for a specific session ID only
         #[arg(long)]
         session: Option<String>,
+    },
+    /// One-command setup: config, hooks, MCP — everything to get started
+    Setup {
+        /// Preview what would happen without making changes
+        #[arg(long)]
+        dry_run: bool,
+        /// Overwrite all files with defaults (ignores custom modifications)
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -246,6 +257,7 @@ fn main() {
             Some(sid) => run_session_stats(&sid),
             None => run_stats(),
         },
+        Commands::Setup { dry_run, force } => setup::run_setup(dry_run, force),
     };
 
     if let Err(e) = result {

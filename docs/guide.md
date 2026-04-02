@@ -4,22 +4,27 @@
 
 ---
 
-## 1. First Setup (5 minutes)
+## 1. First Setup (2 minutes)
 
-### Build
+### Build and setup
 
 ```bash
 cd ~/colmena
 cargo build --release
+./target/release/colmena setup
 ```
 
-### Install the hook
+`colmena setup` does everything in one command:
+- Registers Pre/PostToolUse hooks in `~/.claude/settings.json`
+- Registers the MCP server in `~/.mcp.json` (global)
+- Validates config and library files
+- Prints a verification checklist
 
-```bash
-./target/release/colmena install
-```
+Restart Claude Code after setup to pick up the MCP server.
 
-This registers colmena as a `PreToolUse` hook in `~/.claude/settings.json`. Every time CC is about to use a tool, colmena evaluates the call and decides: allow, ask, or deny.
+**Preview first?** Run `colmena setup --dry-run` to see what it would do without changing anything.
+
+**Standalone install** (release binary, no repo clone): `setup` embeds all default config + library files in the binary. Run it anywhere and it creates `~/.colmena/` with everything needed. Override with `COLMENA_HOME=/custom/path colmena setup`.
 
 ### Verify
 
@@ -45,6 +50,36 @@ That's it. Next time you open a Claude Code session, colmena is active.
 ---
 
 ## 1.5 Upgrading
+
+### From 0.4.0 to 0.5.0
+
+**Rebuild and re-setup:**
+
+```bash
+cd ~/colmena
+git pull
+cargo build --release
+./target/release/colmena setup
+```
+
+`colmena setup` is now the recommended way to upgrade. It:
+- Detects your existing config and preserves customizations
+- Copies any new default files (roles, patterns, prompts) without overwriting your changes
+- Ensures hooks and MCP are registered
+- Runs verification
+
+If you've customized files (e.g., `trust-firewall.yaml`), setup preserves your version and saves the new default to `.defaults/` for reference.
+
+**New capabilities:**
+- `colmena setup` -- one-command onboarding replaces manual install + MCP registration
+- `colmena setup --dry-run` -- preview what setup would do
+- `colmena setup --force` -- fresh install, overwrite everything
+
+**Verify:**
+
+```bash
+colmena setup --dry-run   # should show all files as up-to-date
+```
 
 ### From 0.3.0 to 0.4.0
 
