@@ -6,6 +6,21 @@ use serde::Deserialize;
 
 // ── Role types ────────────────────────────────────────────────────────────────
 
+/// Optional permissions block for role-bound firewall delegations.
+/// When a mission uses this role, these become scoped auto-approve rules.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RolePermissions {
+    /// Regex patterns for auto-approved Bash commands (e.g. `^uv (run|pip)`)
+    #[serde(default)]
+    pub bash_patterns: Vec<String>,
+    /// Allowed directories for file operations (supports `${MISSION_DIR}`)
+    #[serde(default)]
+    pub path_within: Vec<String>,
+    /// Excluded file patterns (e.g. `*.env`, `*credentials*`)
+    #[serde(default)]
+    pub path_not_match: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Role {
     pub name: String,
@@ -16,6 +31,8 @@ pub struct Role {
     pub default_trust_level: String,
     pub tools_allowed: Vec<String>,
     pub specializations: Vec<String>,
+    #[serde(default)]
+    pub permissions: Option<RolePermissions>,
     pub elo: EloConfig,
     pub mentoring: MentoringConfig,
 }
