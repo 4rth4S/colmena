@@ -177,6 +177,18 @@ struct LibraryCreateRoleInput {
     id: String,
     /// Role description
     description: String,
+    /// Optional category override (offensive, defensive, compliance, architecture, research, development, operations, creative). Auto-detected from description if omitted.
+    category: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct LibraryCreatePatternInput {
+    /// Pattern ID (e.g., "parallel-audit")
+    id: String,
+    /// Pattern description
+    description: String,
+    /// Optional topology override (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative). Auto-detected from description if omitted.
+    topology: Option<String>,
 }
 
 // ── Mission + Calibration input types ────────────────────────────────────────
@@ -482,6 +494,15 @@ impl ColmenaServer {
 
         let mut output = colmena_core::selector::format_recommendations(&recommendations);
 
+        // If no patterns matched, suggest creating one
+        if recommendations.is_empty() {
+            let suggestion = colmena_core::pattern_scaffold::suggest_pattern_for_mission(&input.mission);
+            output.push_str(&format!(
+                "\nSuggested topology: {} — {}\n\nTo create a custom pattern:\n  {}\n",
+                suggestion.topology, suggestion.reasoning, suggestion.create_command,
+            ));
+        }
+
         // Append role gap warnings
         let gaps = colmena_core::selector::detect_role_gaps(&input.mission, &roles);
         if !gaps.is_empty() {
@@ -636,22 +657,71 @@ impl ColmenaServer {
         Ok(output)
     }
 
-    #[rmcp::tool(description = "Create a new role scaffold in the Colmena Wisdom Library")]
+    #[rmcp::tool(description = "Create a new role in the Colmena Wisdom Library with intelligent defaults based on category (offensive, defensive, compliance, architecture, research, development, operations, creative)")]
     fn library_create_role(
         &self,
         Parameters(input): Parameters<LibraryCreateRoleInput>,
     ) -> Result<String, String> {
         let library_dir = self.config_dir.join("library");
 
+        let category = input.category
+            .as_deref()
+            .map(|c| c.parse::<colmena_core::templates::RoleCategory>())
+            .transpose()
+            .map_err(|e| format!("Invalid category: {e}"))?;
+
         let (role_path, prompt_path) =
-            colmena_core::selector::scaffold_role(&input.id, &input.description, &library_dir)
+            colmena_core::selector::scaffold_role(&input.id, &input.description, category, &library_dir)
                 .map_err(|e| format!("Scaffold failed: {e}"))?;
 
+        // Read back generated files for inline review
+        let role_content = std::fs::read_to_string(&role_path)
+            .map_err(|e| format!("Failed to read role YAML: {e}"))?;
+        let prompt_content = std::fs::read_to_string(&prompt_path)
+            .map_err(|e| format!("Failed to read prompt: {e}"))?;
+
         Ok(format!(
-            "Role '{}' scaffolded.\n\nFiles created:\n  {}\n  {}\n",
+            "Role '{}' created.\n\n\
+            ## Files\n  {}\n  {}\n\n\
+            ## Role YAML\n```yaml\n{}\n```\n\n\
+            ## System Prompt\n```markdown\n{}\n```\n\n\
+            Review and customize these files as needed.",
             input.id,
             role_path.display(),
             prompt_path.display(),
+            role_content,
+            prompt_content,
+        ))
+    }
+
+    #[rmcp::tool(description = "Create a new pattern in the Colmena Wisdom Library with intelligent defaults based on topology (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)")]
+    fn library_create_pattern(
+        &self,
+        Parameters(input): Parameters<LibraryCreatePatternInput>,
+    ) -> Result<String, String> {
+        let library_dir = self.config_dir.join("library");
+
+        let topology = input.topology
+            .as_deref()
+            .map(|t| t.parse::<colmena_core::pattern_scaffold::PatternTopology>())
+            .transpose()
+            .map_err(|e| format!("Invalid topology: {e}"))?;
+
+        let pattern_path =
+            colmena_core::pattern_scaffold::scaffold_pattern(&input.id, &input.description, topology, &library_dir)
+                .map_err(|e| format!("Scaffold failed: {e}"))?;
+
+        let pattern_content = std::fs::read_to_string(&pattern_path)
+            .map_err(|e| format!("Failed to read pattern YAML: {e}"))?;
+
+        Ok(format!(
+            "Pattern '{}' created.\n\n\
+            ## File\n  {}\n\n\
+            ## Pattern YAML\n```yaml\n{}\n```\n\n\
+            Review and customize this file. Replace placeholder role IDs with actual roles from your library.",
+            input.id,
+            pattern_path.display(),
+            pattern_content,
         ))
     }
 

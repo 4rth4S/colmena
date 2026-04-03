@@ -10,4 +10,6 @@ pub mod models;
 pub mod paths;
 pub mod queue;
 pub mod review;
+pub mod pattern_scaffold;
 pub mod selector;
+pub mod templates;
