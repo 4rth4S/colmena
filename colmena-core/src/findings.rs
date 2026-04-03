@@ -126,6 +126,12 @@ pub fn load_findings(findings_dir: &Path, filter: &FindingsFilter) -> Result<Vec
                 }
             }
         }
+
+        // Hard cap to prevent OOM on unbounded directories
+        const MAX_FINDINGS_RECORDS: usize = 5000;
+        if records.len() >= MAX_FINDINGS_RECORDS {
+            break;
+        }
     }
 
     // Sort by timestamp descending
