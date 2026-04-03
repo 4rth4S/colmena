@@ -397,8 +397,13 @@ impl ColmenaServer {
             cwd: input.cwd.clone(),
         };
 
-        let decision =
-            colmena_core::firewall::evaluate(&cfg, &patterns, &delegations, &eval_input);
+        // Load ELO overrides so evaluate reflects calibrated trust (P0 fix: probation agents were invisible)
+        let elo_overrides_path = self.config_dir.join("elo-overrides.json");
+        let elo_overrides = colmena_core::calibrate::load_overrides(&elo_overrides_path);
+
+        let decision = colmena_core::firewall::evaluate_with_elo(
+            &cfg, &patterns, &delegations, &eval_input, &elo_overrides,
+        );
 
         let result = serde_json::json!({
             "action": format!("{:?}", decision.action),
@@ -1121,7 +1126,7 @@ impl ColmenaServer {
         Parameters(_input): Parameters<CalibrateInput>,
     ) -> Result<String, String> {
         let library_dir = colmena_core::library::default_library_dir();
-        let elo_log_path = self.config_dir.join("elo-events.jsonl");
+        let elo_log_path = self.config_dir.join("elo/elo-log.jsonl");
 
         let roles = colmena_core::library::load_roles(&library_dir)
             .map_err(|e| sanitize_error(&format!("Error loading roles: {e}")))?;
