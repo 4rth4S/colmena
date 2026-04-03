@@ -17,6 +17,7 @@ use colmena_core::elo;
 use colmena_core::library::{default_library_dir, load_patterns, load_roles, validate_library};
 use colmena_core::paths::default_config_dir;
 use colmena_core::review::{self, ReviewState};
+use colmena_core::sanitize::sanitize_error;
 use colmena_core::selector::{
     detect_role_gaps, format_recommendations, generate_mission, scaffold_role, select_patterns,
 };
@@ -301,6 +302,12 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
                     &mut std::io::stdout(),
                     b"{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"ask\",\"permissionDecisionReason\":\"Hook stdin timeout (5s)\"}}",
                 );
+                // Best-effort audit log for timeout event
+                let config_dir = colmena_core::paths::default_config_dir();
+                let audit_path = config_dir.join("audit.log");
+                let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::Timeout {
+                    reason: "Hook stdin timeout (5s)",
+                });
                 std::process::exit(0);
             }
         });
@@ -596,6 +603,10 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<(
     };
 
     delegations.push(new_delegation);
+
+    // Warn about global scope (no --session)
+    eprintln!("WARNING: This delegation applies to ALL active CC sessions (no --session specified).");
+    eprintln!("         Use 'colmena delegate add --tool {} --session <id>' to limit scope.", tool);
 
     colmena_core::delegate::save_delegations(&delegations_path, &delegations)?;
 
@@ -1263,13 +1274,6 @@ fn format_review_state(state: &ReviewState) -> &'static str {
     }
 }
 
-/// Sanitize error messages before sending to CC stdout (Fix 15).
-/// Replaces absolute paths with generic placeholders to avoid leaking internal paths.
-fn sanitize_error(msg: &str) -> String {
-    // Replace absolute paths (e.g. /Users/foo/bar/...) with generic placeholder
-    let re = regex::Regex::new(r"(/[A-Za-z][A-Za-z0-9._/-]+)").unwrap();
-    re.replace_all(msg, "<path>").to_string()
-}
 
 /// Check that the hook registered in settings.json matches the running binary (Fix 12, DREAD 7.8).
 /// Best-effort: logs warning if mismatch, never fails the hook.

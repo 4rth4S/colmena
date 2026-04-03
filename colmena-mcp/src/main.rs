@@ -1,3 +1,5 @@
+mod rate_limit;
+
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -6,6 +8,8 @@ use rmcp::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
+
+use colmena_core::sanitize::sanitize_error;
 
 /// M3: Shell-escape a CLI argument to prevent injection in generated command strings.
 ///
@@ -212,10 +216,28 @@ struct SessionStatsInput {
 // Server struct
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
 struct ColmenaServer {
     config_dir: std::path::PathBuf,
     tool_router: ToolRouter<Self>,
+    rate_limiter: std::sync::Arc<rate_limit::RateLimiter>,
+}
+
+impl std::fmt::Debug for ColmenaServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ColmenaServer")
+            .field("config_dir", &self.config_dir)
+            .finish()
+    }
+}
+
+impl Clone for ColmenaServer {
+    fn clone(&self) -> Self {
+        Self {
+            config_dir: self.config_dir.clone(),
+            tool_router: self.tool_router.clone(),
+            rate_limiter: self.rate_limiter.clone(),
+        }
+    }
 }
 
 impl ColmenaServer {
@@ -223,6 +245,7 @@ impl ColmenaServer {
         Self {
             config_dir,
             tool_router: Self::tool_router(),
+            rate_limiter: std::sync::Arc::new(rate_limit::RateLimiter::new(30, 60)),
         }
     }
 }
@@ -243,8 +266,8 @@ impl ColmenaServer {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| self.config_dir.join("trust-firewall.yaml"));
 
-        let cfg = colmena_core::config::load_config(&config_path, "/tmp")
-            .map_err(|e| format!("Config load failed: {e}"))?;
+        let cfg = colmena_core::config::load_config(&config_path, self.config_dir.to_str().unwrap_or("/tmp"))
+            .map_err(|e| sanitize_error(&format!("Config load failed: {e}")))?;
 
         match colmena_core::config::compile_config(&cfg) {
             Ok(_) => {
@@ -261,20 +284,20 @@ impl ColmenaServer {
                 }
                 Ok(result)
             }
-            Err(e) => Err(format!("Config invalid: {e}")),
+            Err(e) => Err(sanitize_error(&format!("Config invalid: {e}"))),
         }
     }
 
     #[rmcp::tool(description = "List pending approval items in the Colmena queue")]
     fn queue_list(&self, Parameters(_input): Parameters<QueueListInput>) -> Result<String, String> {
         let entries = colmena_core::queue::list_pending(&self.config_dir)
-            .map_err(|e| format!("Queue read failed: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Queue read failed: {e}")))?;
 
         if entries.is_empty() {
             return Ok("No pending approvals.".to_string());
         }
 
-        serde_json::to_string_pretty(&entries).map_err(|e| format!("Serialize failed: {e}"))
+        serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
     }
 
     #[rmcp::tool(
@@ -356,9 +379,9 @@ impl ColmenaServer {
     fn evaluate(&self, Parameters(input): Parameters<EvaluateInput>) -> Result<String, String> {
         let config_path = self.config_dir.join("trust-firewall.yaml");
         let cfg = colmena_core::config::load_config(&config_path, &input.cwd)
-            .map_err(|e| format!("Config load failed: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Config load failed: {e}")))?;
         let patterns = colmena_core::config::compile_config(&cfg)
-            .map_err(|e| format!("Config compile failed: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Config compile failed: {e}")))?;
 
         let delegations_path = self.config_dir.join("runtime-delegations.json");
         let delegations = colmena_core::delegate::load_delegations(&delegations_path);
@@ -383,7 +406,7 @@ impl ColmenaServer {
             "matched_rule": decision.matched_rule,
         });
 
-        serde_json::to_string_pretty(&result).map_err(|e| format!("Serialize failed: {e}"))
+        serde_json::to_string_pretty(&result).map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
     }
 
     #[rmcp::tool(description = "List all roles and patterns in the Colmena Wisdom Library")]
@@ -394,9 +417,9 @@ impl ColmenaServer {
         let library_dir = self.config_dir.join("library");
 
         let roles = colmena_core::library::load_roles(&library_dir)
-            .map_err(|e| format!("Failed to load roles: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
         let patterns = colmena_core::library::load_patterns(&library_dir)
-            .map_err(|e| format!("Failed to load patterns: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
 
         let mut output = String::new();
 
@@ -428,9 +451,9 @@ impl ColmenaServer {
         let library_dir = self.config_dir.join("library");
 
         let roles = colmena_core::library::load_roles(&library_dir)
-            .map_err(|e| format!("Failed to load roles: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
         let patterns = colmena_core::library::load_patterns(&library_dir)
-            .map_err(|e| format!("Failed to load patterns: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
 
         // Search roles first
         if let Some(role) = roles.iter().find(|r| r.id == input.id) {
@@ -474,7 +497,7 @@ impl ColmenaServer {
             return Ok(output);
         }
 
-        Err(format!("No role or pattern found with id '{}'", input.id))
+        Err(sanitize_error(&format!("No role or pattern found with id '{}'", input.id)))
     }
 
     #[rmcp::tool(description = "Select patterns from the Wisdom Library for a given mission")]
@@ -485,9 +508,9 @@ impl ColmenaServer {
         let library_dir = self.config_dir.join("library");
 
         let roles = colmena_core::library::load_roles(&library_dir)
-            .map_err(|e| format!("Failed to load roles: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
         let patterns = colmena_core::library::load_patterns(&library_dir)
-            .map_err(|e| format!("Failed to load patterns: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
 
         let recommendations =
             colmena_core::selector::select_patterns(&input.mission, &patterns, &roles);
@@ -522,19 +545,20 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<LibraryGenerateInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("library_generate")?;
         let library_dir = self.config_dir.join("library");
         let missions_dir = self.config_dir.join("missions");
 
         let roles = colmena_core::library::load_roles(&library_dir)
-            .map_err(|e| format!("Failed to load roles: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
         let patterns = colmena_core::library::load_patterns(&library_dir)
-            .map_err(|e| format!("Failed to load patterns: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
 
         // Find the requested pattern
         let pattern = patterns
             .iter()
             .find(|p| p.id == input.pattern_id)
-            .ok_or_else(|| format!("Pattern '{}' not found in library", input.pattern_id))?;
+            .ok_or_else(|| sanitize_error(&format!("Pattern '{}' not found in library", input.pattern_id)))?;
 
         // Build a Recommendation from the pattern directly (no scoring needed — user specified it)
         let role_map: std::collections::HashMap<&str, &colmena_core::library::Role> =
@@ -588,7 +612,7 @@ impl ColmenaServer {
             &elo_ratings,
             Some(&self.config_dir),
         )
-        .map_err(|e| format!("Mission generation failed: {e}"))?;
+        .map_err(|e| sanitize_error(&format!("Mission generation failed: {e}")))?;
 
         let mut output = format!(
             "Mission generated: {}\n\nFiles created:\n  {}\n",
@@ -662,23 +686,24 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<LibraryCreateRoleInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("library_create_role")?;
         let library_dir = self.config_dir.join("library");
 
         let category = input.category
             .as_deref()
             .map(|c| c.parse::<colmena_core::templates::RoleCategory>())
             .transpose()
-            .map_err(|e| format!("Invalid category: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Invalid category: {e}")))?;
 
         let (role_path, prompt_path) =
             colmena_core::selector::scaffold_role(&input.id, &input.description, category, &library_dir)
-                .map_err(|e| format!("Scaffold failed: {e}"))?;
+                .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
 
         // Read back generated files for inline review
         let role_content = std::fs::read_to_string(&role_path)
-            .map_err(|e| format!("Failed to read role YAML: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to read role YAML: {e}")))?;
         let prompt_content = std::fs::read_to_string(&prompt_path)
-            .map_err(|e| format!("Failed to read prompt: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to read prompt: {e}")))?;
 
         Ok(format!(
             "Role '{}' created.\n\n\
@@ -699,20 +724,21 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<LibraryCreatePatternInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("library_create_pattern")?;
         let library_dir = self.config_dir.join("library");
 
         let topology = input.topology
             .as_deref()
             .map(|t| t.parse::<colmena_core::pattern_scaffold::PatternTopology>())
             .transpose()
-            .map_err(|e| format!("Invalid topology: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Invalid topology: {e}")))?;
 
         let pattern_path =
             colmena_core::pattern_scaffold::scaffold_pattern(&input.id, &input.description, topology, &library_dir)
-                .map_err(|e| format!("Scaffold failed: {e}"))?;
+                .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
 
         let pattern_content = std::fs::read_to_string(&pattern_path)
-            .map_err(|e| format!("Failed to read pattern YAML: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Failed to read pattern YAML: {e}")))?;
 
         Ok(format!(
             "Pattern '{}' created.\n\n\
@@ -734,12 +760,13 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<ReviewSubmitInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("review_submit")?;
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
 
         // Load existing reviews to enforce anti-reciprocal invariant
         let existing = colmena_core::review::list_reviews(&review_dir, None)
-            .map_err(|e| format!("Error: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
         let existing_pairs: Vec<(String, String)> = existing
             .iter()
             .map(|r| (r.reviewer_role.clone(), r.author_role.clone()))
@@ -753,7 +780,7 @@ impl ColmenaServer {
             &input.available_roles,
             &existing_pairs,
         )
-        .map_err(|e| format!("Error: {e}"))?;
+        .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         // Audit log (best-effort)
         let audit_log = self.config_dir.join("audit.log");
@@ -788,18 +815,18 @@ impl ColmenaServer {
                 Some(colmena_core::review::ReviewState::NeedsHumanReview)
             }
             Some("rejected") => Some(colmena_core::review::ReviewState::Rejected),
-            Some(other) => return Err(format!("Unknown state filter: '{other}'")),
+            Some(other) => return Err(sanitize_error(&format!("Unknown state filter: '{other}'"))),
             None => None,
         };
 
         let entries = colmena_core::review::list_reviews(&review_dir, state_filter)
-            .map_err(|e| format!("Error: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         if entries.is_empty() {
             return Ok("No reviews found.".to_string());
         }
 
-        serde_json::to_string_pretty(&entries).map_err(|e| format!("Error: {e}"))
+        serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
     #[rmcp::tool(
@@ -809,13 +836,14 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<ReviewEvaluateInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("review_evaluate")?;
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
 
         // Validate severity values before processing
         for f in &input.findings {
             colmena_core::findings::validate_severity(&f.severity)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| sanitize_error(&e.to_string()))?;
         }
 
         // Convert FindingInput → colmena_core::findings::Finding
@@ -838,7 +866,7 @@ impl ColmenaServer {
             findings.clone(),
             &artifact_path,
         )
-        .map_err(|e| format!("Error: {e}"))?;
+        .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         let score_avg = entry.score_average.unwrap_or(0.0);
 
@@ -960,7 +988,7 @@ impl ColmenaServer {
     ) -> Result<String, String> {
         let elo_log = self.config_dir.join("elo/elo-log.jsonl");
         let events =
-            colmena_core::elo::read_elo_log(&elo_log).map_err(|e| format!("Error: {e}"))?;
+            colmena_core::elo::read_elo_log(&elo_log).map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         // Load roles for baseline ELO values
         let library_dir = self.config_dir.join("library");
@@ -991,7 +1019,7 @@ impl ColmenaServer {
             })
             .collect();
 
-        serde_json::to_string_pretty(&entries).map_err(|e| format!("Error: {e}"))
+        serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
     // ── Findings tools ───────────────────────────────────────────────────────
@@ -1011,7 +1039,7 @@ impl ColmenaServer {
             .map(|s| {
                 chrono::DateTime::parse_from_rfc3339(s)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .map_err(|e| format!("Invalid 'after' date: {e}"))
+                    .map_err(|e| sanitize_error(&format!("Invalid 'after' date: {e}")))
             })
             .transpose()?;
 
@@ -1021,7 +1049,7 @@ impl ColmenaServer {
             .map(|s| {
                 chrono::DateTime::parse_from_rfc3339(s)
                     .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .map_err(|e| format!("Invalid 'before' date: {e}"))
+                    .map_err(|e| sanitize_error(&format!("Invalid 'before' date: {e}")))
             })
             .transpose()?;
 
@@ -1037,13 +1065,13 @@ impl ColmenaServer {
         };
 
         let records = colmena_core::findings::load_findings(&findings_dir, &filter)
-            .map_err(|e| format!("Error: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         if records.is_empty() {
             return Ok("No findings match the query.".to_string());
         }
 
-        serde_json::to_string_pretty(&records).map_err(|e| format!("Error: {e}"))
+        serde_json::to_string_pretty(&records).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
     #[rmcp::tool(description = "List recent findings from the findings store")]
@@ -1059,13 +1087,13 @@ impl ColmenaServer {
         };
 
         let records = colmena_core::findings::load_findings(&findings_dir, &filter)
-            .map_err(|e| format!("Error: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         if records.is_empty() {
             return Ok("No findings yet.".to_string());
         }
 
-        serde_json::to_string_pretty(&records).map_err(|e| format!("Error: {e}"))
+        serde_json::to_string_pretty(&records).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
     // ── Mission management ───────────────────────────────────────────────────
@@ -1075,6 +1103,7 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<MissionDeactivateInput>,
     ) -> Result<String, String> {
+        self.rate_limiter.check("mission_deactivate")?;
         let cmd = format!("colmena mission deactivate --id {}", safe_cli_arg(&input.mission_id));
         Ok(format!(
             "Mission deactivation requested for '{}'.\n\n\
@@ -1095,9 +1124,9 @@ impl ColmenaServer {
         let elo_log_path = self.config_dir.join("elo-events.jsonl");
 
         let roles = colmena_core::library::load_roles(&library_dir)
-            .map_err(|e| format!("Error loading roles: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error loading roles: {e}")))?;
         let events = colmena_core::elo::read_elo_log(&elo_log_path)
-            .map_err(|e| format!("Error reading ELO log: {e}"))?;
+            .map_err(|e| sanitize_error(&format!("Error reading ELO log: {e}")))?;
 
         let baselines: Vec<(String, u32)> = roles.iter()
             .map(|r| (r.id.clone(), r.elo.initial))

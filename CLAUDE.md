@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.6.0 (semver, single workspace version)
+- **Version:** 0.6.1 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -75,9 +75,18 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - Each filter wrapped in catch_unwind — a buggy filter never crashes the hook
 - FilterConfig max_output_chars (30K) must be < CC's internal limit (50K)
 - Filters only apply to Bash tool outputs (Read/Write/Edit don't need filtering)
-- Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl`
+- Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl` (10MB rotation)
+- MCP error messages sanitized via `colmena_core::sanitize::sanitize_error` — no filesystem paths leak to agents
+- MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate)
+- `library_create_role` and `library_create_pattern` are in `restricted` — require human review (prevent library poisoning)
+- Delegations without `--session` warn about global scope (applies to ALL CC sessions)
+- Watchdog timeout (5s) logged as TIMEOUT event in audit.log before exit
+- `load_findings()` hard cap: 5000 records max to prevent OOM
+- `calibrate run` cleans orphan ELO overrides (agent_ids with no matching role in library)
+- Review IDs include random component: `r_{timestamp}_{hex4}` to prevent collisions
+- Config file permissions checked on load: warns if critical files are world-writable (Unix only)
 - Review invariants are hardcoded in review.rs, not configurable: author!=reviewer, no reciprocal, min 2 scores, hash verification
-- ELO is append-only JSONL log — never mutable state. Rating calculated at read time with temporal decay
+- ELO is append-only JSONL log with 10MB rotation — never mutable state. Rating calculated at read time with temporal decay
 - Review MCP tools (submit, evaluate) are in `restricted` — require human oversight
 - Trust gate floor (5.0) is hardcoded — config can raise threshold but never below floor
 - rmcp MCP server: uses `#[tool_router]` on impl + `#[tool_handler(router = self.tool_router)]` on ServerHandler
@@ -203,12 +212,14 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M4.1** Caido-native pentester roles — web_pentester + api_pentester + caido-pentest pattern (done)
 - **M5** Plug-and-play onboarding — `colmena setup` command (done)
 - **M6** Intelligent role & pattern creation — 8 role categories, 7 pattern topologies, pattern suggestion (done)
+- **M6.1** Security hardening — STRIDE/DREAD threat model fixes: error sanitization, rate limiting, log rotation, orphan cleanup, permissions checks (done)
+- **M7** Library Guardian — prompt validation, file integrity, trust elevation (planned)
 
 ## Current State (2026-04-03)
 
-**Branch:** `main` (v0.6.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation)
-**Next:** TBD
+**Branch:** `main` (v0.6.1)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes)
+**Next:** M7 (Library Guardian — prompt validation, integrity checks)
 
 ## Key Docs
 
