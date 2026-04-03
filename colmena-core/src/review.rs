@@ -112,7 +112,7 @@ pub fn submit_review(
     let artifact_hash = hash_artifact(artifact_path)?;
 
     let now = Utc::now();
-    let review_id = format!("r_{}", now.timestamp_millis());
+    let review_id = format!("r_{}_{:04x}", now.timestamp_millis(), rand::random::<u16>());
 
     let entry = ReviewEntry {
         review_id,

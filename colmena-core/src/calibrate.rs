@@ -164,6 +164,22 @@ pub fn calibrate(
         }
     }
 
+    // Clean orphan overrides: remove agent_ids not present in role_map
+    let orphan_ids: Vec<String> = overrides.keys()
+        .filter(|agent_id| !role_map.contains_key(agent_id.as_str()))
+        .cloned()
+        .collect();
+    for orphan_id in &orphan_ids {
+        changes.push(CalibrationChange {
+            agent: orphan_id.clone(),
+            old_tier: infer_tier_from_overrides(previous_overrides.get(orphan_id.as_str())),
+            new_tier: TrustTier::Standard,
+            elo: 0,
+            reason: "Orphan override removed: role not in library".to_string(),
+        });
+    }
+    overrides.retain(|agent_id, _| role_map.contains_key(agent_id.as_str()));
+
     CalibratedOverrides { agent_overrides: overrides, changes }
 }
 
@@ -557,5 +573,42 @@ mod tests {
     fn test_load_overrides_nonexistent_returns_empty() {
         let loaded = load_overrides(Path::new("/nonexistent/path.json"));
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn test_calibrate_cleans_orphan_overrides() {
+        // "ghost" has low ELO → Probation tier, which generates generic rules
+        // without checking role_map. Since "ghost" has no role in the library,
+        // it should be cleaned out as an orphan override.
+        let ratings = vec![
+            make_rating("ghost", 1050, 5),    // Probation, no role
+            make_rating("pentester", 1050, 5), // Probation, has role
+        ];
+        // Only "pentester" has a role; "ghost" does not.
+        let roles = vec![make_role("pentester", vec!["Bash", "Read"], None)];
+        let thresholds = TrustThresholds::default();
+        let result = calibrate(&ratings, &roles, &thresholds, &HashMap::new());
+
+        // "ghost" should NOT be in agent_overrides (orphan removed)
+        assert!(
+            !result.agent_overrides.contains_key("ghost"),
+            "orphan agent 'ghost' should be removed from overrides"
+        );
+
+        // "pentester" should still be present (has a matching role)
+        assert!(
+            result.agent_overrides.contains_key("pentester"),
+            "pentester with matching role should remain"
+        );
+
+        // There should be a CalibrationChange for "ghost" with orphan reason
+        let orphan_change = result.changes.iter().find(|c| c.agent == "ghost" && c.reason.contains("Orphan"));
+        assert!(
+            orphan_change.is_some(),
+            "should log a CalibrationChange for orphan removal"
+        );
+        let change = orphan_change.unwrap();
+        assert_eq!(change.new_tier, TrustTier::Standard);
+        assert_eq!(change.elo, 0);
     }
 }
