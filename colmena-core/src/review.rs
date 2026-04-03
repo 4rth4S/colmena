@@ -106,8 +106,9 @@ pub fn submit_review(
         bail!("No eligible reviewer");
     }
 
-    // Pick first available (MVP)
-    let reviewer_role = candidates[0].clone();
+    // Randomize reviewer selection to prevent predictable assignment and collusion
+    use rand::seq::SliceRandom;
+    let reviewer_role = (*candidates.choose(&mut rand::thread_rng()).unwrap()).clone();
 
     let artifact_hash = hash_artifact(artifact_path)?;
 

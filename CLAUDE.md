@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.6.1 (semver, single workspace version)
+- **Version:** 0.6.2 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -78,6 +78,12 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl` (10MB rotation)
 - MCP error messages sanitized via `colmena_core::sanitize::sanitize_error` — no filesystem paths leak to agents
 - MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate)
+- MCP evaluate uses evaluate_with_elo() — includes ELO overrides so probation agents show correct restrictions
+- Reviewer selection randomized via rand::seq::SliceRandom — prevents deterministic assignment and collusion
+- Elevated trust without bash_patterns generates "ask" (not auto-approve) for Bash — forces pattern definition
+- CLI `delegate add` supports `--session <id>` to limit delegation scope to one CC session
+- Bash delegation bash_pattern validated as compilable regex before persisting — prevents silently inactive delegations
+- Expired delegations logged as DELEGATE_EXPIRE audit events on load
 - `library_create_role` and `library_create_pattern` are in `restricted` — require human review (prevent library poisoning)
 - Delegations without `--session` warn about global scope (applies to ALL CC sessions)
 - Watchdog timeout (5s) logged as TIMEOUT event in audit.log before exit
@@ -130,7 +136,7 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 colmena hook                          # Hot path: stdin JSON → evaluate → stdout JSON (CC hook)
 colmena queue list                    # List pending approval items
 colmena queue prune --older-than 7    # Prune entries older than N days
-colmena delegate add --tool X [--agent Y] [--ttl 4]  # Add delegation (max 24h)
+colmena delegate add --tool X [--agent Y] [--ttl 4] [--session S]  # Add delegation (max 24h)
 colmena delegate list                 # List active delegations
 colmena delegate revoke --tool X      # Revoke a delegation
 colmena config check                  # Validate trust-firewall.yaml
@@ -213,12 +219,13 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M5** Plug-and-play onboarding — `colmena setup` command (done)
 - **M6** Intelligent role & pattern creation — 8 role categories, 7 pattern topologies, pattern suggestion (done)
 - **M6.1** Security hardening — STRIDE/DREAD threat model fixes: error sanitization, rate limiting, log rotation, orphan cleanup, permissions checks (done)
+- **M6.2** P0+P1 hardening — MCP calibrate/evaluate precision, reviewer randomization, Elevated Bash guard, --session delegations, regex validation, expire audit trail (done)
 - **M7** Library Guardian — prompt validation, file integrity, trust elevation (planned)
 
 ## Current State (2026-04-03)
 
-**Branch:** `main` (v0.6.1)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes)
+**Branch:** `main` (v0.6.2)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention)
 **Next:** M7 (Library Guardian — prompt validation, integrity checks)
 
 ## Key Docs
