@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.5.0 (semver, single workspace version)
+- **Version:** 0.6.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -32,7 +32,7 @@ Rust workspace with 4 crates:
 Three CC integration points:
 1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
-3. **MCP (proactive):** CC calls 20 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
+3. **MCP (proactive):** CC calls 21 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
 
 Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > trust_circle > defaults`
 
@@ -103,7 +103,12 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - `generate_mission()` accepts optional `config_dir` for M4 prompt review detection — `None` skips detection (backward compatible)
 - Prompt review detection uses compound keyword matching: prefix ("review", "improve", "refine") + role name/id + suffix ("prompt", "instructions", "approach") — all three required to avoid false positives
 - Findings with `category: "prompt_improvement"` are suggestions from debate/mentor agents about role prompts — queryable via `findings_query`, human decides what to apply
-- Wisdom Library has 6 roles (pentester, auditor, researcher, security_architect, web_pentester, api_pentester) and 7 patterns (+ caido-pentest)
+- Wisdom Library has 6 built-in roles + 7 built-in patterns. New roles/patterns created via `library_create_role`/`library_create_pattern`
+- RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative) — each with distinct trust level, tools, methodology, safety rails
+- PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative) — aligned with agentic-patterns.com
+- `library_select` suggests creating a pattern when no existing one matches the mission
+- Generated role prompts have 5 sections: Core Responsibilities, Methodology (5 phases), Escalation, Output Format, Boundaries
+- Generated roles/patterns are starting points — human/CC customizes after creation
 - Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools, designed for bug bounty missions
 - `colmena setup` embeds all 22 default config + library files via `include_str!()` (~46KB) — binary is self-contained
 - Setup detects repo mode (Cargo.toml nearby) vs standalone mode (release binary) automatically
@@ -125,7 +130,8 @@ colmena setup [--dry-run] [--force]   # One-command onboarding: config + hooks +
 colmena library list                  # List roles + patterns
 colmena library show <id>             # Show role or pattern details
 colmena library select --mission "…"  # Pattern selector + mission generator
-colmena library create-role --id X    # Scaffold new role template
+colmena library create-role --id X --description "Y" [--category Z]  # Intelligent role creation
+colmena library create-pattern --id X --description "Y" [--topology Z]  # Pattern scaffolding
 colmena review list [--state pending]  # List peer reviews
 colmena review show <review-id>        # Review detail
 colmena elo show                       # ELO leaderboard
@@ -156,7 +162,8 @@ library_list       — list roles + patterns
 library_show       — show role/pattern details
 library_select     — recommend patterns for a mission
 library_generate   — generate CLAUDE.md per agent for a mission
-library_create_role — scaffold new role
+library_create_role — create role with intelligent defaults (8 categories)
+library_create_pattern — create pattern with topology detection (7 topologies)
 ```
 
 ## MCP Tools (M2)
@@ -195,11 +202,12 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M4** Mentor prompt refinement — debate pattern for prompt improvement suggestions (done)
 - **M4.1** Caido-native pentester roles — web_pentester + api_pentester + caido-pentest pattern (done)
 - **M5** Plug-and-play onboarding — `colmena setup` command (done)
+- **M6** Intelligent role & pattern creation — 8 role categories, 7 pattern topologies, pattern suggestion (done)
 
-## Current State (2026-04-02)
+## Current State (2026-04-03)
 
-**Branch:** `main` (v0.5.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M4, M4.1, M5 (colmena setup)
+**Branch:** `main` (v0.6.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation)
 **Next:** TBD
 
 ## Key Docs
@@ -215,3 +223,4 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/superpowers/specs/2026-04-02-mentor-prompt-refinement-design.md` — M4 spec (debate pattern for prompt improvement)
 - `docs/caido-pentester-roles-plan.md` — M4.1 plan (Caido-native web_pentester + api_pentester roles)
 - `docs/superpowers/specs/2026-04-02-colmena-setup-design.md` — M5 spec (colmena setup onboarding command)
+- `docs/superpowers/specs/2026-04-02-intelligent-role-creation-design.md` — M6 spec (intelligent role + pattern creation)

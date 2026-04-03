@@ -4,6 +4,8 @@ use crate::delegate::{DelegationConditions, RuntimeDelegation};
 use crate::elo::AgentRating;
 use crate::findings::{FindingsFilter, load_findings};
 use crate::library::{Role, Pattern};
+pub use crate::pattern_scaffold::{scaffold_pattern, PatternTopology, suggest_pattern_for_mission, PatternSuggestion};
+use crate::templates::{RoleCategory, detect_category, generate_role_yaml, generate_role_prompt};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -808,8 +810,14 @@ pub fn generate_prompt_review_context(
 
 // ── Role Scaffold Generator ───────────────────────────────────────────────────
 
-/// Create a new role scaffold in the library
-pub fn scaffold_role(id: &str, description: &str, library_dir: &Path) -> Result<(PathBuf, PathBuf)> {
+/// Create a new role scaffold in the library.
+/// If `category` is None, it is auto-detected from the description.
+pub fn scaffold_role(
+    id: &str,
+    description: &str,
+    category: Option<RoleCategory>,
+    library_dir: &Path,
+) -> Result<(PathBuf, PathBuf)> {
     // Validate role ID
     if id.is_empty() || id.len() > 64 {
         anyhow::bail!("Role ID must be 1-64 characters, got {}", id.len());
@@ -835,51 +843,10 @@ pub fn scaffold_role(id: &str, description: &str, library_dir: &Path) -> Result<
     std::fs::create_dir_all(library_dir.join("roles"))?;
     std::fs::create_dir_all(library_dir.join("prompts"))?;
 
-    let role_yaml = format!(
-        r#"name: {name}
-id: {id}
-icon: "🔧"
-description: "{description}"
+    let resolved_category = category.unwrap_or_else(|| detect_category(description));
 
-system_prompt_ref: prompts/{id}.md
-
-default_trust_level: ask
-tools_allowed: [Read, Glob, Grep, WebFetch, WebSearch]
-
-specializations: []
-
-# Firewall permissions — auto-generated as delegations when a mission uses this role.
-# Uncomment and customize to define what this role can do without asking.
-# permissions:
-#   bash_patterns: []
-#   path_within: ['${{MISSION_DIR}}']
-#   path_not_match: ['*.env', '*credentials*', '*.key']
-
-elo:
-  initial: 1500
-  categories: {{}}
-
-mentoring:
-  can_mentor: []
-  mentored_by: [security_architect]
-"#,
-        name = id.replace(['_', '-'], " "),
-        id = id,
-        description = description.replace('"', "\\\""),
-    );
-
-    let name = id.replace(['_', '-'], " ");
-    let prompt_md = format!(
-        "# {name}\n\n{description}\n\n\
-        ## Tools Available\n\n\
-        The following tools are pre-approved for your role:\n\
-        - Read, Glob, Grep — codebase exploration\n\
-        - WebFetch, WebSearch — external research\n\n\
-        Customize this list in `roles/{id}.yaml` under `tools_allowed`.\n\
-        Add `permissions.bash_patterns` to define auto-approved Bash commands.\n\n\
-        ## Output Format\n\n\
-        TODO: Define expected output format.\n",
-    );
+    let role_yaml = generate_role_yaml(id, description, resolved_category);
+    let prompt_md = generate_role_prompt(id, description, resolved_category);
 
     std::fs::write(&role_path, role_yaml)?;
     std::fs::write(&prompt_path, prompt_md)?;
@@ -1099,6 +1066,7 @@ mod tests {
         let (role_path, prompt_path) = scaffold_role(
             "cloud_engineer",
             "Manages cloud infrastructure and deployments",
+            None,
             library_dir,
         )
         .expect("scaffold_role should succeed");
@@ -1114,7 +1082,7 @@ mod tests {
 
         // prompt md should contain the id
         let md_contents = std::fs::read_to_string(&prompt_path).unwrap();
-        assert!(md_contents.contains("cloud engineer"));
+        assert!(md_contents.to_lowercase().contains("cloud engineer"));
     }
 
     // ── 5. generate_mission ───────────────────────────────────────────────────
@@ -1236,19 +1204,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         // Newline injection
-        let result = scaffold_role("evil\nid: hacked", "desc", tmp.path());
+        let result = scaffold_role("evil\nid: hacked", "desc", None, tmp.path());
         assert!(result.is_err(), "newline in ID should be rejected");
 
         // Path traversal
-        let result = scaffold_role("../../../etc/passwd", "desc", tmp.path());
+        let result = scaffold_role("../../../etc/passwd", "desc", None, tmp.path());
         assert!(result.is_err(), "path traversal in ID should be rejected");
 
         // Empty
-        let result = scaffold_role("", "desc", tmp.path());
+        let result = scaffold_role("", "desc", None, tmp.path());
         assert!(result.is_err(), "empty ID should be rejected");
 
         // Valid ID works
-        let result = scaffold_role("cloud-security", "Cloud specialist", tmp.path());
+        let result = scaffold_role("cloud-security", "Cloud specialist", None, tmp.path());
         assert!(result.is_ok(), "valid ID should succeed: {:?}", result);
     }
 
@@ -1259,11 +1227,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
 
         // First create succeeds
-        let result = scaffold_role("test-role", "Test", tmp.path());
+        let result = scaffold_role("test-role", "Test", None, tmp.path());
         assert!(result.is_ok(), "first scaffold should succeed: {:?}", result);
 
         // Second create fails (already exists)
-        let result = scaffold_role("test-role", "Test", tmp.path());
+        let result = scaffold_role("test-role", "Test", None, tmp.path());
         assert!(result.is_err(), "second scaffold should fail");
         assert!(
             result.unwrap_err().to_string().contains("already exists"),

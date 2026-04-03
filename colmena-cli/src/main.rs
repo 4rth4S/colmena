@@ -160,7 +160,7 @@ enum LibraryAction {
         #[arg(long)]
         mission: String,
     },
-    /// Create a new role scaffold
+    /// Create a new role with intelligent defaults
     CreateRole {
         /// Role ID (e.g., "cloud-security")
         #[arg(long)]
@@ -168,6 +168,21 @@ enum LibraryAction {
         /// Role description
         #[arg(long)]
         description: String,
+        /// Category: offensive, defensive, compliance, architecture, research, development, operations, creative
+        #[arg(long)]
+        category: Option<String>,
+    },
+    /// Create a new pattern scaffold
+    CreatePattern {
+        /// Pattern ID (e.g., "parallel-audit")
+        #[arg(long)]
+        id: String,
+        /// Pattern description
+        #[arg(long)]
+        description: String,
+        /// Topology: hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative
+        #[arg(long)]
+        topology: Option<String>,
     },
 }
 
@@ -235,7 +250,8 @@ fn main() {
             LibraryAction::List => run_library_list(),
             LibraryAction::Show { id } => run_library_show(id),
             LibraryAction::Select { mission } => run_library_select(mission),
-            LibraryAction::CreateRole { id, description } => run_library_create_role(id, description),
+            LibraryAction::CreateRole { id, description, category } => run_library_create_role(id, description, category),
+            LibraryAction::CreatePattern { id, description, topology } => run_library_create_pattern(id, description, topology),
         },
         Commands::Review { action } => match action {
             ReviewAction::List { state } => run_review_list(state),
@@ -932,14 +948,37 @@ fn run_library_select(mission: String) -> Result<()> {
     Ok(())
 }
 
-fn run_library_create_role(id: String, description: String) -> Result<()> {
+fn run_library_create_role(id: String, description: String, category: Option<String>) -> Result<()> {
     let library_dir = default_library_dir();
 
-    let (role_path, prompt_path) = scaffold_role(&id, &description, &library_dir)?;
+    let category = category
+        .as_deref()
+        .map(|c| c.parse::<colmena_core::templates::RoleCategory>())
+        .transpose()?;
 
-    println!("Created role scaffold for '{id}':");
-    println!("  Role YAML:   {} — edit to customize tools, specializations, ELO", role_path.display());
-    println!("  Prompt file: {} — edit to customize system prompt", prompt_path.display());
+    let (role_path, prompt_path) = scaffold_role(&id, &description, category, &library_dir)?;
+
+    let resolved = category.unwrap_or_else(|| colmena_core::templates::detect_category(&description));
+    println!("Created role '{id}' (category: {resolved}):");
+    println!("  Role YAML:   {}", role_path.display());
+    println!("  Prompt file: {}", prompt_path.display());
+
+    Ok(())
+}
+
+fn run_library_create_pattern(id: String, description: String, topology: Option<String>) -> Result<()> {
+    let library_dir = default_library_dir();
+
+    let topology = topology
+        .as_deref()
+        .map(|t| t.parse::<colmena_core::pattern_scaffold::PatternTopology>())
+        .transpose()?;
+
+    let pattern_path = colmena_core::pattern_scaffold::scaffold_pattern(&id, &description, topology, &library_dir)?;
+
+    let resolved = topology.unwrap_or_else(|| colmena_core::pattern_scaffold::detect_topology(&description));
+    println!("Created pattern '{id}' (topology: {resolved}):");
+    println!("  Pattern YAML: {}", pattern_path.display());
 
     Ok(())
 }
