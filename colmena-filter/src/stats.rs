@@ -28,8 +28,24 @@ pub struct FilterStatsSummary {
     pub top_commands: Vec<(String, usize)>,
 }
 
+/// Maximum stats log size before rotation (10 MiB).
+const MAX_STATS_LOG_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Rotate the stats log if it has exceeded MAX_STATS_LOG_BYTES.
+/// The current log is renamed to `stats.jsonl.1`, overwriting any previous rotation.
+/// Best-effort: silently ignores rotation errors (append still proceeds normally).
+fn maybe_rotate(log_path: &Path) {
+    let size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
+    if size >= MAX_STATS_LOG_BYTES {
+        let rotated = log_path.with_extension("jsonl.1");
+        let _ = std::fs::rename(log_path, rotated);
+    }
+}
+
 /// Append a stats event to the JSONL log. Best-effort, never fails caller.
 pub fn log_filter_stats(log_path: &Path, event: &FilterStatsEvent) -> std::io::Result<()> {
+    maybe_rotate(log_path);
+
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -157,5 +173,27 @@ mod tests {
         let summary = summarize(&[]);
         assert_eq!(summary.total_events, 0);
         assert_eq!(summary.avg_reduction_pct, 0.0);
+    }
+
+    #[test]
+    fn test_stats_log_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stats.jsonl");
+
+        // Write enough data to exceed the 10 MiB threshold
+        std::fs::write(&path, "x".repeat(10 * 1024 * 1024 + 1)).unwrap();
+
+        // Log a new event — triggers rotation
+        let event = make_event("cargo test", 1000, 500);
+        log_filter_stats(&path, &event).unwrap();
+
+        // Original file should now contain only the new event
+        let events = read_filter_stats(&path).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].command_prefix, "cargo test");
+
+        // Rotated file should exist
+        let rotated = dir.path().join("stats.jsonl.1");
+        assert!(rotated.exists());
     }
 }

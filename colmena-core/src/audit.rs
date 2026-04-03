@@ -75,6 +75,10 @@ pub enum AuditEvent<'a> {
         new_tier: &'a str,
         elo: i32,
     },
+    /// Hook watchdog timeout
+    Timeout {
+        reason: &'a str,
+    },
 }
 
 /// Format an audit event as a single log line.
@@ -124,6 +128,9 @@ fn format_event(event: &AuditEvent) -> String {
         }
         AuditEvent::Calibration { agent, old_tier, new_tier, elo } => {
             format!("[{ts}] CALIBRATION agent={agent} old_tier={old_tier} new_tier={new_tier} elo={elo}")
+        }
+        AuditEvent::Timeout { reason } => {
+            format!("[{ts}] TIMEOUT reason={reason}")
         }
     }
 }

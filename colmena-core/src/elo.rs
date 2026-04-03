@@ -98,8 +98,24 @@ pub fn decay_factor(event_ts: DateTime<Utc>, now: DateTime<Utc>) -> f64 {
     }
 }
 
+/// Maximum ELO log size before rotation (10 MiB).
+const MAX_ELO_LOG_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Rotate the ELO log if it has exceeded MAX_ELO_LOG_BYTES.
+/// The current log is renamed to `.jsonl.1`, overwriting any previous rotation.
+/// Best-effort: silently ignores rotation errors (append still proceeds normally).
+fn maybe_rotate(log_path: &Path) {
+    let size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
+    if size >= MAX_ELO_LOG_BYTES {
+        let rotated = log_path.with_extension("jsonl.1");
+        let _ = std::fs::rename(log_path, rotated);
+    }
+}
+
 /// Append an ELO event to a JSONL log file. Creates parent dirs if needed.
 pub fn log_elo_event(log_path: &Path, event: &EloEvent) -> Result<()> {
+    maybe_rotate(log_path);
+
     if let Some(parent) = log_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating parent dirs for {}", log_path.display()))?;
@@ -405,5 +421,42 @@ mod tests {
         assert_eq!(finding_delta_author("high"), -5);
         assert_eq!(finding_delta_author("medium"), 0);
         assert_eq!(finding_delta_author("low"), 0);
+    }
+
+    #[test]
+    fn test_elo_log_rotation() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("elo-log.jsonl");
+
+        // Create an oversized log file (just over 10 MiB)
+        let filler = "x".repeat(1024);
+        {
+            let mut f = std::fs::File::create(&log_path).unwrap();
+            for _ in 0..(10 * 1024 + 1) {
+                use std::io::Write;
+                writeln!(f, "{}", filler).unwrap();
+            }
+        }
+        assert!(std::fs::metadata(&log_path).unwrap().len() >= MAX_ELO_LOG_BYTES);
+
+        let event = EloEvent {
+            agent: "tester".to_string(),
+            event_type: EloEventType::Reviewed,
+            delta: 5,
+            reason: "rotation test".to_string(),
+            mission: "test-mission".to_string(),
+            review_id: "rev-rot".to_string(),
+        };
+
+        log_elo_event(&log_path, &event).unwrap();
+
+        // Old file should have been rotated
+        let rotated = log_path.with_extension("jsonl.1");
+        assert!(rotated.exists(), "rotated file should exist");
+
+        // New log should contain only the fresh event
+        let events = read_elo_log(&log_path).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].agent, "tester");
     }
 }
