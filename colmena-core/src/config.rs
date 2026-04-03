@@ -205,6 +205,40 @@ fn resolve_project_dir(config: &mut FirewallConfig, cwd: &str) {
     }
 }
 
+/// Best-effort check: warn if config files are world-writable.
+/// Only checks on Unix. Returns warning messages (empty vec if OK).
+#[cfg(unix)]
+pub fn check_config_permissions(config_dir: &std::path::Path) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut warnings = Vec::new();
+    let critical_files = [
+        "trust-firewall.yaml",
+        "runtime-delegations.json",
+        "elo-overrides.json",
+        "audit.log",
+    ];
+    for name in &critical_files {
+        let path = config_dir.join(name);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            let mode = meta.permissions().mode();
+            if mode & 0o002 != 0 {
+                warnings.push(format!(
+                    "Security: {} is world-writable (mode {:o}). Consider: chmod 600 {}",
+                    name,
+                    mode & 0o777,
+                    path.display()
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+#[cfg(not(unix))]
+pub fn check_config_permissions(_config_dir: &std::path::Path) -> Vec<String> {
+    Vec::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,5 +431,31 @@ action: auto-approve
         let paths = cond.path_within.as_ref().unwrap();
         assert!(paths.contains(&"/Users/test/myproject".to_string()));
         assert!(!paths.iter().any(|p| p.contains("${PROJECT_DIR}")));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_check_config_permissions_no_warnings_on_safe_files() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("trust-firewall.yaml");
+        std::fs::write(&file_path, "version: 1").unwrap();
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let warnings = check_config_permissions(dir.path());
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_check_config_permissions_warns_world_writable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("trust-firewall.yaml");
+        std::fs::write(&file_path, "version: 1").unwrap();
+        std::fs::set_permissions(&file_path, std::fs::Permissions::from_mode(0o666)).unwrap();
+        let warnings = check_config_permissions(dir.path());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("world-writable"));
+        assert!(warnings[0].contains("trust-firewall.yaml"));
     }
 }
