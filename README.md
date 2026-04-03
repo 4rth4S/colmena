@@ -265,7 +265,8 @@ colmena stats                             # Filter token savings summary
 | `library_show` | Show role/pattern details |
 | `library_select` | Recommend patterns for a mission |
 | `library_generate` | Generate per-agent CLAUDE.md for a mission |
-| `library_create_role` | Scaffold a new role template |
+| `library_create_role` | Create role with intelligent defaults (8 categories) |
+| `library_create_pattern` | Create pattern with topology detection (7 topologies) |
 
 ### Peer Review + ELO (M2) — 6 tools
 
