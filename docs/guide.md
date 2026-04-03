@@ -1210,7 +1210,8 @@ All delegations expire automatically (max 24h).
 | `library_show` | Show role/pattern details |
 | `library_select` | Recommend patterns for mission |
 | `library_generate` | Generate per-agent CLAUDE.md |
-| `library_create_role` | Scaffold new role |
+| `library_create_role` | Create role with intelligent defaults |
+| `library_create_pattern` | Create pattern with topology detection |
 | `review_submit` | Submit artifact for review |
 | `review_list` | List reviews |
 | `review_evaluate` | Score and review artifact |
