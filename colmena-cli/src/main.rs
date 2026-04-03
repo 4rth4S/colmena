@@ -110,6 +110,9 @@ enum DelegateAction {
         /// TTL in hours (default: 4, max: 24)
         #[arg(long, default_value = "4")]
         ttl: i64,
+        /// Optional session ID — limits delegation to this CC session only
+        #[arg(long)]
+        session: Option<String>,
     },
     /// List active delegations
     List,
@@ -239,7 +242,7 @@ fn main() {
             QueueAction::Prune { older_than } => run_queue_prune(older_than),
         },
         Commands::Delegate { action } => match action {
-            DelegateAction::Add { tool, agent, ttl } => run_delegate(tool, agent, ttl),
+            DelegateAction::Add { tool, agent, ttl, session } => run_delegate(tool, agent, ttl, session),
             DelegateAction::List => run_delegate_list(),
             DelegateAction::Revoke { tool, agent } => run_delegate_revoke(tool, agent),
         },
@@ -365,18 +368,24 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         log_error(&format!("Config warning: {w}"));
     }
 
-    // 3. Load runtime delegations
-    let delegations_path = config_file
+    // 3. Load runtime delegations (with expired for audit logging)
+    let config_dir = config_file
         .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("runtime-delegations.json");
-    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let audit_path = config_dir.join("audit.log");
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let (delegations, expired) = colmena_core::delegate::load_delegations_with_expired(&delegations_path);
+    // Log expired delegations for audit trail
+    for exp in &expired {
+        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateExpire {
+            tool: &exp.tool,
+            agent: exp.agent_id.as_deref(),
+            source: exp.source.as_deref().unwrap_or("unknown"),
+        });
+    }
 
     // 3b. Load ELO-calibrated overrides (safe fallback: empty if missing)
-    let elo_overrides_path = config_file
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."))
-        .join("elo-overrides.json");
+    let elo_overrides_path = config_dir.join("elo-overrides.json");
     let elo_overrides = colmena_core::calibrate::load_overrides(&elo_overrides_path);
 
     // 4. Map HookPayload to EvaluationInput and evaluate
@@ -386,10 +395,6 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
-    let config_dir = config_file
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let audit_path = config_dir.join("audit.log");
     let action_str = match decision.action {
         Action::AutoApprove => "ALLOW",
         Action::Ask => "ASK",
@@ -564,7 +569,7 @@ fn run_queue_prune(older_than_days: i64) -> Result<()> {
     Ok(())
 }
 
-fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<()> {
+fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64, session: Option<String>) -> Result<()> {
     for w in colmena_core::config::validate_tool_name_single(&tool) {
         eprintln!("WARNING: {w}");
     }
@@ -596,7 +601,7 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<(
         action: Action::AutoApprove,
         created_at: now,
         expires_at,
-        session_id: None,
+        session_id: session.clone(),
         source: Some("human".to_string()),
         mission_id: None,
         conditions: None,
@@ -604,9 +609,11 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64) -> Result<(
 
     delegations.push(new_delegation);
 
-    // Warn about global scope (no --session)
-    eprintln!("WARNING: This delegation applies to ALL active CC sessions (no --session specified).");
-    eprintln!("         Use 'colmena delegate add --tool {} --session <id>' to limit scope.", tool);
+    // Warn about global scope only when no --session specified
+    if session.is_none() {
+        eprintln!("WARNING: This delegation applies to ALL active CC sessions (no --session specified).");
+        eprintln!("         Use 'colmena delegate add --tool {} --session <id>' to limit scope.", tool);
+    }
 
     colmena_core::delegate::save_delegations(&delegations_path, &delegations)?;
 
