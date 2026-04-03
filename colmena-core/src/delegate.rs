@@ -126,6 +126,15 @@ pub fn validate_bash_delegation(delegation: &RuntimeDelegation) -> Result<()> {
                      Unscoped Bash delegations auto-approve ALL commands."
                 )
             }
+            // Validate bash_pattern regex compiles (prevent silently inactive delegations)
+            if let Some(ref pattern) = conditions.bash_pattern {
+                if regex::Regex::new(pattern).is_err() {
+                    anyhow::bail!(
+                        "Invalid bash_pattern regex '{}' in Bash delegation. Pattern must be a valid regex.",
+                        pattern
+                    );
+                }
+            }
             Ok(())
         }
         None => {
@@ -465,6 +474,28 @@ mod tests {
         };
         let result2 = validate_bash_delegation(&d2);
         assert!(result2.is_err());
+    }
+
+    #[test]
+    fn test_validate_bash_delegation_rejects_invalid_regex() {
+        let d = RuntimeDelegation {
+            tool: "Bash".to_string(),
+            agent_id: Some("test".to_string()),
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: Some("test".to_string()),
+            mission_id: None,
+            conditions: Some(DelegationConditions {
+                bash_pattern: Some("(?P<broken>".to_string()),
+                path_within: None,
+                path_not_match: None,
+            }),
+        };
+        let result = validate_bash_delegation(&d);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid bash_pattern regex"));
     }
 
     #[test]

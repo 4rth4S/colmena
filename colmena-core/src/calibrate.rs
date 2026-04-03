@@ -231,16 +231,16 @@ fn generate_elevated_rules(
                     rules.push(Rule {
                         tools: vec!["Bash".to_string()],
                         conditions: None,
-                        action: Action::AutoApprove,
-                        reason: Some(format!("Elevated trust: all Bash for role '{}'", role.id)),
+                        action: Action::Ask,
+                        reason: Some(format!("Elevated trust: Bash requires patterns for auto-approve (role '{}')", role.id)),
                     });
                 }
             } else {
                 rules.push(Rule {
                     tools: vec!["Bash".to_string()],
                     conditions: None,
-                    action: Action::AutoApprove,
-                    reason: Some(format!("Elevated trust: all Bash for role '{}'", role.id)),
+                    action: Action::Ask,
+                    reason: Some(format!("Elevated trust: Bash requires patterns for auto-approve (role '{}')", role.id)),
                 });
             }
         }
@@ -506,9 +506,11 @@ mod tests {
         let result = calibrate(&ratings, &roles, &thresholds, &HashMap::new());
 
         let rules = result.agent_overrides.get("auditor").unwrap();
-        // Should have: 1 rule for Read + 1 rule for all Bash
+        // Should have: 1 rule for Read (auto-approve) + 1 rule for Bash (ask, no patterns)
         assert_eq!(rules.len(), 2);
-        assert!(rules.iter().any(|r| r.tools == vec!["Bash"] && r.conditions.is_none()));
+        let bash_rule = rules.iter().find(|r| r.tools == vec!["Bash"] && r.conditions.is_none()).unwrap();
+        // Without bash_patterns, Bash must NOT be auto-approved (security: DREAD 5.6)
+        assert_eq!(bash_rule.action, Action::Ask);
     }
 
     #[test]

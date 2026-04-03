@@ -32,6 +32,7 @@ pub enum AuditEvent<'a> {
     DelegateExpire {
         tool: &'a str,
         agent: Option<&'a str>,
+        source: &'a str,
     },
     /// Delegation revoked
     DelegateRevoke {
@@ -103,9 +104,9 @@ fn format_event(event: &AuditEvent) -> String {
             let agent = agent.unwrap_or("*");
             format!("[{ts}] DELEGATE_MATCH tool={tool} agent={agent}")
         }
-        AuditEvent::DelegateExpire { tool, agent } => {
+        AuditEvent::DelegateExpire { tool, agent, source } => {
             let agent = agent.unwrap_or("*");
-            format!("[{ts}] DELEGATE_EXPIRE tool={tool} agent={agent}")
+            format!("[{ts}] DELEGATE_EXPIRE tool={tool} agent={agent} source={source}")
         }
         AuditEvent::DelegateRevoke { tool, agent } => {
             let agent = agent.unwrap_or("*");
