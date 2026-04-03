@@ -128,9 +128,26 @@ fn format_event(event: &AuditEvent) -> String {
     }
 }
 
+/// Maximum audit log size before rotation (10 MiB).
+/// M5: Without a size cap, the log grows unboundedly and session_stats() would
+/// read the entire file into memory, risking OOM on long-running deployments.
+const MAX_AUDIT_LOG_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Rotate the audit log if it has exceeded MAX_AUDIT_LOG_BYTES.
+/// The current log is renamed to `audit.log.1`, overwriting any previous rotation.
+/// Best-effort: silently ignores rotation errors (append still proceeds normally).
+fn maybe_rotate(audit_log: &Path) {
+    let size = std::fs::metadata(audit_log).map(|m| m.len()).unwrap_or(0);
+    if size >= MAX_AUDIT_LOG_BYTES {
+        let rotated = audit_log.with_extension("log.1");
+        let _ = std::fs::rename(audit_log, rotated);
+    }
+}
+
 /// Append an audit event to the audit log file.
 /// Best-effort: never panics, never fails the caller. Returns Ok/Err for testing.
 pub fn log_event(audit_log: &Path, event: &AuditEvent) -> std::io::Result<()> {
+    maybe_rotate(audit_log);
     let line = format_event(event);
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -186,9 +203,13 @@ pub struct SessionStats {
 }
 
 /// Parse audit log and compute stats for a specific session (or all sessions if None).
+/// M5: Uses BufReader for line-by-line reading to avoid loading the entire (possibly
+/// large, post-rotation) log file into memory at once.
 pub fn session_stats(audit_log: &Path, session_id: Option<&str>) -> SessionStats {
-    let contents = match std::fs::read_to_string(audit_log) {
-        Ok(c) => c,
+    use std::io::{BufRead, BufReader};
+
+    let file = match std::fs::File::open(audit_log) {
+        Ok(f) => f,
         Err(_) => return SessionStats::default(),
     };
 
@@ -196,7 +217,11 @@ pub fn session_stats(audit_log: &Path, session_id: Option<&str>) -> SessionStats
     let mut agents = std::collections::HashSet::new();
     let mut tools = std::collections::HashSet::new();
 
-    for line in contents.lines() {
+    for line_result in BufReader::new(file).lines() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => break,
+        };
         // Filter by session if provided
         if let Some(sid) = session_id {
             if !line.contains(&format!("session={sid}")) {

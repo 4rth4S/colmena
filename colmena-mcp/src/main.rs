@@ -7,6 +7,19 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
+/// M3: Shell-escape a CLI argument to prevent injection in generated command strings.
+///
+/// Arguments containing only alphanumeric chars, `-`, `_`, or `.` are passed through
+/// unchanged. All other values are single-quoted (POSIX shell safe) with internal
+/// single-quotes escaped via the `'\''` sequence.
+fn safe_cli_arg(s: &str) -> String {
+    if s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Input types — each tool gets its own params struct
 // ---------------------------------------------------------------------------
@@ -261,9 +274,9 @@ impl ColmenaServer {
         let ttl = input.ttl.clamp(1, colmena_core::delegate::MAX_TTL_HOURS);
         let scope = input.agent.as_deref().unwrap_or("all agents");
 
-        let mut cmd = format!("colmena delegate add --tool {} --ttl {}", input.tool, ttl);
+        let mut cmd = format!("colmena delegate add --tool {} --ttl {}", safe_cli_arg(&input.tool), ttl);
         if let Some(ref agent) = input.agent {
-            cmd.push_str(&format!(" --agent {}", agent));
+            cmd.push_str(&format!(" --agent {}", safe_cli_arg(agent)));
         }
 
         Ok(format!(
@@ -314,9 +327,9 @@ impl ColmenaServer {
         Parameters(input): Parameters<DelegateRevokeInput>,
     ) -> Result<String, String> {
         // Read-only: returns CLI command for human to execute
-        let mut cmd = format!("colmena delegate revoke --tool {}", input.tool);
+        let mut cmd = format!("colmena delegate revoke --tool {}", safe_cli_arg(&input.tool));
         if let Some(ref agent) = input.agent {
-            cmd.push_str(&format!(" --agent {}", agent));
+            cmd.push_str(&format!(" --agent {}", safe_cli_arg(agent)));
         }
 
         Ok(format!(
@@ -992,7 +1005,7 @@ impl ColmenaServer {
         &self,
         Parameters(input): Parameters<MissionDeactivateInput>,
     ) -> Result<String, String> {
-        let cmd = format!("colmena mission deactivate --id {}", input.mission_id);
+        let cmd = format!("colmena mission deactivate --id {}", safe_cli_arg(&input.mission_id));
         Ok(format!(
             "Mission deactivation requested for '{}'.\n\n\
              To confirm, run this command in the terminal:\n\n  {}\n\n\
