@@ -96,6 +96,11 @@ restricted:
     action: ask
     reason: 'Peer review operations require human oversight'
 
+  # Library creation requires human review (prevent library poisoning)
+  - tools: [mcp__colmena__library_create_role, mcp__colmena__library_create_pattern]
+    action: ask
+    reason: 'Library creation requires human review to prevent prompt poisoning'
+
   # External communications
   - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]
     action: ask
