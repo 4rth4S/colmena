@@ -365,7 +365,12 @@ mod tests {
 
         assert!(entry.review_id.starts_with("r_"));
         assert_eq!(entry.author_role, "coder");
-        assert_eq!(entry.reviewer_role, "pentester");
+        // Reviewer is randomized (M6.2 collusion prevention) — verify it's a valid candidate, not the author
+        assert!(
+            entry.reviewer_role == "pentester" || entry.reviewer_role == "architect",
+            "reviewer_role should be a non-author candidate, got: {}",
+            entry.reviewer_role
+        );
         assert_eq!(entry.mission, "audit-payments");
         assert_eq!(entry.state, ReviewState::Pending);
         assert!(entry.artifact_hash.starts_with("sha256:"));
