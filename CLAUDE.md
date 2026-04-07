@@ -155,6 +155,7 @@ colmena mission deactivate --id X      # Revoke all delegations for a mission
 colmena calibrate run                  # Run ELO-based trust calibration
 colmena calibrate show                 # Show current trust tiers per agent
 colmena calibrate reset                # Clear all ELO-based overrides
+colmena doctor                         # Full health check: config, hooks, MCP, library, runtime, permissions
 colmena stats                          # Combined firewall + filter savings summary
 colmena stats --session <id>           # Stats for a specific session
 ```
