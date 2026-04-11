@@ -1,4 +1,5 @@
 mod defaults;
+mod doctor;
 mod hook;
 mod install;
 mod notify;
@@ -95,6 +96,8 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Diagnose the health of a Colmena installation
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -278,6 +281,7 @@ fn main() {
             None => run_stats(),
         },
         Commands::Setup { dry_run, force } => setup::run_setup(dry_run, force),
+        Commands::Doctor => doctor::run_doctor(),
     };
 
     if let Err(e) = result {
