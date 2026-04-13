@@ -11,6 +11,7 @@ const RUNTIME_FILES: &[&str] = &[
     "elo-overrides.json",
     "filter-stats.jsonl",
     "elo-events.jsonl",
+    "revoked-missions.json",
     "queue",
     "missions",
 ];
@@ -469,7 +470,7 @@ fn print_summary(
     if hooks_ok {
         let settings_path = crate::install::settings_json_path();
         println!(
-            "Hooks:   {} Pre/PostToolUse in {}",
+            "Hooks:   {} Pre/PostToolUse/PermissionRequest in {}",
             if dry_run { "~" } else { "ok" },
             settings_path.display()
         );
@@ -585,7 +586,7 @@ pub fn run_setup(dry_run: bool, force: bool) -> Result<()> {
     // Step 4: Register hooks
     let hooks_ok;
     if dry_run {
-        println!("\n  [would register] Pre/PostToolUse hooks in ~/.claude/settings.json");
+        println!("\n  [would register] Pre/PostToolUse/PermissionRequest hooks in ~/.claude/settings.json");
         hooks_ok = false;
     } else {
         println!("\nRegistering hooks...");

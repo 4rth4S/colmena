@@ -546,8 +546,8 @@
 <span class="comment">         |     Agent tool para sub-agentes |</span>
 <span class="comment">         +--+--------------+---------------+</span>
 <span class="comment">            |              |</span>
-<span class="comment">       PreToolUse      MCP stdio</span>
-<span class="comment">        (hook)        (20 tools)</span>
+<span class="comment">  PreToolUse  PermissionReq  MCP stdio</span>
+<span class="comment">   (hook)       (hook)      (21 tools)</span>
 <span class="comment">            |              |</span>
 <span class="comment">         +--+--------------+---------------+</span>
 <span class="comment">         |          COLMENA                |</span>
@@ -564,9 +564,13 @@
         <h3 style="font-size: 1rem;">PostToolUse (filtrado)</h3>
         <p style="font-size: 0.9rem;">Filtra outputs de Bash: strip ANSI, dedup lineas repetidas, truncado inteligente. Ahorra tokens automaticamente.</p>
       </div>
+      <div class="card" style="margin-bottom: 12px; border-left: 3px solid var(--cyan);">
+        <h3 style="font-size: 1rem; color: var(--cyan);">PermissionRequest (auto-approve)</h3>
+        <p style="font-size: 0.9rem;">Intercepta prompts de CC para agentes en mision. Si el rol permite el tool, auto-aprueba y ensena reglas de sesion a CC. Calls posteriores: sin hooks.</p>
+      </div>
       <div class="card green-border" style="margin-bottom: 12px;">
         <h3 style="font-size: 1rem; color: var(--green);">MCP (proactivo)</h3>
-        <p style="font-size: 0.9rem;">CC llama 20 herramientas nativamente: patterns, misiones, reviews, ELO, findings, stats, calibracion.</p>
+        <p style="font-size: 0.9rem;">CC llama 21 herramientas nativamente: patterns, misiones, reviews, ELO, findings, stats, calibracion.</p>
       </div>
       <div class="card" style="padding: 16px;">
         <h3 style="font-size: 1rem;">Principio de diseno</h3>
@@ -594,7 +598,7 @@
                             <span class="keyword">default</span>     --> ask   (fallback seguro)
 
 <span class="comment"># Precedencia:</span>
-<span class="string">blocked > delegations > agent_overrides > ELO overrides > restricted > trust_circle > defaults</span></div>
+<span class="string">blocked > delegations > agent_overrides > ELO > restricted > chain_guard > mission_revoked > trust_circle > defaults</span></div>
       <div class="card" style="margin-top: 16px; padding: 16px;">
         <h3 style="font-size: 0.95rem;">Garantia de seguridad</h3>
         <p style="font-size: 0.9rem;">Cualquier falla del hook retorna <code>"ask"</code>, nunca <code>"deny"</code>. El humano siempre tiene la ultima palabra en casos borde.</p>
@@ -960,7 +964,7 @@
 <!-- Slide 11: Arquitectura + Roadmap -->
 <div class="slide slide-dense" id="s11">
   <span class="tag cyan">Arquitectura + Roadmap</span>
-  <h2 style="margin-top: 16px;">Rust workspace, 3 crates, <span class="highlight">20 MCP tools</span></h2>
+  <h2 style="margin-top: 16px;">Rust workspace, 4 crates, <span class="highlight">21 MCP tools</span></h2>
   <div class="grid-2" style="align-items: start;">
     <div>
       <div class="grid-2" style="gap: 12px; margin-top: 0;">
@@ -969,11 +973,11 @@
           <div class="stat-label">Hook latency</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number green" style="font-size: 3rem;">184</div>
+          <div class="stat-number green" style="font-size: 3rem;">281</div>
           <div class="stat-label">Tests passing</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number purple" style="font-size: 3rem;">20</div>
+          <div class="stat-number purple" style="font-size: 3rem;">21</div>
           <div class="stat-label">MCP tools</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
@@ -988,7 +992,8 @@
           <span class="tag green" style="font-size: 0.7rem;">Library</span> library_list, library_show, library_select, library_generate, library_create_role, library_create_pattern<br>
           <span class="tag blue" style="font-size: 0.7rem;">Review</span> review_submit, review_list, review_evaluate<br>
           <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings, findings_query, findings_list<br>
-          <span class="tag cyan" style="font-size: 0.7rem;">Ops</span> mission_deactivate, calibrate, session_stats
+          <span class="tag cyan" style="font-size: 0.7rem;">Ops</span> mission_deactivate, calibrate, session_stats<br>
+          <span class="tag" style="font-size: 0.7rem; border-color: var(--cyan); color: var(--cyan);">Hook</span> PermissionRequest &rarr; role tools_allowed auto-approve + CC session rules
         </p>
       </div>
       <div class="card" style="margin-top: 12px; padding: 16px;">
@@ -1034,11 +1039,25 @@
             <p style="font-size: 0.85rem; color: var(--text-dim);">ELO reviewer lead, review instructions en CLAUDE.md, pipeline spawn → review → learn</p>
           </div>
         </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M4-M5</span> Prompt Refinement + Caido + Setup</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Debate para mejora de prompts, roles Caido-native, colmena setup plug-and-play</p>
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6-M6.3</span> Roles Inteligentes + Firewall Auto-Approve</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">8 categorias de roles, PermissionRequest hook, session rules, mission revocation kill switch</p>
+          </div>
+        </div>
         <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0;">
           <span class="tag amber" style="font-size: 0.7rem; min-width: 50px; text-align: center;">NEXT</span>
           <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M4</span> Mentor Prompt Refinement</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Debate pattern para mejora de prompts. Agentes sugieren, humanos deciden.</p>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M7</span> Library Guardian</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">Validacion de prompts, integridad de archivos, trust elevation para Wisdom Library</p>
           </div>
         </div>
       </div>
