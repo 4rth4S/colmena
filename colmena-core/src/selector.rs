@@ -326,6 +326,7 @@ pub fn generate_mission(
             &reviewer_lead,
             &mission_name,
             &recommendation.role_assignments,
+            role.role_type.as_deref(),
         );
 
         // Append prompt review context if this is a prompt review mission
@@ -605,6 +606,7 @@ fn build_review_section(
     reviewer_lead: &Option<ReviewerLead>,
     mission_id: &str,
     all_assignments: &[RoleAssignment],
+    role_type: Option<&str>,
 ) -> String {
     let reviewer_lead = match reviewer_lead {
         Some(rl) => rl,
@@ -619,7 +621,7 @@ fn build_review_section(
 
     if role_id == reviewer_lead.role_id {
         // This agent IS the reviewer lead
-        format!(
+        let base = format!(
             "## Review Responsibility\n\n\
             You are the designated reviewer (highest ELO in this squad, ELO: {}).\n\
             When you receive review assignments via `mcp__colmena__review_list`:\n\
@@ -629,7 +631,29 @@ fn build_review_section(
             4. Use category `prompt_improvement` for suggestions about the agent's approach or prompt\n\
             5. Be constructive — findings feed into ELO and help calibrate trust over time",
             reviewer_lead.elo,
-        )
+        );
+
+        // Auditor role_type gets the evaluation protocol
+        if role_type == Some("auditor") {
+            format!(
+                "{}\n\n\
+                ## Evaluation Protocol\n\n\
+                When evaluating a worker's submission via mcp__colmena__review_evaluate:\n\
+                1. Read the artifact (diff/commit) thoroughly\n\
+                2. Score each dimension: correctness, security, completeness, methodology (1-10 each)\n\
+                3. Document your reasoning for each score in the evaluation_narrative field\n\
+                4. Generate 3 alternative evaluation approaches you considered but rejected, explaining why\n\
+                5. List all findings with severity and recommendations\n\
+                6. Include the full narrative + alternatives in the evaluation_narrative parameter\n\n\
+                Your evaluation narrative must include:\n\
+                - WHY you assigned each score (not just the numbers)\n\
+                - 3 alternative approaches with different scoring rationale\n\
+                - Which approach you chose and why",
+                base,
+            )
+        } else {
+            base
+        }
     } else {
         // This agent is a worker — should submit for review
         format!(
@@ -922,6 +946,7 @@ mod tests {
                 categories: Default::default(),
             },
             permissions: None,
+            role_type: None,
             mentoring: MentoringConfig {
                 can_mentor: vec![],
                 mentored_by: vec![],
