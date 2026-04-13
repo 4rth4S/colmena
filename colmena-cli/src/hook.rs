@@ -120,6 +120,83 @@ impl PostToolUseResponse {
     }
 }
 
+/// Response for PermissionRequest hooks — can teach CC persistent session rules.
+/// CC fires PermissionRequest when it's about to prompt the user for permission.
+/// Returning `allow` with `updatedPermissions` teaches CC to auto-approve future calls.
+#[derive(Debug, Serialize)]
+pub struct PermissionRequestResponse {
+    #[serde(rename = "hookSpecificOutput")]
+    pub hook_specific_output: PermissionRequestOutput,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PermissionRequestOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    pub decision: PermissionRequestDecision,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PermissionRequestDecision {
+    pub behavior: String,
+    #[serde(rename = "updatedPermissions", skip_serializing_if = "Option::is_none")]
+    pub updated_permissions: Option<Vec<PermissionUpdate>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// A permission update that CC applies to its session context.
+/// Corresponds to CC's internal PermissionUpdate type.
+#[derive(Debug, Serialize)]
+pub struct PermissionUpdate {
+    #[serde(rename = "type")]
+    pub update_type: String,
+    pub rules: Vec<PermissionRule>,
+    pub behavior: String,
+    pub destination: String,
+}
+
+/// A single permission rule for a tool.
+#[derive(Debug, Serialize)]
+pub struct PermissionRule {
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+}
+
+impl PermissionRequestResponse {
+    /// Allow the tool call and teach CC session rules.
+    pub fn allow_with_updates(updates: Vec<PermissionUpdate>) -> Self {
+        Self {
+            hook_specific_output: PermissionRequestOutput {
+                hook_event_name: "PermissionRequest".to_string(),
+                decision: PermissionRequestDecision {
+                    behavior: "allow".to_string(),
+                    updated_permissions: if updates.is_empty() {
+                        None
+                    } else {
+                        Some(updates)
+                    },
+                    message: None,
+                },
+            },
+        }
+    }
+
+    /// Deny the tool call with a reason message.
+    pub fn deny(message: impl Into<String>) -> Self {
+        Self {
+            hook_specific_output: PermissionRequestOutput {
+                hook_event_name: "PermissionRequest".to_string(),
+                decision: PermissionRequestDecision {
+                    behavior: "deny".to_string(),
+                    updated_permissions: None,
+                    message: Some(message.into()),
+                },
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +342,66 @@ mod tests {
         assert_eq!(eval.tool_use_id, "tu_003");
         assert_eq!(eval.agent_id, Some("worker".to_string()));
         assert_eq!(eval.cwd, "/tmp");
+    }
+
+    // ── PermissionRequest response tests ────────────────────────────────────
+
+    #[test]
+    fn test_serialize_permission_request_allow() {
+        let resp = PermissionRequestResponse::allow_with_updates(vec![]);
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(
+            json["hookSpecificOutput"]["hookEventName"],
+            "PermissionRequest"
+        );
+        assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        // No updatedPermissions when empty
+        assert!(!json["hookSpecificOutput"]["decision"]
+            .as_object()
+            .unwrap()
+            .contains_key("updatedPermissions"));
+    }
+
+    #[test]
+    fn test_serialize_permission_request_with_updates() {
+        let updates = vec![PermissionUpdate {
+            update_type: "addRules".to_string(),
+            rules: vec![
+                PermissionRule {
+                    tool_name: "Read".to_string(),
+                },
+                PermissionRule {
+                    tool_name: "mcp__caido__*".to_string(),
+                },
+            ],
+            behavior: "allow".to_string(),
+            destination: "session".to_string(),
+        }];
+
+        let resp = PermissionRequestResponse::allow_with_updates(updates);
+        let json = serde_json::to_value(&resp).unwrap();
+
+        let decision = &json["hookSpecificOutput"]["decision"];
+        assert_eq!(decision["behavior"], "allow");
+        let perms = decision["updatedPermissions"].as_array().unwrap();
+        assert_eq!(perms.len(), 1);
+        assert_eq!(perms[0]["type"], "addRules");
+        assert_eq!(perms[0]["behavior"], "allow");
+        assert_eq!(perms[0]["destination"], "session");
+        let rules = perms[0]["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0]["toolName"], "Read");
+        assert_eq!(rules[1]["toolName"], "mcp__caido__*");
+    }
+
+    #[test]
+    fn test_serialize_permission_request_deny() {
+        let resp = PermissionRequestResponse::deny("Mission revoked");
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["hookSpecificOutput"]["decision"]["behavior"], "deny");
+        assert_eq!(
+            json["hookSpecificOutput"]["decision"]["message"],
+            "Mission revoked"
+        );
     }
 }
