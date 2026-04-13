@@ -247,6 +247,7 @@ dependencies = [
  "chrono",
  "colmena-core",
  "colmena-filter",
+ "rand",
  "rmcp",
  "serde",
  "serde_json",
