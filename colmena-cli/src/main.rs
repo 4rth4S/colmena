@@ -348,6 +348,7 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
     match payload.hook_event_name.as_str() {
         "PreToolUse" => run_pre_tool_use_hook(payload, config_path),
         "PostToolUse" => run_post_tool_use_hook(payload),
+        "PermissionRequest" => run_permission_request_hook(payload),
         other => {
             log_error(&format!("Unknown hook event: {other}"));
             let response = hook::PostToolUseResponse::passthrough();
@@ -392,10 +393,13 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     let elo_overrides_path = config_dir.join("elo-overrides.json");
     let elo_overrides = colmena_core::calibrate::load_overrides(&elo_overrides_path);
 
+    // 3c. Load revoked agents for mission kill switch
+    let revoked_agents = colmena_core::delegate::load_revoked_missions(config_dir);
+
     // 4. Map HookPayload to EvaluationInput and evaluate
     let eval_input = payload.to_evaluation_input();
     let decision = colmena_core::firewall::evaluate_with_elo(
-        &cfg, &patterns, &delegations, &eval_input, &elo_overrides,
+        &cfg, &patterns, &delegations, &eval_input, &elo_overrides, &revoked_agents,
     );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
@@ -529,6 +533,99 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
     serde_json::to_writer(std::io::stdout(), &response)?;
 
     Ok(())
+}
+
+/// PermissionRequest: evaluate tool call against role tools_allowed and teach CC session rules.
+/// Fires when CC is about to prompt the user for permission.
+/// If agent has an active mission and the tool is in the role's tools_allowed,
+/// returns allow + updatedPermissions so CC auto-approves future calls.
+fn run_permission_request_hook(payload: hook::HookPayload) -> Result<()> {
+    // Safe fallback: any error → no output (CC continues to prompt user)
+    match run_permission_request_hook_inner(&payload) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            log_error(&format!("PermissionRequest error: {e:#}"));
+            Ok(()) // No output = CC prompts user (safe fallback)
+        }
+    }
+}
+
+fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+
+    // 1. Check if agent has active role delegation (mission was approved by human)
+    let agent_id = match &payload.agent_id {
+        Some(id) => id,
+        None => return Ok(()), // No agent_id → not a mission agent, pass through
+    };
+
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+
+    let has_role_delegation = delegations.iter().any(|d| {
+        d.agent_id.as_deref() == Some(agent_id.as_str())
+            && d.source.as_deref() == Some("role")
+    });
+
+    if !has_role_delegation {
+        return Ok(()); // No active mission, let CC prompt user
+    }
+
+    // 2. Load role tools map
+    let library_dir = colmena_core::library::default_library_dir();
+    let roles = colmena_core::library::load_roles(&library_dir)?;
+    let role_tools_map = colmena_core::library::build_role_tools_map(&roles);
+
+    let role_data = match role_tools_map.get(agent_id.as_str()) {
+        Some(r) => r,
+        None => return Ok(()), // agent_id doesn't match a known role
+    };
+
+    // 3. Check if tool is in role's tools_allowed
+    if !role_data.allows_tool(&payload.tool_name) {
+        return Ok(()); // Tool not allowed for this role, let CC prompt user
+    }
+
+    // 4. Tool is allowed → teach CC session rules for ALL tools this role can use
+    let permission_updates = build_permission_updates(role_data);
+    let response = hook::PermissionRequestResponse::allow_with_updates(permission_updates);
+    serde_json::to_writer(std::io::stdout(), &response)
+        .context("Failed to write PermissionRequest response")?;
+
+    // 5. Audit log
+    let audit_path = config_dir.join("audit.log");
+    let _ = colmena_core::audit::log_event(
+        &audit_path,
+        &colmena_core::audit::AuditEvent::RoleToolsAllow {
+            agent: agent_id,
+            tool: &payload.tool_name,
+            role_id: agent_id,
+        },
+    );
+
+    Ok(())
+}
+
+/// Build PermissionUpdate rules from role's tools_allowed.
+/// Teaches CC to auto-approve ALL tools this role is allowed to use.
+fn build_permission_updates(
+    role_data: &colmena_core::library::RoleToolsAllowed,
+) -> Vec<hook::PermissionUpdate> {
+    let rules: Vec<hook::PermissionRule> = role_data
+        .tools
+        .iter()
+        .chain(role_data.tool_patterns.iter())
+        .map(|t| hook::PermissionRule {
+            tool_name: t.clone(),
+        })
+        .collect();
+
+    vec![hook::PermissionUpdate {
+        update_type: "addRules".to_string(),
+        rules,
+        behavior: "allow".to_string(),
+        destination: "session".to_string(),
+    }]
 }
 
 fn run_queue_list() -> Result<()> {

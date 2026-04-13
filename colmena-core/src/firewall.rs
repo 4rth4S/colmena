@@ -56,16 +56,17 @@ pub fn evaluate(
     delegations: &[RuntimeDelegation],
     payload: &EvaluationInput,
 ) -> Decision {
-    evaluate_with_elo(config, patterns, delegations, payload, &HashMap::new())
+    evaluate_with_elo(config, patterns, delegations, payload, &HashMap::new(), &std::collections::HashSet::new())
 }
 
-/// Full evaluation including ELO-calibrated overrides.
+/// Full evaluation including ELO-calibrated overrides and mission revocation checks.
 pub fn evaluate_with_elo(
     config: &FirewallConfig,
     patterns: &crate::config::CompiledPatterns,
     delegations: &[RuntimeDelegation],
     payload: &EvaluationInput,
     elo_overrides: &HashMap<String, Vec<Rule>>,
+    revoked_agents: &std::collections::HashSet<String>,
 ) -> Decision {
     // Compile ELO override regex patterns and merge with existing patterns.
     // ELO overrides loaded from JSON don't go through compile_config, so their
@@ -128,6 +129,20 @@ pub fn evaluate_with_elo(
                     priority: Priority::Medium,
                 };
             }
+        }
+    }
+
+    // 4.8. Mission revocation kill switch
+    // If agent's mission was deactivated, deny all tools. This overrides CC session rules
+    // that were taught via PermissionRequest hooks before the mission was revoked.
+    if let Some(ref agent_id) = payload.agent_id {
+        if revoked_agents.contains(agent_id) {
+            return Decision {
+                action: Action::Block,
+                reason: format!("Mission revoked for agent '{}' — permissions expired", agent_id),
+                matched_rule: Some(format!("mission_revoked:{}", agent_id)),
+                priority: Priority::High,
+            };
         }
     }
 
