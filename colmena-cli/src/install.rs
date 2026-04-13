@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-/// Register colmena as PreToolUse + PostToolUse + PermissionRequest hook in ~/.claude/settings.json.
+/// Register colmena as PreToolUse + PostToolUse + PermissionRequest + SubagentStop hook in ~/.claude/settings.json.
 /// Preserves all existing content (hooks, env, plugins, statusLine, etc).
 pub fn run_install() -> Result<()> {
     let settings_path = settings_json_path();
@@ -148,8 +148,44 @@ pub fn run_install() -> Result<()> {
         }));
     }
 
-    if already_installed && already_installed_post && already_installed_perm {
-        println!("Colmena hooks are already installed (PreToolUse + PostToolUse + PermissionRequest).");
+    // Also register SubagentStop hook for enforced peer review
+    let subagent_stop = hooks_obj
+        .entry("SubagentStop")
+        .or_insert_with(|| json!([]));
+
+    let subagent_arr = subagent_stop
+        .as_array_mut()
+        .context("SubagentStop must be an array")?;
+
+    let already_installed_subagent = subagent_arr.iter().any(|entry| {
+        if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            inner_hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.contains("colmena hook"))
+            })
+        } else {
+            entry
+                .get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("colmena hook"))
+        }
+    });
+
+    if !already_installed_subagent {
+        subagent_arr.push(json!({
+            "matcher": "",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_command
+                }
+            ]
+        }));
+    }
+
+    if already_installed && already_installed_post && already_installed_perm && already_installed_subagent {
+        println!("Colmena hooks are already installed (PreToolUse + PostToolUse + PermissionRequest + SubagentStop).");
         return Ok(());
     }
 

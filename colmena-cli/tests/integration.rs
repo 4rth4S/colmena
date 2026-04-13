@@ -611,3 +611,114 @@ fn test_hook_permission_request_tool_not_in_role() {
         "Tool not in role's tools_allowed should produce no output; got: {stdout}"
     );
 }
+
+// ── SubagentStop integration tests ───────────────────────────────────────────
+
+fn make_subagent_stop_payload(agent_id: Option<&str>) -> Value {
+    let mut payload = json!({
+        "session_id": "integration-test",
+        "hook_event_name": "SubagentStop",
+        "cwd": workspace_root(),
+        "reason": "Task completed"
+    });
+    if let Some(agent) = agent_id {
+        payload["agent_id"] = json!(agent);
+    }
+    payload
+}
+
+/// Build a temp COLMENA_HOME with delegation + a submitted review for the agent.
+fn make_colmena_home_with_review(agent_id: &str, mission_id: &str) -> tempfile::TempDir {
+    let tmp = make_colmena_home_with_delegation(agent_id);
+    let config_dir = tmp.path().join("config");
+
+    // Create a review entry in pending/
+    let review_dir = config_dir.join("reviews/pending");
+    std::fs::create_dir_all(&review_dir).unwrap();
+    let review = json!({
+        "review_id": "r_9999999_abcd",
+        "mission": mission_id,
+        "author_role": agent_id,
+        "reviewer_role": "auditor",
+        "artifact_path": "/tmp/test-artifact.rs",
+        "artifact_hash": "sha256:0000",
+        "state": "pending",
+        "created_at": "2099-01-01T00:00:00Z",
+        "evaluated_at": null,
+        "scores": null,
+        "score_average": null,
+        "finding_count": null,
+        "evaluation_narrative": null
+    });
+    std::fs::write(
+        review_dir.join("r_9999999_abcd.json"),
+        serde_json::to_string_pretty(&review).unwrap(),
+    )
+    .unwrap();
+
+    tmp
+}
+
+#[test]
+fn test_hook_subagent_stop_no_agent_id() {
+    // No agent_id → approve (main agent, not a subagent)
+    let tmp = make_colmena_home();
+    let payload = make_subagent_stop_payload(None);
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "approve");
+}
+
+#[test]
+fn test_hook_subagent_stop_no_mission() {
+    // Agent exists but has no role delegation → approve
+    let tmp = make_colmena_home();
+    let payload = make_subagent_stop_payload(Some("random-agent"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "approve");
+}
+
+#[test]
+fn test_hook_subagent_stop_worker_without_review() {
+    // Worker has role delegation but NO review submitted → block
+    let tmp = make_colmena_home_with_delegation("pentester");
+    let payload = make_subagent_stop_payload(Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "block");
+    assert!(
+        parsed["systemMessage"].as_str().unwrap().contains("review_submit"),
+        "Block message should tell agent to call review_submit"
+    );
+}
+
+#[test]
+fn test_hook_subagent_stop_worker_with_review() {
+    // Worker has role delegation AND review submitted → approve
+    let tmp = make_colmena_home_with_review("pentester", "test-mission");
+    let payload = make_subagent_stop_payload(Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "approve");
+}
+
+#[test]
+fn test_hook_subagent_stop_auditor_exempt() {
+    // Auditor role has role_type: "auditor" → approve without review
+    let tmp = make_colmena_home_with_delegation("auditor");
+    let payload = make_subagent_stop_payload(Some("auditor"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "approve");
+}
