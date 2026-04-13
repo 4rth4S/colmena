@@ -207,6 +207,50 @@ pub fn list_delegations(path: &Path) -> Vec<RuntimeDelegation> {
     load_delegations(path)
 }
 
+// ── Mission revocation tracking ─────────────────────────────────────────────
+
+/// Load the set of revoked mission IDs for the mid-session kill switch.
+/// File: config/revoked-missions.json (JSON array of mission_id strings).
+/// Returns an empty set if the file doesn't exist or can't be parsed.
+pub fn load_revoked_missions(config_dir: &Path) -> std::collections::HashSet<String> {
+    let path = config_dir.join("revoked-missions.json");
+    match std::fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+/// Extract agent IDs from delegations belonging to a mission.
+/// Used during revocation to identify which agents to block.
+pub fn agents_for_mission(delegations: &[RuntimeDelegation], mission_id: &str) -> Vec<String> {
+    delegations
+        .iter()
+        .filter(|d| d.mission_id.as_deref() == Some(mission_id))
+        .filter_map(|d| d.agent_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Mark a mission's agents as revoked for the mid-session kill switch.
+/// Appends agent IDs to config/revoked-missions.json so the PreToolUse hook
+/// can deny their tool calls even if CC has learned session rules.
+pub fn mark_mission_agents_revoked(
+    config_dir: &Path,
+    agent_ids: &[String],
+) -> Result<()> {
+    let path = config_dir.join("revoked-missions.json");
+    let mut revoked = load_revoked_missions(config_dir);
+    for agent_id in agent_ids {
+        revoked.insert(agent_id.clone());
+    }
+    let json = serde_json::to_string_pretty(&revoked)
+        .context("Failed to serialize revoked missions")?;
+    std::fs::write(&path, json)
+        .with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,5 +616,81 @@ mod tests {
         let (active, _expired) = load_delegations_with_expired(tmp.path());
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].tool, "Read");
+    }
+
+    // ── Mission revocation tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_load_revoked_missions_missing_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let revoked = load_revoked_missions(tmp.path());
+        assert!(revoked.is_empty());
+    }
+
+    #[test]
+    fn test_mark_and_load_revoked_missions() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        mark_mission_agents_revoked(tmp.path(), &["pentester".to_string(), "researcher".to_string()]).unwrap();
+
+        let revoked = load_revoked_missions(tmp.path());
+        assert_eq!(revoked.len(), 2);
+        assert!(revoked.contains("pentester"));
+        assert!(revoked.contains("researcher"));
+
+        // Mark another — should add, not replace
+        mark_mission_agents_revoked(tmp.path(), &["auditor".to_string()]).unwrap();
+        let revoked = load_revoked_missions(tmp.path());
+        assert_eq!(revoked.len(), 3);
+        assert!(revoked.contains("auditor"));
+        assert!(revoked.contains("pentester"));
+    }
+
+    #[test]
+    fn test_agents_for_mission() {
+        let delegations = vec![
+            RuntimeDelegation {
+                tool: "Read".to_string(),
+                agent_id: Some("pentester".to_string()),
+                action: Action::AutoApprove,
+                created_at: Utc::now(),
+                expires_at: Some(Utc::now() + Duration::hours(4)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("mission-1".to_string()),
+                conditions: None,
+            },
+            RuntimeDelegation {
+                tool: "Grep".to_string(),
+                agent_id: Some("researcher".to_string()),
+                action: Action::AutoApprove,
+                created_at: Utc::now(),
+                expires_at: Some(Utc::now() + Duration::hours(4)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("mission-1".to_string()),
+                conditions: None,
+            },
+            RuntimeDelegation {
+                tool: "Read".to_string(),
+                agent_id: Some("other-agent".to_string()),
+                action: Action::AutoApprove,
+                created_at: Utc::now(),
+                expires_at: Some(Utc::now() + Duration::hours(4)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("mission-2".to_string()),
+                conditions: None,
+            },
+        ];
+
+        let mut agents = agents_for_mission(&delegations, "mission-1");
+        agents.sort();
+        assert_eq!(agents, vec!["pentester", "researcher"]);
+
+        let agents2 = agents_for_mission(&delegations, "mission-2");
+        assert_eq!(agents2, vec!["other-agent"]);
+
+        let agents3 = agents_for_mission(&delegations, "nonexistent");
+        assert!(agents3.is_empty());
     }
 }

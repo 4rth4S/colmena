@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -179,6 +179,58 @@ fn load_yaml_dir<T: serde::de::DeserializeOwned>(dir: &Path) -> Result<Vec<T>> {
 /// Default library directory
 pub fn default_library_dir() -> PathBuf {
     crate::paths::colmena_home().join("config/library")
+}
+
+// ── Role tools_allowed for firewall ──────────────────────────────────────────
+
+/// Pre-processed role tools_allowed data for firewall/hook evaluation.
+/// Built once at hook startup from the full Role structs.
+#[derive(Debug, Clone)]
+pub struct RoleToolsAllowed {
+    pub role_id: String,
+    /// Exact tool names (e.g., "Read", "mcp__colmena__findings_list")
+    pub tools: HashSet<String>,
+    /// Glob patterns with trailing wildcard (e.g., "mcp__caido__*")
+    pub tool_patterns: Vec<String>,
+}
+
+impl RoleToolsAllowed {
+    /// Check if a tool name matches tools_allowed (exact match or trailing-wildcard glob).
+    pub fn allows_tool(&self, tool_name: &str) -> bool {
+        if self.tools.contains(tool_name) {
+            return true;
+        }
+        for pattern in &self.tool_patterns {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                if tool_name.starts_with(prefix) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Build a HashMap<role_id, RoleToolsAllowed> for firewall/hook evaluation.
+pub fn build_role_tools_map(roles: &[Role]) -> HashMap<String, RoleToolsAllowed> {
+    roles
+        .iter()
+        .map(|r| {
+            let (exact, patterns): (Vec<_>, Vec<_>) = r
+                .tools_allowed
+                .iter()
+                .cloned()
+                .partition(|t| !t.ends_with('*'));
+            (
+                r.id.clone(),
+                RoleToolsAllowed {
+                    role_id: r.id.clone(),
+                    tools: exact.into_iter().collect(),
+                    tool_patterns: patterns,
+                },
+            )
+        })
+        .collect()
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -454,5 +506,95 @@ elo_lead_selection: true
             result.unwrap_err().to_string().contains("traversal"),
             "error message should mention traversal"
         );
+    }
+
+    // ── 7. RoleToolsAllowed ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_role_tools_allowed_exact_match() {
+        let rta = RoleToolsAllowed {
+            role_id: "researcher".to_string(),
+            tools: ["Read", "Grep", "WebSearch"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            tool_patterns: vec![],
+        };
+        assert!(rta.allows_tool("Read"));
+        assert!(rta.allows_tool("Grep"));
+        assert!(rta.allows_tool("WebSearch"));
+        assert!(!rta.allows_tool("Bash"));
+        assert!(!rta.allows_tool("Write"));
+    }
+
+    #[test]
+    fn test_role_tools_allowed_glob_pattern() {
+        let rta = RoleToolsAllowed {
+            role_id: "pentester".to_string(),
+            tools: ["Read"].iter().map(|s| s.to_string()).collect(),
+            tool_patterns: vec!["mcp__caido__*".to_string()],
+        };
+        assert!(rta.allows_tool("mcp__caido__replay"));
+        assert!(rta.allows_tool("mcp__caido__intercept"));
+        assert!(rta.allows_tool("mcp__caido__proxy_request"));
+        assert!(rta.allows_tool("Read"));
+    }
+
+    #[test]
+    fn test_role_tools_allowed_glob_no_match() {
+        let rta = RoleToolsAllowed {
+            role_id: "pentester".to_string(),
+            tools: HashSet::new(),
+            tool_patterns: vec!["mcp__caido__*".to_string()],
+        };
+        assert!(!rta.allows_tool("mcp__other__tool"));
+        assert!(!rta.allows_tool("mcp__colmena__evaluate"));
+        assert!(!rta.allows_tool("Bash"));
+    }
+
+    #[test]
+    fn test_role_tools_allowed_empty() {
+        let rta = RoleToolsAllowed {
+            role_id: "empty".to_string(),
+            tools: HashSet::new(),
+            tool_patterns: vec![],
+        };
+        assert!(!rta.allows_tool("Read"));
+        assert!(!rta.allows_tool("mcp__anything__here"));
+    }
+
+    #[test]
+    fn test_build_role_tools_map() {
+        let role: Role = serde_yml::from_str(
+            r#"
+name: Test
+id: test_role
+icon: "T"
+description: Test role
+system_prompt_ref: prompts/test.md
+default_trust_level: auto-approve
+tools_allowed: [Read, Grep, "mcp__caido__*", mcp__colmena__evaluate]
+specializations: [testing]
+elo:
+  initial: 1500
+mentoring:
+  can_mentor: []
+  mentored_by: []
+"#,
+        )
+        .unwrap();
+
+        let map = build_role_tools_map(&[role]);
+        let rta = map.get("test_role").expect("should have test_role");
+
+        assert_eq!(rta.role_id, "test_role");
+        assert!(rta.tools.contains("Read"));
+        assert!(rta.tools.contains("Grep"));
+        assert!(rta.tools.contains("mcp__colmena__evaluate"));
+        assert!(!rta.tools.contains("mcp__caido__*")); // pattern, not exact
+        assert_eq!(rta.tool_patterns, vec!["mcp__caido__*"]);
+        assert!(rta.allows_tool("mcp__caido__replay"));
+        assert!(rta.allows_tool("mcp__colmena__evaluate"));
+        assert!(!rta.allows_tool("Bash"));
     }
 }

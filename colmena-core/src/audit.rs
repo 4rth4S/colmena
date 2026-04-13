@@ -80,6 +80,12 @@ pub enum AuditEvent<'a> {
     Timeout {
         reason: &'a str,
     },
+    /// Role tools_allowed auto-approve via PermissionRequest learning
+    RoleToolsAllow {
+        agent: &'a str,
+        tool: &'a str,
+        role_id: &'a str,
+    },
 }
 
 /// Format an audit event as a single log line.
@@ -132,6 +138,9 @@ fn format_event(event: &AuditEvent) -> String {
         }
         AuditEvent::Timeout { reason } => {
             format!("[{ts}] TIMEOUT reason={reason}")
+        }
+        AuditEvent::RoleToolsAllow { agent, tool, role_id } => {
+            format!("[{ts}] ROLE_TOOLS_ALLOW agent={agent} tool={tool} role={role_id}")
         }
     }
 }

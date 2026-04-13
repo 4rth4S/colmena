@@ -401,8 +401,11 @@ impl ColmenaServer {
         let elo_overrides_path = self.config_dir.join("elo-overrides.json");
         let elo_overrides = colmena_core::calibrate::load_overrides(&elo_overrides_path);
 
+        // Load revoked agents for mission kill switch
+        let revoked_agents = colmena_core::delegate::load_revoked_missions(&self.config_dir);
+
         let decision = colmena_core::firewall::evaluate_with_elo(
-            &cfg, &patterns, &delegations, &eval_input, &elo_overrides,
+            &cfg, &patterns, &delegations, &eval_input, &elo_overrides, &revoked_agents,
         );
 
         let result = serde_json::json!({
