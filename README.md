@@ -14,19 +14,20 @@ Colmena eliminates the noise, coordinates the swarm, and tracks who delivers.
 
 ## How It Works
 
-Three integration points with Claude Code:
+Four integration points with Claude Code:
 
-**1. PreToolUse Hook (reactive — before execution)** — Every tool call is evaluated against declarative YAML rules. Auto-approves ~70%, blocks destructive ops, asks for the rest. Every decision is logged.
+**1. PreToolUse Hook (reactive — before execution)** — Every tool call is evaluated against declarative YAML rules. Auto-approves ~70%, blocks destructive ops, asks for the rest. Includes mission revocation kill switch. Every decision is logged.
 
 ```
 CC tool call --> colmena hook (stdin JSON)
                     |
-                    |-- blocked?       --> deny  (force push, rm -rf)
-                    |-- delegated?     --> allow (human or role-bound trust)
-                    |-- agent override --> allow/ask/block (YAML then ELO)
-                    |-- restricted?    --> ask   (rm, docker, external comms)
-                    |-- trusted?       --> allow (reads, greps, project writes)
-                    +-- default        --> ask
+                    |-- blocked?           --> deny  (force push, rm -rf)
+                    |-- delegated?         --> allow (human or role-bound trust)
+                    |-- agent override     --> allow/ask/block (YAML then ELO)
+                    |-- restricted?        --> ask   (rm, docker, external comms)
+                    |-- mission revoked?   --> deny  (kill switch for deactivated missions)
+                    |-- trusted?           --> allow (reads, greps, project writes)
+                    +-- default            --> ask
 ```
 
 **2. PostToolUse Hook (reactive — after execution)** — Filters Bash tool outputs before CC processes them. Strips ANSI, deduplicates repeated lines, extracts only stderr on failures, and applies smart truncation. Saves 30-50% tokens per output.
@@ -41,7 +42,19 @@ CC executes Bash --> colmena PostToolUse hook
                         +-- return via updatedMCPToolOutput
 ```
 
-**3. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
+**3. PermissionRequest Hook (reactive — when CC asks user)** — Intercepts CC's permission prompts for mission agents. If the agent's role allows the tool, auto-approves and teaches CC session rules so subsequent calls skip all hooks.
+
+```
+CC about to prompt user --> colmena PermissionRequest hook
+                              |
+                              |-- agent has role delegation?  (source="role")
+                              |-- tool in role's tools_allowed?
+                              |     --> allow + teach CC session rules
+                              |     --> CC auto-approves future calls (no hooks)
+                              +-- otherwise --> no output (CC prompts user)
+```
+
+**4. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
 
 ```
 CC: "use colmena to select a pattern for auditing the payments API"
@@ -63,7 +76,7 @@ cargo build --release
 ./target/release/colmena setup
 ```
 
-That's it. `setup` registers the PreToolUse + PostToolUse hooks in `~/.claude/settings.json`, registers the MCP server in `~/.mcp.json`, validates config and library, and prints a checklist. Restart Claude Code to pick up the MCP server.
+That's it. `setup` registers the PreToolUse + PostToolUse + PermissionRequest hooks in `~/.claude/settings.json`, registers the MCP server in `~/.mcp.json`, validates config and library, and prints a checklist. Restart Claude Code to pick up the MCP server.
 
 For standalone installs (release binary, no repo), `setup` embeds all default config and library files — the binary is self-contained.
 
@@ -74,7 +87,7 @@ For standalone installs (release binary, no repo), `setup` embeds all default co
 Declarative YAML rules evaluated in <15ms. Rule precedence:
 
 ```
-blocked > runtime delegations > agent overrides > restricted > trust circle > defaults
+blocked > delegations > agent_overrides > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults
 ```
 
 - Auto-approves reads, greps, web searches, project writes
@@ -111,7 +124,7 @@ Every firewall decision is logged to `config/audit.log`:
 
 Curated role definitions and orchestration patterns for multi-agent missions.
 
-- **6 roles:** security_architect, pentester, auditor, researcher, web_pentester, api_pentester — each with system prompt, tools, and trust config
+- **6 roles:** security_architect, pentester, auditor, researcher, web_pentester, api_pentester — each with system prompt, tools (including MCP tool globs like `mcp__caido__*`), and trust config
 - **7 patterns:** pipeline, oracle-workers, debate, plan-then-execute, mentored-execution, swarm-consensus, caido-pentest
 - **Pattern selector:** keyword scoring recommends the right pattern for your mission
 - **Mission generator:** produces per-agent CLAUDE.md files with role-specific instructions
@@ -164,9 +177,11 @@ strip_ansi: true
 enabled: true
 ```
 
-### Dynamic Trust Calibration (M3)
+### Dynamic Trust Calibration (M3 + M6.3)
 
-Two mechanisms that eliminate approval fatigue for multi-agent missions:
+Three mechanisms that eliminate approval fatigue for multi-agent missions:
+
+**Role tools_allowed auto-approve (M6.3)** -- When a mission agent's tool call would prompt the user, Colmena's PermissionRequest hook checks the role's `tools_allowed`. If the tool matches (exact or glob like `mcp__caido__*`), it auto-approves and teaches CC session rules. Subsequent calls for that role's tools skip all hooks entirely. Activation requires a human-approved mission (delegation with `source: "role"`).
 
 **Role-bound mission delegations (temporary)** -- When `library_generate` creates a mission, it auto-generates scoped delegations from each agent's role permissions. The human approves once at mission creation; agents run without repeated prompts.
 
@@ -198,15 +213,18 @@ Delegations are agent-scoped, session-bound, and time-limited (8h default, 24h m
 
 ELO overrides are stored separately in `config/elo-overrides.json`. YAML agent_overrides always take precedence (human wins). `colmena calibrate reset` instantly revokes all ELO-based trust.
 
-### Mission Lifecycle (M3)
+### Mission Lifecycle (M3 + M6.3)
 
-Missions are now a first-class concept with full lifecycle management:
+Missions are a first-class concept with full lifecycle management and mid-session kill switch:
 
 ```
-library_generate --> creates CLAUDE.md + role-bound delegations
-agents work      --> delegations auto-approve scoped operations
-mission complete --> colmena mission deactivate --id X
-over time        --> colmena calibrate run (ELO-based trust persists)
+library_generate   --> creates CLAUDE.md + role-bound delegations
+agents work        --> PermissionRequest auto-approves role tools via CC session rules
+                       (first call teaches CC; subsequent calls skip all hooks)
+mission complete   --> colmena mission deactivate --id X
+                       --> marks agents in revoked-missions.json
+                       --> PreToolUse DENY overrides CC session rules (kill switch)
+over time          --> colmena calibrate run (ELO-based trust persists)
 ```
 
 ## CLI Reference
@@ -241,7 +259,9 @@ colmena calibrate run                     # Apply ELO-based trust tiers
 colmena calibrate show                    # Show trust tier per agent
 colmena calibrate reset                   # Clear all ELO overrides
 
+colmena doctor                            # Full health check: config, hooks, MCP, runtime
 colmena stats                             # Filter token savings summary
+colmena stats --session <id>              # Stats for a specific session
 ```
 
 ## MCP Tools Reference
@@ -257,7 +277,7 @@ colmena stats                             # Filter token savings summary
 | `delegate_revoke` | Show revoke CLI command (read-only) |
 | `evaluate` | Evaluate a tool call against firewall |
 
-### Wisdom Library (M1) — 5 tools
+### Wisdom Library (M1) — 6 tools
 
 | Tool | Description |
 |------|-------------|
@@ -287,7 +307,7 @@ colmena stats                             # Filter token savings summary
 | `calibrate` | Show calibration state and recommend actions |
 | `session_stats` | Show prompts saved + tokens saved (call before ending session) |
 
-**20 tools total** across all milestones.
+**21 tools total** across all milestones (20 MCP + PermissionRequest hook).
 
 ## Configuration
 
@@ -342,10 +362,10 @@ colmena/
 │       └── findings.rs        # Findings Store — persistent knowledge base
 ├── colmena-cli/               # CLI binary — hook handler + subcommands
 │   └── src/
-│       ├── main.rs            # Clap CLI, Pre/PostToolUse hooks, all cmds
-│       ├── hook.rs            # CC hook payload/response types (Pre + Post)
+│       ├── main.rs            # Clap CLI, Pre/Post/PermissionRequest hooks, all cmds
+│       ├── hook.rs            # CC hook payload/response types (Pre + Post + PermissionRequest)
 │       ├── notify.rs          # Notification hook (no-op placeholder)
-│       └── install.rs         # Hook registration (PreToolUse + PostToolUse)
+│       └── install.rs         # Hook registration (PreToolUse + PostToolUse + PermissionRequest)
 ├── colmena-filter/            # Output filtering pipeline
 │   └── src/
 │       ├── lib.rs             # Public API surface
@@ -360,12 +380,13 @@ colmena/
 │           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
-│       └── main.rs            # rmcp server, stdio transport, 20 tools
+│       └── main.rs            # rmcp server, stdio transport, 21 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
 │   ├── filter-config.yaml     # Output filter settings
 │   ├── review-config.yaml     # Review thresholds
 │   ├── runtime-delegations.json  # Active trust delegations
+│   ├── revoked-missions.json    # Agent IDs from deactivated missions (kill switch)
 │   ├── elo-overrides.json       # ELO-calibrated agent overrides (auto-generated)
 │   ├── queue/
 │   │   ├── pending/           # Approval items awaiting decision
@@ -401,12 +422,16 @@ colmena/
 | M4 | Done | Mentor prompt refinement — debate pattern for prompt improvement suggestions |
 | M4.1 | Done | Caido-native pentester roles — web_pentester + api_pentester for bug bounty with Caido MCP |
 | M5 | Done | Plug-and-play onboarding — `colmena setup` (config, hooks, MCP in one command) |
+| M6 | Done | Intelligent role & pattern creation — 8 categories, 7 topologies, pattern suggestion |
+| M6.1 | Done | Security hardening — error sanitization, rate limiting, log rotation, permissions checks |
+| M6.2 | Done | P0+P1 hardening — MCP precision, collusion prevention, delegate scoping |
+| M6.3 | Done | Role tools_allowed firewall — PermissionRequest auto-approve + mission revocation kill switch |
 
 ## Docs
 
 - [Changelog](CHANGELOG.md) — version history and upgrade notes
 - [Contributing](CONTRIBUTING.md) — branching, PRs, versioning, releasing
-- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M5
+- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M6.3
 - [Design Spec](docs/specs/2026-03-29-hivemind-design.md) — full M0-M3 design
 - [Dark Corners](docs/dark-corners.md) — M0 edge case analysis
 - [Dark Corners M1](docs/dark-corners-m1.md) — M1 edge case analysis

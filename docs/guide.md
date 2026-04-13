@@ -15,7 +15,7 @@ cargo build --release
 ```
 
 `colmena setup` does everything in one command:
-- Registers Pre/PostToolUse hooks in `~/.claude/settings.json`
+- Registers Pre/PostToolUse/PermissionRequest hooks in `~/.claude/settings.json`
 - Registers the MCP server in `~/.mcp.json` (global)
 - Validates config and library files
 - Prints a verification checklist
@@ -50,6 +50,55 @@ That's it. Next time you open a Claude Code session, colmena is active.
 ---
 
 ## 1.5 Upgrading
+
+### From 0.6.2 to 0.7.0
+
+**Rebuild and re-setup:**
+
+```bash
+cd ~/colmena
+git pull
+cargo build --release
+./target/release/colmena setup
+```
+
+`colmena setup` detects the new PermissionRequest hook and registers it alongside Pre/PostToolUse. Existing config is preserved.
+
+**What's new in 0.7.0 (M6.3 — Role tools_allowed firewall):**
+
+- **PermissionRequest hook** -- new CC integration point. When a mission agent's tool call would prompt the user, Colmena checks the role's `tools_allowed`. If the tool is allowed, auto-approves and teaches CC session rules. Subsequent calls for that role's tools are auto-approved by CC without any hooks.
+- **MCP tools in role YAMLs** -- roles now include MCP tool permissions with glob patterns (e.g., `mcp__caido__*` for all Caido tools, `mcp__colmena__findings_*` for findings access)
+- **Mission revocation kill switch** -- `colmena mission deactivate` now marks agents in `revoked-missions.json`. PreToolUse denies all calls from revoked agents, even if CC has learned session rules.
+- **`revoked-missions.json`** -- new runtime file, protected in trust-firewall.yaml path_not_match
+
+**How mission auto-approve works:**
+
+```
+1. Human approves mission (library_generate creates delegations with source="role")
+2. Agent calls a tool → CC about to prompt user → PermissionRequest hook fires
+3. Colmena: agent has role delegation + tool in tools_allowed → allow + teach CC
+4. CC learns session rules → all subsequent tool calls for this role auto-approved
+5. Mission deactivated → revoked-missions.json updated → PreToolUse denies (kill switch)
+```
+
+**Role YAML changes** (tools_allowed expanded):
+
+| Role | New MCP tools |
+|------|---------------|
+| web_pentester | `mcp__caido__*`, `mcp__colmena__findings_*`, `review_submit` |
+| api_pentester | `mcp__caido__*`, `mcp__colmena__findings_*`, `review_submit` |
+| pentester | `mcp__colmena__findings_*`, `review_submit` |
+| researcher | `mcp__colmena__findings_*` |
+| auditor | `mcp__colmena__findings_*`, `review_submit` |
+| security_architect | `mcp__colmena__findings_*`, `review_*`, `elo_ratings` |
+
+**Verify:**
+
+```bash
+colmena --version              # should show 0.7.0
+colmena doctor                 # full health check
+colmena library show pentester # should show MCP tools in tools_allowed
+```
 
 ### From 0.4.0 to 0.5.0
 
@@ -337,6 +386,17 @@ Without colmena, every tool call from every agent prompts you -- 100 interruptio
 
 You went from "interrupt-driven babysitting" to "sound-driven decision making" -- all from a single terminal.
 
+### With M6.3 PermissionRequest (even fewer prompts)
+
+With role `tools_allowed` auto-approve (v0.7.0+), the first tool call from each mission agent teaches CC session rules. After that, CC auto-approves all tools in the role's `tools_allowed` without hitting any hooks. This means:
+
+| | Without Colmena | With Colmena (M0) | With Colmena (M6.3) |
+|---|---|---|---|
+| Prompts you see | ~100 | ~21 | ~6 (3 spawns + 3 first-tool-per-agent) |
+| After first call | n/a | hooks evaluate each call | CC auto-approves via session rules |
+
+The 18 "real decisions" (nmap, curl, Jira) still require approval if they're in `restricted` or not in the role's `tools_allowed`. But routine MCP tool calls (`mcp__colmena__findings_list`, `mcp__caido__*`) are fully automatic.
+
 ### Note on multi-terminal workflow
 
 You can also run agents in separate terminals if you prefer -- colmena works the same way. The `agent_id` in the hook payload identifies which agent is making the call regardless of how it was spawned. The single-session Agent tool approach is recommended because it keeps all coordination in one place and lets the orchestrating session manage the full mission lifecycle.
@@ -494,7 +554,12 @@ Each line includes:
 - **Key** (the command or file path)
 - **Rule** (which config rule matched, with index)
 
-The log never rotates or truncates automatically — it's your audit evidence. Use standard Unix tools to analyze it:
+Additional event types (M6.3):
+- `ROLE_TOOLS_ALLOW` — PermissionRequest auto-approved a tool based on role's `tools_allowed`
+- `DELEGATE_CREATE`, `DELEGATE_MATCH`, `DELEGATE_EXPIRE`, `DELEGATE_REVOKE` — delegation lifecycle
+- `MISSION_ACTIVATE`, `MISSION_DEACTIVATE` — mission lifecycle
+
+The log rotates at 10 MiB (current log renamed to `audit.log.1`). Use standard Unix tools to analyze it:
 
 ```bash
 # Count decisions by type
