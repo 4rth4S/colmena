@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.6.2 (semver, single workspace version)
+- **Version:** 0.7.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -25,16 +25,18 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 Rust workspace with 4 crates:
 
 - **colmena-core** — shared library: config, firewall, delegate, calibrate, queue, models, paths. Zero platform deps.
-- **colmena-cli** — CLI binary: Pre/PostToolUse hooks, clap subcommands, notifications (no-op placeholder), install
+- **colmena-cli** — CLI binary: Pre/PostToolUse/PermissionRequest hooks, clap subcommands, notifications (no-op placeholder), install
 - **colmena-filter** — output filtering pipeline: OutputFilter trait, 4 base filters, FilterPipeline with catch_unwind, JSONL stats
 - **colmena-mcp** — MCP server: rmcp, stdio transport, exposes core functions as CC tools
 
-Three CC integration points:
-1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules
+Four CC integration points:
+1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules + mission revocation kill switch
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
-3. **MCP (proactive):** CC calls 21 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
+3. **PermissionRequest Hook (reactive):** intercepts CC permission prompts, auto-approves tools in role's `tools_allowed` via session rules
+4. **MCP (proactive):** CC calls 21 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
 
-Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > trust_circle > defaults`
+PreToolUse precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`
+PermissionRequest precedence: `role delegation exists + tool in tools_allowed → allow + teach CC session rules`
 
 ## Tech Stack
 
@@ -52,6 +54,12 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - Error handling: `anyhow::Result` everywhere. Never panic in the hook path.
 - Hook path must complete in <100ms — no network calls, no heavy I/O
 - Any hook failure returns `ask` (safe fallback), never `deny` or exit 2
+- PermissionRequest hook safe fallback: any error → no output (CC continues to prompt user)
+- PermissionRequest only activates for agents with `source: "role"` delegation (human-approved mission)
+- PermissionRequest teaches CC session rules via `updatedPermissions` — subsequent calls auto-approved by CC without hooks
+- Mission revocation (`revoked-missions.json`) overrides CC session rules — PreToolUse deny fires before CC checks learned rules
+- Role `tools_allowed` supports glob patterns: `mcp__caido__*` matches all Caido MCP tools
+- `revoked-missions.json` is a runtime file — tracks agent IDs whose missions were deactivated mid-session
 - YAML regex patterns use single-quoted strings to avoid `\b` → backspace escaping issues
 - Queue filenames use millisecond timestamps + tool_use_id for uniqueness
 - Firewall `bash_pattern` conditions only apply when tool is `Bash` — skip for other tools
@@ -113,7 +121,7 @@ Rule precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides
 - `library_generate` MCP is read-only — returns CLI commands for delegations, never persists directly
 - `generate_mission()` accepts ELO ratings to assign reviewer lead (highest ELO in squad)
 - CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
-- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json)
+- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json)
 - `gh pr merge` is blocked in firewall — PRs are merged by human only, never by Claude or agents
 - `generate_mission()` accepts optional `config_dir` for M4 prompt review detection — `None` skips detection (backward compatible)
 - Prompt review detection uses compound keyword matching: prefix ("review", "improve", "refine") + role name/id + suffix ("prompt", "instructions", "approach") — all three required to avoid false positives
@@ -221,12 +229,13 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M6** Intelligent role & pattern creation — 8 role categories, 7 pattern topologies, pattern suggestion (done)
 - **M6.1** Security hardening — STRIDE/DREAD threat model fixes: error sanitization, rate limiting, log rotation, orphan cleanup, permissions checks (done)
 - **M6.2** P0+P1 hardening — MCP calibrate/evaluate precision, reviewer randomization, Elevated Bash guard, --session delegations, regex validation, expire audit trail (done)
+- **M6.3** Role tools_allowed firewall — PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch (done)
 - **M7** Library Guardian — prompt validation, file integrity, trust elevation (planned)
 
-## Current State (2026-04-03)
+## Current State (2026-04-13)
 
-**Branch:** `main` (v0.6.2)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention)
+**Branch:** `main` (v0.7.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation)
 **Next:** M7 (Library Guardian — prompt validation, integrity checks)
 
 ## Key Docs

@@ -48,6 +48,78 @@ fn make_payload(tool: &str, tool_input: Value) -> Value {
     })
 }
 
+fn make_permission_request_payload(tool: &str, agent_id: Option<&str>) -> Value {
+    let mut payload = json!({
+        "session_id": "integration-test",
+        "hook_event_name": "PermissionRequest",
+        "tool_name": tool,
+        "tool_input": {},
+        "tool_use_id": "tu_perm_req",
+        "cwd": workspace_root()
+    });
+    if let Some(agent) = agent_id {
+        payload["agent_id"] = json!(agent);
+    }
+    payload
+}
+
+/// Build a temp COLMENA_HOME with a role delegation for PermissionRequest tests.
+fn make_colmena_home_with_delegation(agent_id: &str) -> tempfile::TempDir {
+    let tmp = make_colmena_home();
+    let config_dir = tmp.path().join("config");
+
+    // Create runtime-delegations.json with a role delegation
+    // Action uses kebab-case: "auto-approve", not "allow"
+    let delegations = json!([{
+        "tool": "Read",
+        "agent_id": agent_id,
+        "action": "auto-approve",
+        "created_at": "2099-01-01T00:00:00Z",
+        "expires_at": "2099-12-31T23:59:59Z",
+        "source": "role",
+        "mission_id": "test-mission"
+    }]);
+    std::fs::write(
+        config_dir.join("runtime-delegations.json"),
+        serde_json::to_string_pretty(&delegations).unwrap(),
+    )
+    .unwrap();
+
+    tmp
+}
+
+fn colmena_hook_with_env(payload: &Value, colmena_home: &std::path::Path) -> (String, i32) {
+    let input = serde_json::to_string(payload).unwrap();
+    let config_flag = colmena_home
+        .join("config/trust-firewall.yaml")
+        .to_string_lossy()
+        .to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["hook", "--config", &config_flag])
+        .env("COLMENA_HOME", colmena_home)
+        .env("HOME", "/tmp/colmena-test-home")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            child.wait_with_output()
+        })
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let code = output.status.code().unwrap_or(-1);
+    (stdout, code)
+}
+
 #[test]
 fn test_hook_auto_approve_read() {
     let payload = make_payload(
@@ -479,5 +551,63 @@ fn test_library_select() {
         stdout.contains("Recommended") || stdout.contains("Oracle"),
         "output should mention Recommended or a pattern name like Oracle; got: {}",
         stdout
+    );
+}
+
+// ── PermissionRequest integration tests ──────────────────────────────────────
+
+#[test]
+fn test_hook_permission_request_with_active_mission() {
+    // Agent "pentester" has a role delegation (source="role") and Read is in tools_allowed
+    let tmp = make_colmena_home_with_delegation("pentester");
+    let payload = make_permission_request_payload("Read", Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0, "Exit code should be 0");
+    assert!(!stdout.is_empty(), "Should return JSON response, got empty stdout");
+
+    let resp: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("Should return valid JSON: {e}, got: {stdout}"));
+
+    // Check the PermissionRequest response format
+    let decision = &resp["hookSpecificOutput"]["decision"];
+    assert_eq!(decision["behavior"], "allow", "Should allow tool in role's tools_allowed");
+
+    // Should include updatedPermissions that teach CC session rules
+    let perms = decision["updatedPermissions"].as_array()
+        .expect("updatedPermissions should be an array");
+    assert!(!perms.is_empty(), "Should have at least one permission update");
+    assert_eq!(perms[0]["type"], "addRules");
+    assert_eq!(perms[0]["behavior"], "allow");
+    assert_eq!(perms[0]["destination"], "session");
+}
+
+#[test]
+fn test_hook_permission_request_without_mission() {
+    // Agent has no role delegation — PermissionRequest should produce no output
+    let tmp = make_colmena_home(); // No delegations
+    let payload = make_permission_request_payload("Read", Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0, "Exit code should be 0");
+    // No output = CC continues to prompt user (safe passthrough)
+    assert!(
+        stdout.trim().is_empty(),
+        "Without role delegation, should produce no output; got: {stdout}"
+    );
+}
+
+#[test]
+fn test_hook_permission_request_tool_not_in_role() {
+    // Agent "researcher" has role delegation but mcp__caido__replay is NOT in researcher's tools_allowed
+    let tmp = make_colmena_home_with_delegation("researcher");
+    let payload = make_permission_request_payload("mcp__caido__replay", Some("researcher"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0, "Exit code should be 0");
+    // Tool not in role's tools_allowed → no output (CC prompts user)
+    assert!(
+        stdout.trim().is_empty(),
+        "Tool not in role's tools_allowed should produce no output; got: {stdout}"
     );
 }
