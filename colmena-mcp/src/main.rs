@@ -107,6 +107,8 @@ struct ReviewEvaluateInput {
     findings: Vec<FindingInput>,
     /// Path to the artifact being reviewed (for hash verification)
     artifact_path: String,
+    /// Optional evaluation narrative explaining the reviewer's reasoning
+    evaluation_narrative: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -210,6 +212,42 @@ struct CalibrateInput {}
 struct SessionStatsInput {
     /// Session ID to show stats for (uses current session if available)
     session_id: Option<String>,
+}
+
+// ── Alerts input types ──────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AlertsListInput {
+    /// Filter by severity: "critical" or "warning"
+    severity: Option<String>,
+    /// Filter by acknowledged state: true or false
+    acknowledged: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct AlertsAckInput {
+    /// Alert ID to acknowledge, or "all" for all alerts
+    alert_id: String,
+}
+
+// ── Auditor Calibration input types ─────────────────────────────────────────
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CalibrateAuditorInput {
+    /// Number of recent evaluations to show (default: 5)
+    last: Option<usize>,
+    /// Response language: "en" or "es" (default: "en")
+    lang: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct CalibrateAuditorFeedbackInput {
+    /// Review ID being calibrated
+    review_id: String,
+    /// Chosen option: "current" (auditor was right), "alternative_N" (auditor's Nth alternative was better), or "correction" (human provides own)
+    choice: String,
+    /// Human's correction text (required when choice is "correction")
+    correction_text: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -873,6 +911,7 @@ impl ColmenaServer {
             input.scores.clone(),
             findings.clone(),
             &artifact_path,
+            input.evaluation_narrative,
         )
         .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
@@ -884,6 +923,28 @@ impl ColmenaServer {
             colmena_core::review::TrustGateResult::AutoComplete => "auto_complete",
             colmena_core::review::TrustGateResult::NeedsHumanReview => "needs_human_review",
         };
+
+        // Create alert if trust gate says human review needed
+        if gate == colmena_core::review::TrustGateResult::NeedsHumanReview {
+            let critical_count = findings.iter().filter(|f| f.severity == "critical").count();
+            let alert = colmena_core::alerts::Alert {
+                alert_id: format!("a_{}_{:04x}", chrono::Utc::now().timestamp_millis(), rand::random::<u16>()),
+                timestamp: chrono::Utc::now(),
+                severity: if score_avg < 5.0 || critical_count > 0 { "critical".to_string() } else { "warning".to_string() },
+                mission_id: entry.mission.clone(),
+                agent_id: entry.author_role.clone(),
+                review_id: entry.review_id.clone(),
+                score_average: score_avg,
+                critical_findings: critical_count,
+                message: format!(
+                    "Agent '{}' scored {:.1}/10 with {} critical findings in mission '{}'",
+                    entry.author_role, score_avg, critical_count, entry.mission
+                ),
+                acknowledged: false,
+            };
+            let alerts_path = self.config_dir.join("alerts.json");
+            let _ = colmena_core::alerts::create_alert(&alerts_path, alert);
+        }
 
         // ELO updates
         let elo_log = self.config_dir.join("elo/elo-log.jsonl");
@@ -1230,7 +1291,290 @@ impl ColmenaServer {
             filter.total_chars_saved / 4,
         ));
 
+        // Alert summary
+        let alerts_path = self.config_dir.join("alerts.json");
+        if let Ok(unacked) = colmena_core::alerts::list_alerts(&alerts_path, Some(false)) {
+            if !unacked.is_empty() {
+                let critical = unacked.iter().filter(|a| a.severity == "critical").count();
+                output.push_str(&format!(
+                    "\n  ⚠ {} unacknowledged alert(s) ({} critical) — use alerts_list to review\n",
+                    unacked.len(), critical,
+                ));
+            }
+        }
+
         Ok(output)
+    }
+
+    // ── Alert tools ─────────────────────────────────────────────────────
+
+    #[rmcp::tool(
+        description = "List review alerts. Filters: severity ('critical'|'warning'), acknowledged (true|false)"
+    )]
+    fn alerts_list(
+        &self,
+        Parameters(input): Parameters<AlertsListInput>,
+    ) -> Result<String, String> {
+        let alerts_path = self.config_dir.join("alerts.json");
+
+        let alerts = colmena_core::alerts::list_alerts(&alerts_path, input.acknowledged)
+            .map_err(|e| sanitize_error(&format!("Error loading alerts: {e}")))?;
+
+        // Apply severity filter
+        let filtered: Vec<_> = if let Some(ref sev) = input.severity {
+            alerts.into_iter().filter(|a| a.severity == *sev).collect()
+        } else {
+            alerts
+        };
+
+        if filtered.is_empty() {
+            return Ok("No alerts match the filters.".to_string());
+        }
+
+        let mut output = format!("{} alert(s):\n\n", filtered.len());
+        for alert in &filtered {
+            let ack_label = if alert.acknowledged { " [ACK]" } else { "" };
+            output.push_str(&format!(
+                "  [{severity}]{ack} {id}\n    Agent: {agent} | Mission: {mission} | Review: {review}\n    Score: {score:.1}/10 | Critical findings: {critical}\n    {msg}\n\n",
+                severity = alert.severity.to_uppercase(),
+                ack = ack_label,
+                id = alert.alert_id,
+                agent = alert.agent_id,
+                mission = alert.mission_id,
+                review = alert.review_id,
+                score = alert.score_average,
+                critical = alert.critical_findings,
+                msg = alert.message,
+            ));
+        }
+
+        Ok(output)
+    }
+
+    #[rmcp::tool(
+        description = "Acknowledge a review alert by ID, or pass 'all' to acknowledge all pending alerts"
+    )]
+    fn alerts_ack(
+        &self,
+        Parameters(input): Parameters<AlertsAckInput>,
+    ) -> Result<String, String> {
+        let alerts_path = self.config_dir.join("alerts.json");
+
+        if input.alert_id == "all" {
+            colmena_core::alerts::acknowledge_all(&alerts_path)
+                .map_err(|e| sanitize_error(&format!("Error acknowledging alerts: {e}")))?;
+            Ok("All alerts acknowledged.".to_string())
+        } else {
+            colmena_core::alerts::acknowledge_alert(&alerts_path, &input.alert_id)
+                .map_err(|e| sanitize_error(&format!("Error acknowledging alert: {e}")))?;
+            Ok(format!("Alert '{}' acknowledged.", input.alert_id))
+        }
+    }
+
+    // ── Auditor Calibration tools ───────────────────────────────────────
+
+    #[rmcp::tool(
+        description = "Show last N evaluations by the auditor role for human calibration. Presents reasoning, scores, and alternative approaches"
+    )]
+    fn calibrate_auditor(
+        &self,
+        Parameters(input): Parameters<CalibrateAuditorInput>,
+    ) -> Result<String, String> {
+        let review_dir = self.config_dir.join("reviews");
+        let library_dir = self.config_dir.join("library");
+        let last_n = input.last.unwrap_or(5);
+        let is_spanish = input.lang.as_deref() == Some("es");
+
+        // Load roles to find auditor-type roles
+        let roles = colmena_core::library::load_roles(&library_dir)
+            .map_err(|e| sanitize_error(&format!("Error loading roles: {e}")))?;
+
+        let auditor_role_ids: Vec<String> = roles
+            .iter()
+            .filter(|r| r.role_type.as_deref() == Some("auditor"))
+            .map(|r| r.id.clone())
+            .collect();
+
+        if auditor_role_ids.is_empty() {
+            return Ok("No roles with role_type 'auditor' found in library.".to_string());
+        }
+
+        // Load all completed reviews where reviewer is an auditor role
+        let all_reviews = colmena_core::review::list_reviews(&review_dir, None)
+            .map_err(|e| sanitize_error(&format!("Error loading reviews: {e}")))?;
+
+        let mut auditor_reviews: Vec<_> = all_reviews
+            .into_iter()
+            .filter(|r| {
+                auditor_role_ids.contains(&r.reviewer_role)
+                    && r.state != colmena_core::review::ReviewState::Pending
+                    && r.scores.is_some()
+            })
+            .collect();
+
+        // Sort by evaluated_at descending (most recent first)
+        auditor_reviews.sort_by(|a, b| b.evaluated_at.cmp(&a.evaluated_at));
+
+        // Take last N
+        let selected: Vec<_> = auditor_reviews.into_iter().take(last_n).collect();
+
+        if selected.is_empty() {
+            let msg = if is_spanish {
+                "No se encontraron evaluaciones de roles auditores."
+            } else {
+                "No completed evaluations by auditor roles found."
+            };
+            return Ok(msg.to_string());
+        }
+
+        // Format output
+        let header = if is_spanish {
+            "Evaluaciones del Auditor"
+        } else {
+            "Auditor Evaluations"
+        };
+
+        let mut output = format!("{}\n{}\n\n", header, "=".repeat(header.len()));
+
+        for (i, review) in selected.iter().enumerate() {
+            output.push_str(&format!("--- {} #{} ---\n", if is_spanish { "Evaluacion" } else { "Evaluation" }, i + 1));
+            output.push_str(&format!("  Review ID: {}\n", review.review_id));
+            output.push_str(&format!("  Mission: {}\n", review.mission));
+            output.push_str(&format!("  Author: {}\n", review.author_role));
+            output.push_str(&format!("  Reviewer: {}\n", review.reviewer_role));
+
+            if let Some(ref eval_at) = review.evaluated_at {
+                output.push_str(&format!("  Date: {}\n", eval_at.format("%Y-%m-%d %H:%M UTC")));
+            }
+
+            // Scores section
+            let scores_label = if is_spanish { "Puntajes" } else { "Scores" };
+            output.push_str(&format!("\n  {}:\n", scores_label));
+            if let Some(ref scores) = review.scores {
+                for (dim, val) in scores {
+                    output.push_str(&format!("    {}: {}/10\n", dim, val));
+                }
+            }
+            if let Some(avg) = review.score_average {
+                let avg_label = if is_spanish { "Promedio" } else { "Average" };
+                output.push_str(&format!("    {} → {:.1}/10\n", avg_label, avg));
+            }
+
+            // Findings section
+            let findings_label = if is_spanish { "Hallazgos" } else { "Findings" };
+            output.push_str(&format!("\n  {}:\n", findings_label));
+            if let Some(count) = review.finding_count {
+                if count == 0 {
+                    let none_msg = if is_spanish { "    Ninguno" } else { "    None" };
+                    output.push_str(&format!("{}\n", none_msg));
+                } else {
+                    output.push_str(&format!("    {} finding(s)\n", count));
+                }
+            }
+
+            // Narrative section
+            let narrative_label = if is_spanish { "Narrativa de evaluacion" } else { "Evaluation Narrative" };
+            output.push_str(&format!("\n  {}:\n", narrative_label));
+            if let Some(ref narrative) = review.evaluation_narrative {
+                output.push_str(&format!("    {}\n", narrative));
+            } else {
+                let no_narrative = if is_spanish { "    (sin narrativa)" } else { "    (no narrative provided)" };
+                output.push_str(&format!("{}\n", no_narrative));
+            }
+
+            // Prompt for human feedback
+            let feedback_label = if is_spanish { "Tu evaluacion" } else { "Your Evaluation" };
+            output.push_str(&format!(
+                "\n  {}:\n    Use calibrate_auditor_feedback with review_id='{}' and choice='current'|'correction'\n\n",
+                feedback_label, review.review_id
+            ));
+        }
+
+        Ok(output)
+    }
+
+    #[rmcp::tool(
+        description = "Provide feedback on an auditor evaluation. Adjusts auditor ELO based on accuracy"
+    )]
+    fn calibrate_auditor_feedback(
+        &self,
+        Parameters(input): Parameters<CalibrateAuditorFeedbackInput>,
+    ) -> Result<String, String> {
+        self.rate_limiter.check("calibrate_auditor_feedback")?;
+        let review_dir = self.config_dir.join("reviews");
+        let elo_log = self.config_dir.join("elo/elo-log.jsonl");
+
+        // Load the review to find the reviewer (auditor)
+        let all_reviews = colmena_core::review::list_reviews(&review_dir, None)
+            .map_err(|e| sanitize_error(&format!("Error loading reviews: {e}")))?;
+
+        let review = all_reviews
+            .iter()
+            .find(|r| r.review_id == input.review_id)
+            .ok_or_else(|| sanitize_error(&format!("Review '{}' not found", input.review_id)))?;
+
+        let auditor_role = review.reviewer_role.clone();
+        let mission = review.mission.clone();
+
+        // Determine ELO adjustment based on choice
+        let (delta, reason) = if input.choice == "current" {
+            (10, "Human confirmed auditor evaluation was correct".to_string())
+        } else if input.choice.starts_with("alternative_") {
+            (-5, format!("Human preferred auditor's alternative option ({})", input.choice))
+        } else if input.choice == "correction" {
+            if input.correction_text.is_none() {
+                return Err("correction_text is required when choice is 'correction'".to_string());
+            }
+            (-10, "Human provided correction — auditor evaluation was inaccurate".to_string())
+        } else {
+            return Err(format!(
+                "Invalid choice '{}'. Use 'current', 'alternative_N', or 'correction'",
+                input.choice
+            ));
+        };
+
+        // Log ELO event for the auditor
+        colmena_core::elo::log_elo_event(
+            &elo_log,
+            &colmena_core::elo::EloEvent {
+                agent: auditor_role.clone(),
+                event_type: colmena_core::elo::EloEventType::ReviewQuality,
+                delta,
+                reason: reason.clone(),
+                mission: mission.clone(),
+                review_id: input.review_id.clone(),
+            },
+        )
+        .map_err(|e| sanitize_error(&format!("Error logging ELO event: {e}")))?;
+
+        // If correction, save as finding with category "auditor_calibration"
+        if input.choice == "correction" {
+            let findings_dir = self.config_dir.join("findings");
+            let finding_record = colmena_core::findings::FindingRecord {
+                review_id: input.review_id.clone(),
+                mission: mission.clone(),
+                author_role: auditor_role.clone(),
+                reviewer_role: "human".to_string(),
+                artifact_path: String::new(),
+                artifact_hash: String::new(),
+                timestamp: chrono::Utc::now(),
+                scores: std::collections::HashMap::new(),
+                score_average: 0.0,
+                findings: vec![colmena_core::findings::Finding {
+                    category: "auditor_calibration".to_string(),
+                    severity: "medium".to_string(),
+                    description: input.correction_text.unwrap_or_default(),
+                    recommendation: "Adjust auditor evaluation criteria".to_string(),
+                }],
+            };
+            let _ = colmena_core::findings::save_finding_record(&findings_dir, &finding_record);
+        }
+
+        let direction = if delta > 0 { "+" } else { "" };
+        Ok(format!(
+            "Auditor calibration recorded:\n  Auditor: {}\n  Review: {}\n  Choice: {}\n  ELO adjustment: {}{}\n  Reason: {}",
+            auditor_role, input.review_id, input.choice, direction, delta, reason,
+        ))
     }
 }
 
