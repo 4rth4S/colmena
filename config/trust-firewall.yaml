@@ -57,7 +57,7 @@ trust_circle:
   - tools: [Write, Edit]
     conditions:
       path_within: ['${PROJECT_DIR}']
-      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*filter-config*', '*filter-stats*', '*settings.json']
+      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*']
     action: auto-approve
     reason: 'Project-scoped file writes excluding secrets'
 
