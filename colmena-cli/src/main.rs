@@ -338,17 +338,39 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
         return Ok(());
     }
 
-    let payload: hook::HookPayload =
-        serde_json::from_str(&input).context("Failed to parse hook payload")?;
+    // Parse raw JSON first — SubagentStop has a different payload shape than tool events
+    let raw: serde_json::Value =
+        serde_json::from_str(&input).context("Failed to parse hook JSON")?;
+    let event_name = raw
+        .get("hook_event_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
 
     // 1b. Settings.json integrity check (Fix 12, DREAD 7.8)
     check_hook_integrity();
 
     // Dispatch by hook event
-    match payload.hook_event_name.as_str() {
-        "PreToolUse" => run_pre_tool_use_hook(payload, config_path),
-        "PostToolUse" => run_post_tool_use_hook(payload),
-        "PermissionRequest" => run_permission_request_hook(payload),
+    match event_name {
+        "PreToolUse" => {
+            let payload: hook::HookPayload = serde_json::from_value(raw)
+                .context("Failed to parse PreToolUse payload")?;
+            run_pre_tool_use_hook(payload, config_path)
+        }
+        "PostToolUse" => {
+            let payload: hook::HookPayload = serde_json::from_value(raw)
+                .context("Failed to parse PostToolUse payload")?;
+            run_post_tool_use_hook(payload)
+        }
+        "PermissionRequest" => {
+            let payload: hook::HookPayload = serde_json::from_value(raw)
+                .context("Failed to parse PermissionRequest payload")?;
+            run_permission_request_hook(payload)
+        }
+        "SubagentStop" => {
+            let payload: hook::SubagentStopPayload = serde_json::from_value(raw)
+                .context("Failed to parse SubagentStop payload")?;
+            run_subagent_stop_hook(payload)
+        }
         other => {
             log_error(&format!("Unknown hook event: {other}"));
             let response = hook::PostToolUseResponse::passthrough();
@@ -626,6 +648,91 @@ fn build_permission_updates(
         behavior: "allow".to_string(),
         destination: "session".to_string(),
     }]
+}
+
+/// SubagentStop: enforce peer review before mission workers can stop.
+/// Safe fallback: any error → approve (never trap an agent).
+fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
+    let result = subagent_stop_inner(&payload);
+
+    let response = match result {
+        Ok(resp) => resp,
+        Err(e) => {
+            log_error(&format!("SubagentStop error (safe fallback approve): {e}"));
+            hook::SubagentStopResponse::approve()
+        }
+    };
+
+    serde_json::to_writer(std::io::stdout(), &response)
+        .context("Failed to write SubagentStop response")?;
+    Ok(())
+}
+
+fn subagent_stop_inner(
+    payload: &hook::SubagentStopPayload,
+) -> Result<hook::SubagentStopResponse> {
+    // 1. No agent_id → approve (main agent, not a subagent)
+    let agent_id = match &payload.agent_id {
+        Some(id) => id,
+        None => return Ok(hook::SubagentStopResponse::approve()),
+    };
+
+    // 2. Load delegations, find one with this agent_id + source: "role"
+    let config_dir = colmena_core::paths::default_config_dir();
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+
+    let mission_delegation = delegations.iter().find(|d| {
+        d.agent_id.as_deref() == Some(agent_id.as_str())
+            && d.source.as_deref() == Some("role")
+    });
+
+    // 3. No mission delegation → approve (not a mission worker)
+    let delegation = match mission_delegation {
+        Some(d) => d,
+        None => return Ok(hook::SubagentStopResponse::approve()),
+    };
+
+    // 4. Load role from library, check role_type == "auditor"
+    let library_dir = colmena_core::library::default_library_dir();
+    if let Ok(roles) = colmena_core::library::load_roles(&library_dir) {
+        if let Some(role) = roles.iter().find(|r| r.id == *agent_id) {
+            if role.role_type.as_deref() == Some("auditor") {
+                // Auditor is exempt from review requirement
+                return Ok(hook::SubagentStopResponse::approve());
+            }
+        }
+    }
+
+    // 5. Check if agent has submitted a review for this mission
+    let mission_id = delegation.mission_id.as_deref().unwrap_or("unknown");
+    let review_dir = config_dir.join("reviews");
+
+    if colmena_core::review::has_submitted_review(&review_dir, agent_id, mission_id) {
+        // 6. Review exists → approve
+        // Audit log
+        let audit_path = config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::Decision {
+                action: "AGENT_STOP",
+                session_id: &payload.session_id,
+                agent_id: Some(agent_id),
+                tool: "SubagentStop",
+                key_field: "review_submitted",
+                rule: "peer_review_gate",
+            },
+        );
+        Ok(hook::SubagentStopResponse::approve())
+    } else {
+        // 7. No review → block
+        Ok(hook::SubagentStopResponse::block(format!(
+            "You must call mcp__colmena__review_submit before stopping. \
+             Your work needs peer review as part of mission '{}' protocol. \
+             Submit your work for review, then you can stop.",
+            mission_id
+        )))
+    }
 }
 
 fn run_queue_list() -> Result<()> {

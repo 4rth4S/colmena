@@ -197,6 +197,47 @@ impl PermissionRequestResponse {
     }
 }
 
+/// Payload for SubagentStop lifecycle events.
+/// Unlike tool events (PreToolUse/PostToolUse), these have no tool_name/tool_input.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct SubagentStopPayload {
+    pub session_id: String,
+    pub hook_event_name: String,
+    pub agent_id: Option<String>,
+    pub cwd: String,
+    pub reason: Option<String>,
+    pub transcript_path: Option<String>,
+}
+
+/// Response for SubagentStop hooks — approve or block agent from stopping.
+#[derive(Debug, Serialize)]
+pub struct SubagentStopResponse {
+    pub decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+}
+
+impl SubagentStopResponse {
+    pub fn approve() -> Self {
+        Self {
+            decision: "approve".to_string(),
+            reason: None,
+            system_message: None,
+        }
+    }
+
+    pub fn block(message: impl Into<String>) -> Self {
+        Self {
+            decision: "block".to_string(),
+            reason: None,
+            system_message: Some(message.into()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +444,59 @@ mod tests {
             json["hookSpecificOutput"]["decision"]["message"],
             "Mission revoked"
         );
+    }
+
+    // ── SubagentStop response tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_subagent_stop_payload_deserialize() {
+        let input = json!({
+            "session_id": "sess_abc",
+            "hook_event_name": "SubagentStop",
+            "agent_id": "pentester",
+            "cwd": "/home/user/project",
+            "reason": "task_complete",
+            "transcript_path": "/tmp/transcript.jsonl"
+        });
+
+        let payload: SubagentStopPayload = serde_json::from_value(input).unwrap();
+        assert_eq!(payload.session_id, "sess_abc");
+        assert_eq!(payload.hook_event_name, "SubagentStop");
+        assert_eq!(payload.agent_id, Some("pentester".to_string()));
+        assert_eq!(payload.cwd, "/home/user/project");
+        assert_eq!(payload.reason, Some("task_complete".to_string()));
+    }
+
+    #[test]
+    fn test_subagent_stop_payload_minimal() {
+        // No tool_name, no tool_input — unlike HookPayload
+        let input = json!({
+            "session_id": "sess_xyz",
+            "hook_event_name": "SubagentStop",
+            "cwd": "/tmp"
+        });
+
+        let payload: SubagentStopPayload = serde_json::from_value(input).unwrap();
+        assert_eq!(payload.agent_id, None);
+        assert_eq!(payload.reason, None);
+        assert_eq!(payload.transcript_path, None);
+    }
+
+    #[test]
+    fn test_subagent_stop_response_approve() {
+        let resp = SubagentStopResponse::approve();
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["decision"], "approve");
+        // No systemMessage for approve
+        assert!(!json.as_object().unwrap().contains_key("systemMessage"));
+        assert!(!json.as_object().unwrap().contains_key("reason"));
+    }
+
+    #[test]
+    fn test_subagent_stop_response_block() {
+        let resp = SubagentStopResponse::block("Submit review first");
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["decision"], "block");
+        assert_eq!(json["systemMessage"], "Submit review first");
     }
 }
