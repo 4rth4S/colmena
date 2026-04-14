@@ -47,6 +47,22 @@ pub fn all_defaults() -> Vec<DefaultFile> {
             rel_path: "library/roles/api-pentester.yaml",
             content: include_str!("../../config/library/roles/api-pentester.yaml"),
         },
+        DefaultFile {
+            rel_path: "library/roles/developer.yaml",
+            content: include_str!("../../config/library/roles/developer.yaml"),
+        },
+        DefaultFile {
+            rel_path: "library/roles/code-reviewer.yaml",
+            content: include_str!("../../config/library/roles/code-reviewer.yaml"),
+        },
+        DefaultFile {
+            rel_path: "library/roles/tester.yaml",
+            content: include_str!("../../config/library/roles/tester.yaml"),
+        },
+        DefaultFile {
+            rel_path: "library/roles/architect.yaml",
+            content: include_str!("../../config/library/roles/architect.yaml"),
+        },
         // ── Library: patterns ────────────────────────────────────────────────
         DefaultFile {
             rel_path: "library/patterns/oracle-workers.yaml",
@@ -76,6 +92,18 @@ pub fn all_defaults() -> Vec<DefaultFile> {
             rel_path: "library/patterns/caido-pentest.yaml",
             content: include_str!("../../config/library/patterns/caido-pentest.yaml"),
         },
+        DefaultFile {
+            rel_path: "library/patterns/code-review-cycle.yaml",
+            content: include_str!("../../config/library/patterns/code-review-cycle.yaml"),
+        },
+        DefaultFile {
+            rel_path: "library/patterns/docs-from-code.yaml",
+            content: include_str!("../../config/library/patterns/docs-from-code.yaml"),
+        },
+        DefaultFile {
+            rel_path: "library/patterns/refactor-safe.yaml",
+            content: include_str!("../../config/library/patterns/refactor-safe.yaml"),
+        },
         // ── Library: prompts ─────────────────────────────────────────────────
         DefaultFile {
             rel_path: "library/prompts/pentester.md",
@@ -100,6 +128,22 @@ pub fn all_defaults() -> Vec<DefaultFile> {
         DefaultFile {
             rel_path: "library/prompts/api-pentester.md",
             content: include_str!("../../config/library/prompts/api-pentester.md"),
+        },
+        DefaultFile {
+            rel_path: "library/prompts/developer.md",
+            content: include_str!("../../config/library/prompts/developer.md"),
+        },
+        DefaultFile {
+            rel_path: "library/prompts/code-reviewer.md",
+            content: include_str!("../../config/library/prompts/code-reviewer.md"),
+        },
+        DefaultFile {
+            rel_path: "library/prompts/tester.md",
+            content: include_str!("../../config/library/prompts/tester.md"),
+        },
+        DefaultFile {
+            rel_path: "library/prompts/architect.md",
+            content: include_str!("../../config/library/prompts/architect.md"),
         },
         DefaultFile {
             rel_path: "library/prompts/review-worker-instructions.md",

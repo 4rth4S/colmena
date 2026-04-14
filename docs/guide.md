@@ -701,19 +701,33 @@ colmena library list
 ```
 
 ```
-Roles:
+Roles (Security):
   security_architect  -- Designs threat models, defines security architecture
   pentester           -- Tests attack surface, finds vulnerabilities
   auditor             -- Reviews compliance, checks controls
   researcher          -- Maps attack surface, gathers intelligence
+  web_pentester       -- Caido-native web application pentester
+  api_pentester       -- Caido-native API pentester
 
-Patterns:
+Roles (Development):
+  developer           -- Writes code, implements features, runs builds
+  code_reviewer       -- Reviews code quality, finds bugs (read-only)
+  tester              -- Writes tests, runs suites, measures coverage
+  architect           -- System design, tradeoff analysis, technical docs
+
+Patterns (Security):
   pipeline            -- Sequential stages, each agent feeds the next
   oracle-workers      -- One coordinator, N specialized workers
   debate              -- Agents argue opposing positions, human decides
   plan-then-execute   -- Architect plans, workers execute in parallel
   mentored-execution  -- Senior agent guides junior with review checkpoints
   swarm-consensus     -- All agents work independently, vote on results
+  caido-pentest       -- Caido-native pentesting workflow
+
+Patterns (Development):
+  code-review-cycle   -- Developer implements, auditor reviews, feedback loop
+  docs-from-code      -- Architect reads, developer writes docs, auditor validates
+  refactor-safe       -- Developer refactors, tester validates, auditor approves
 ```
 
 ### Viewing details
@@ -1351,6 +1365,71 @@ All delegations expire automatically (max 24h).
 | Glass.aiff | Low-priority decision needed |
 | Hero.aiff | Medium/high-priority decision needed |
 | Basso.aiff | Something was blocked |
+
+---
+
+## 15. Development Workflows
+
+Colmena includes 4 generic development roles and 3 dev workflow patterns for software engineering tasks.
+
+### Roles
+
+| Role | What it does | Bash scope |
+|------|-------------|------------|
+| `developer` | Writes code, runs builds, implements features | build/test/lint + git |
+| `code_reviewer` | Reviews code quality, finds bugs (read-only) | git diff/log/blame + test runners |
+| `tester` | Writes tests, runs suites, measures coverage | test frameworks + package install |
+| `architect` | Designs systems, writes docs, evaluates tradeoffs | git log + analysis tools |
+
+All dev roles start at trust level "ask" and earn trust through ELO calibration.
+
+### Patterns
+
+**Code Review Cycle** (iterative) — For focused feature work:
+```
+developer implements feature → review_submit → auditor evaluates → feedback
+```
+Best for: single-developer tasks that need quality review.
+
+**Docs from Code** (sequential) — For documentation sprints:
+```
+architect analyzes codebase → developer generates docs → auditor validates accuracy
+```
+Best for: generating accurate documentation from existing code.
+
+**Refactor Safe** (sequential) — For safe refactoring:
+```
+developer refactors → tester validates tests pass → auditor approves
+```
+Best for: code restructuring where you can't afford regressions.
+
+### Example: Feature implementation with review
+
+```bash
+# 1. Select pattern for your mission
+colmena library select --mission "implement JWT authentication"
+# → Recommends: code-review-cycle (developer + auditor)
+
+# 2. Generate mission (creates CLAUDE.md per agent + delegations)
+# Via MCP: mcp__colmena__library_generate
+
+# 3. Agents work with scoped permissions:
+#    - developer: can run cargo build/test, write code in mission dir
+#    - auditor: evaluates using Quality/Precision/Comprehensiveness (QPC)
+
+# 4. Inter-agent communication uses token-efficient protocol:
+#    "Facts only. path:line references. No prose."
+```
+
+### Auditor QPC Framework
+
+When evaluating any agent's work, the auditor scores three dimensions:
+
+1. **Quality (1-10)** — Is the work well-executed?
+2. **Precision (1-10)** — Does the output match the objective?
+3. **Comprehensiveness (1-10)** — How much of the scope was covered?
+
+These dimensions are role-agnostic — a developer's code and a researcher's findings are evaluated on the same scale.
 
 ---
 
