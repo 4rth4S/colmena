@@ -186,6 +186,12 @@ struct MissionSpawnInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct MissionSuggestInput {
+    /// Mission description to analyze (e.g., "fix typo in README" or "implement auth with tests and security review")
+    mission: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LibraryCreateRoleInput {
     /// Role ID (e.g., "cloud-security")
     id: String,
@@ -1286,6 +1292,60 @@ impl ColmenaServer {
                 output.push_str(&format!("{}\n", cmd));
             }
             output.push_str("```\n");
+        }
+
+        Ok(output)
+    }
+
+    // ── Mission Suggest ──────────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Analyze a mission description and recommend whether to use Colmena — returns complexity, agent count, pattern suggestion, and confidence. Use this before mission_spawn to check if the task warrants multi-agent orchestration.")]
+    fn mission_suggest(
+        &self,
+        Parameters(input): Parameters<MissionSuggestInput>,
+    ) -> Result<String, String> {
+        let library_dir = self.config_dir.join("library");
+
+        let roles = colmena_core::library::load_roles(&library_dir)
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
+        let patterns = colmena_core::library::load_patterns(&library_dir)
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
+
+        let suggestion = colmena_core::selector::suggest_mission_size(&input.mission, &roles, &patterns);
+
+        let mut output = format!(
+            "## Mission Analysis\n\n\
+             **Description:** \"{}\"\n\n\
+             | Field | Value |\n|---|---|\n\
+             | Complexity | {} |\n\
+             | Recommended agents | {} |\n\
+             | Needs Colmena | {} |\n\
+             | Confidence | {:.2} |\n\
+             | Domains detected | {} |\n",
+            input.mission,
+            suggestion.complexity.as_str(),
+            suggestion.recommended_agents,
+            suggestion.needs_colmena,
+            suggestion.confidence,
+            if suggestion.domains_detected.is_empty() { "none".to_string() } else { suggestion.domains_detected.join(", ") },
+        );
+
+        if suggestion.needs_colmena {
+            if let Some(ref pattern) = suggestion.suggested_pattern {
+                output.push_str(&format!("| Suggested pattern | {} |\n", pattern));
+            }
+            if !suggestion.suggested_roles.is_empty() {
+                output.push_str(&format!("| Suggested roles | {} |\n", suggestion.suggested_roles.join(" → ")));
+            }
+            output.push_str(&format!(
+                "\n**Recommendation:** Use `mcp__colmena__mission_spawn` to create this mission.\n\n{}",
+                suggestion.reason
+            ));
+        } else {
+            output.push_str(&format!(
+                "\n**Recommendation:** Use Claude Code directly — no Colmena needed.\n\n{}",
+                suggestion.reason
+            ));
         }
 
         Ok(output)

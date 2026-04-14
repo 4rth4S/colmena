@@ -98,6 +98,11 @@ enum Commands {
     },
     /// Diagnose the health of a Colmena installation
     Doctor,
+    /// Analyze a mission and recommend whether to use Colmena
+    Suggest {
+        /// Mission description to analyze
+        mission: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -282,6 +287,7 @@ fn main() {
         },
         Commands::Setup { dry_run, force } => setup::run_setup(dry_run, force),
         Commands::Doctor => doctor::run_doctor(),
+        Commands::Suggest { mission } => run_suggest(&mission),
     };
 
     if let Err(e) = result {
@@ -382,6 +388,50 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
 }
 
 /// PreToolUse: evaluate tool call against trust firewall rules.
+fn run_suggest(mission: &str) -> Result<()> {
+    let library_dir = colmena_core::library::default_library_dir();
+    let roles = colmena_core::library::load_roles(&library_dir)
+        .context("Failed to load roles")?;
+    let patterns = colmena_core::library::load_patterns(&library_dir)
+        .context("Failed to load patterns")?;
+
+    let suggestion = colmena_core::selector::suggest_mission_size(mission, &roles, &patterns);
+
+    println!("Mission Analysis");
+    println!("================");
+    println!();
+    println!("Description: \"{}\"", mission);
+    println!();
+    println!("Complexity:    {}", suggestion.complexity.as_str());
+    println!("Agents:        {}", suggestion.recommended_agents);
+
+    if !suggestion.domains_detected.is_empty() {
+        println!("Domains:       {}", suggestion.domains_detected.join(", "));
+    }
+
+    println!("Confidence:    {:.2}", suggestion.confidence);
+    println!();
+
+    if suggestion.needs_colmena {
+        if let Some(ref pattern) = suggestion.suggested_pattern {
+            println!("Pattern:       {}", pattern);
+        }
+        if !suggestion.suggested_roles.is_empty() {
+            println!("Roles:         {}", suggestion.suggested_roles.join(" → "));
+        }
+        println!();
+        println!("→ Ready to go:");
+        println!("  colmena library select --mission \"{}\"", mission);
+        println!("  # or use mcp__colmena__mission_spawn via MCP");
+    } else {
+        println!("⚡ You don't need Colmena for this. Use Claude Code directly.");
+        println!();
+        println!("Why: {}", suggestion.reason);
+    }
+
+    Ok(())
+}
+
 fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf>) -> Result<()> {
     // 2. Resolve config path
     let config_file = config_path
@@ -459,8 +509,8 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
             colmena_core::firewall::Decision {
                 action: Action::Ask,
                 reason: "Mission gate: this Agent call has no Colmena mission binding. \
-                         Use mcp__colmena__mission_spawn to create a mission first, \
-                         then paste the generated agent prompts into Agent calls. \
+                         Use mcp__colmena__mission_suggest to check if you need a mission, \
+                         or mcp__colmena__mission_spawn to create one directly. \
                          Approve manually to proceed without mission binding.".to_string(),
                 matched_rule: Some("mission_gate".to_string()),
                 priority: colmena_core::firewall::Priority::Medium,
