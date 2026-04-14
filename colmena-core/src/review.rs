@@ -59,6 +59,8 @@ pub struct ReviewEntry {
     pub scores: Option<HashMap<String, u32>>,
     pub score_average: Option<f64>,
     pub finding_count: Option<usize>,
+    #[serde(default)]
+    pub evaluation_narrative: Option<String>,
 }
 
 // ── Public API ─────────────────────────────────────────────────────
@@ -128,6 +130,7 @@ pub fn submit_review(
         scores: None,
         score_average: None,
         finding_count: None,
+        evaluation_narrative: None,
     };
 
     save_review(review_dir, &entry)?;
@@ -149,6 +152,7 @@ pub fn evaluate_review(
     scores: HashMap<String, u32>,
     findings: Vec<Finding>,
     artifact_path: &Path,
+    narrative: Option<String>,
 ) -> Result<ReviewEntry> {
     // Invariant 6: minimum score dimensions
     if scores.len() < MIN_SCORE_DIMENSIONS {
@@ -199,6 +203,7 @@ pub fn evaluate_review(
     entry.score_average = Some(avg);
     entry.finding_count = Some(findings.len());
     entry.evaluated_at = Some(now);
+    entry.evaluation_narrative = narrative;
     entry.state = ReviewState::Evaluated;
 
     // Move from pending/ to completed/
@@ -279,6 +284,50 @@ pub fn list_reviews(
     entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
     Ok(entries)
+}
+
+/// Check if a given author_role has submitted a review for a given mission.
+///
+/// Searches both `pending/` and `completed/` subdirs. Returns true if any
+/// `ReviewEntry` matches both `author_role` and `mission`. On any error,
+/// returns false (safe fallback).
+pub fn has_submitted_review(review_dir: &Path, author_role: &str, mission_id: &str) -> bool {
+    for subdir in &["pending", "completed"] {
+        let dir = review_dir.join(subdir);
+        if !dir.exists() {
+            continue;
+        }
+
+        let read = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        for file_entry in read {
+            let file_entry = match file_entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if let Ok(entry) = serde_json::from_str::<ReviewEntry>(&content) {
+                if entry.author_role == author_role && entry.mission == mission_id {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
 }
 
 // ── Private helpers ────────────────────────────────────────────────
@@ -474,6 +523,7 @@ mod tests {
             scores,
             findings,
             &artifact,
+            None,
         )
         .unwrap();
 
@@ -526,6 +576,7 @@ mod tests {
             scores,
             vec![],
             &artifact,
+            None,
         );
 
         assert!(result.is_err());
@@ -565,6 +616,7 @@ mod tests {
             scores,
             vec![],
             &artifact,
+            None,
         );
 
         assert!(result.is_err());
@@ -686,6 +738,7 @@ mod tests {
             scores,
             vec![],
             &artifact,
+            None,
         );
 
         assert!(result.is_err(), "score above MAX_REVIEW_SCORE must be rejected");
@@ -724,8 +777,126 @@ mod tests {
             scores,
             vec![],
             &artifact,
+            None,
         );
 
         assert!(result.is_ok(), "score equal to MAX_REVIEW_SCORE must be accepted");
+    }
+
+    // ── M6.4: has_submitted_review tests ─────────────────────────────────────
+
+    #[test]
+    fn test_has_submitted_review_found() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let _entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        )
+        .unwrap();
+
+        assert!(
+            has_submitted_review(&review_dir, "coder", "audit-payments"),
+            "should find the submitted review"
+        );
+    }
+
+    #[test]
+    fn test_has_submitted_review_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        // Don't submit anything — empty dir
+        assert!(
+            !has_submitted_review(&review_dir, "coder", "audit-payments"),
+            "should return false for empty review dir"
+        );
+    }
+
+    #[test]
+    fn test_has_submitted_review_wrong_mission() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let _entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        )
+        .unwrap();
+
+        assert!(
+            !has_submitted_review(&review_dir, "coder", "different-mission"),
+            "should return false for wrong mission"
+        );
+    }
+
+    // ── M6.4: evaluation_narrative tests ─────────────────────────────────────
+
+    #[test]
+    fn test_evaluate_review_with_narrative() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        )
+        .unwrap();
+
+        let mut scores = HashMap::new();
+        scores.insert("correctness".to_string(), 8);
+        scores.insert("security".to_string(), 7);
+
+        let narrative_text = "The code correctly implements the payment flow. \
+            Security score reflects a minor input validation gap. \
+            Alternative approach 1: strict deny-list, rejected due to maintenance cost. \
+            Alternative approach 2: schema validation, rejected as over-engineering. \
+            Alternative approach 3: runtime sanitization, rejected for performance impact."
+            .to_string();
+
+        let evaluated = evaluate_review(
+            &review_dir,
+            &entry.review_id,
+            "pentester",
+            scores,
+            vec![],
+            &artifact,
+            Some(narrative_text.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(evaluated.evaluation_narrative, Some(narrative_text.clone()));
+
+        // Verify it's persisted in the JSON file
+        let completed_path = review_dir
+            .join("completed")
+            .join(format!("{}.json", entry.review_id));
+        let saved_content = std::fs::read_to_string(&completed_path).unwrap();
+        let saved_entry: ReviewEntry = serde_json::from_str(&saved_content).unwrap();
+        assert_eq!(saved_entry.evaluation_narrative, Some(narrative_text));
     }
 }
