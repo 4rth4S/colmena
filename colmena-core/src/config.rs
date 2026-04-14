@@ -60,6 +60,10 @@ pub struct FirewallConfig {
     #[serde(default)]
     pub agent_overrides: HashMap<String, Vec<Rule>>,
     pub notifications: Option<NotificationsConfig>,
+    /// When true, Agent tool calls without a Colmena mission marker trigger "ask".
+    /// Off by default — opt-in enforcement.
+    #[serde(default)]
+    pub enforce_missions: bool,
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -321,6 +325,7 @@ action: auto-approve
             }],
             agent_overrides: HashMap::new(),
             notifications: None,
+            enforce_missions: false,
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -343,6 +348,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
+            enforce_missions: false,
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -364,6 +370,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
+            enforce_missions: false,
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -384,6 +391,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
+            enforce_missions: false,
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -457,5 +465,37 @@ action: auto-approve
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("world-writable"));
         assert!(warnings[0].contains("trust-firewall.yaml"));
+    }
+
+    // ── enforce_missions tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_enforce_missions_default_false() {
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+"#;
+        let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert!(!config.enforce_missions, "enforce_missions should default to false");
+    }
+
+    #[test]
+    fn test_enforce_missions_parses_true() {
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+enforce_missions: true
+"#;
+        let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert!(config.enforce_missions, "enforce_missions should parse as true");
+    }
+
+    #[test]
+    fn test_enforce_missions_from_real_config() {
+        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config = load_config(&config_path, "/home/test/project").unwrap();
+        assert!(!config.enforce_missions, "Real config should have enforce_missions=false");
     }
 }

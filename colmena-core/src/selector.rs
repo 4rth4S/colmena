@@ -46,6 +46,30 @@ When communicating with other agents in this mission:
 - NEVER compress: code, commands, file contents, configurations, error messages.
 - Human-facing output: normal verbosity (this protocol is agent-to-agent only).";
 
+/// Mission marker prefix embedded in agent prompts for Mission Gate validation.
+pub const MISSION_MARKER_PREFIX: &str = "<!-- colmena:mission_id=";
+
+/// Result of `spawn_mission()` — everything needed to launch a Colmena mission.
+#[derive(Debug)]
+pub struct SpawnResult {
+    pub mission_name: String,
+    pub pattern_id: String,
+    pub pattern_auto_created: bool,
+    pub agent_prompts: Vec<AgentPrompt>,
+    pub delegation_commands: Vec<String>,
+    pub role_gaps: Vec<String>,
+    pub mission_config: MissionConfig,
+}
+
+/// A ready-to-paste agent prompt with mission marker.
+#[derive(Debug)]
+pub struct AgentPrompt {
+    pub role_id: String,
+    pub role_name: String,
+    pub prompt: String,
+    pub claude_md_path: PathBuf,
+}
+
 /// Generated mission configuration
 #[derive(Debug)]
 pub struct MissionConfig {
@@ -896,6 +920,163 @@ pub fn scaffold_role(
     std::fs::write(&prompt_path, prompt_md)?;
 
     Ok((role_path, prompt_path))
+}
+
+// ── Mission Spawn — One-Step Pipeline ────────────────────────────────────────
+
+/// One-step mission creation: select pattern → auto-create if needed → map roles →
+/// generate mission with markers → return everything ready to use.
+///
+/// Pipeline:
+/// 1. `select_patterns()` to find best matching pattern
+/// 2. If no match: `suggest_pattern_for_mission()` → `scaffold_pattern()` to auto-create
+/// 3. `generate_mission()` to create CLAUDE.md files with mission markers
+/// 4. Read generated CLAUDE.md files to build AgentPrompt with mission marker prefix
+/// 5. Format delegation commands for CLI execution
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_mission(
+    mission: &str,
+    roles: &[Role],
+    patterns: &[Pattern],
+    library_dir: &Path,
+    missions_dir: &Path,
+    session_id: Option<&str>,
+    elo_ratings: &[AgentRating],
+    config_dir: Option<&Path>,
+) -> Result<SpawnResult> {
+    if roles.is_empty() {
+        anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
+    }
+
+    // 1. Select best pattern
+    let mut recommendations = select_patterns(mission, patterns, roles);
+    let mut pattern_auto_created = false;
+    let mut auto_created_pattern: Option<crate::library::Pattern> = None;
+
+    let recommendation = if recommendations.is_empty() {
+        // 2. No match — auto-create a pattern
+        let suggestion = suggest_pattern_for_mission(mission);
+        let pattern_path = scaffold_pattern(
+            &suggestion.suggested_id,
+            mission,
+            Some(suggestion.topology),
+            library_dir,
+        )?;
+        pattern_auto_created = true;
+
+        // Load the newly created pattern
+        let content = std::fs::read_to_string(&pattern_path)
+            .with_context(|| format!("Failed to read auto-created pattern: {}", pattern_path.display()))?;
+        let pattern: crate::library::Pattern = serde_yml::from_str(&content)
+            .with_context(|| format!("Failed to parse auto-created pattern: {}", pattern_path.display()))?;
+
+        // Use map_topology_roles to assign real roles to auto-created pattern slots
+        // (scaffold generates generic IDs like "agent_lead" — we need real library roles)
+        let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
+        let role_ids: Vec<String> = roles.iter().map(|r| r.id.clone()).collect();
+        let role_specs: HashMap<String, Vec<String>> = roles.iter()
+            .map(|r| (r.id.clone(), r.specializations.clone()))
+            .collect();
+
+        let topology = pattern.topology.parse::<PatternTopology>()
+            .unwrap_or(PatternTopology::Hierarchical);
+        let slot_assignments = map_topology_roles(topology, mission, &role_ids, &role_specs);
+
+        let role_assignments: Vec<RoleAssignment> = slot_assignments.iter().map(|(slot, rid)| {
+            let (name, icon) = role_map.get(rid.as_str())
+                .map(|r| (r.name.clone(), r.icon.clone()))
+                .unwrap_or_else(|| (rid.clone(), "?".to_string()));
+            RoleAssignment {
+                slot: slot.clone(),
+                role_id: rid.clone(),
+                role_name: name,
+                icon,
+            }
+        }).collect();
+
+        auto_created_pattern = Some(pattern.clone());
+        Recommendation {
+            pattern_id: pattern.id.clone(),
+            pattern_name: pattern.name.clone(),
+            score: 0.0,
+            matched_criteria: vec!["Auto-created pattern (no existing match)".to_string()],
+            anti_matched: vec![],
+            role_assignments,
+        }
+    } else {
+        recommendations.remove(0)
+    };
+
+    // Detect role gaps
+    let role_gaps = detect_role_gaps(mission, roles);
+
+    // 3. Generate mission (creates CLAUDE.md + delegations)
+    // Need patterns for generate_mission — use auto-created if applicable
+    let mission_config = generate_mission(
+        mission,
+        &recommendation,
+        roles,
+        library_dir,
+        missions_dir,
+        session_id,
+        elo_ratings,
+        config_dir,
+    )?;
+
+    let mission_name = mission_config.mission_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    // 4. Build AgentPrompts — read generated CLAUDE.md + prepend mission marker
+    let mission_marker = format!("{}{} -->", MISSION_MARKER_PREFIX, mission_name);
+    let mut agent_prompts = Vec::new();
+
+    for agent_cfg in &mission_config.agent_configs {
+        let claude_md_content = std::fs::read_to_string(&agent_cfg.claude_md_path)
+            .with_context(|| format!("Failed to read CLAUDE.md for {}", agent_cfg.role_id))?;
+
+        let prompt = format!("{}\n{}", mission_marker, claude_md_content);
+
+        agent_prompts.push(AgentPrompt {
+            role_id: agent_cfg.role_id.clone(),
+            role_name: agent_cfg.role_name.clone(),
+            prompt,
+            claude_md_path: agent_cfg.claude_md_path.clone(),
+        });
+    }
+
+    // 5. Format delegation CLI commands
+    let delegation_commands: Vec<String> = mission_config.delegations.iter().map(|d| {
+        let mut cmd = format!("colmena delegate add --tool {}", d.tool);
+        if let Some(ref agent) = d.agent_id {
+            cmd.push_str(&format!(" --agent {}", agent));
+        }
+        if let Some(ref conds) = d.conditions {
+            if let Some(ref bp) = conds.bash_pattern {
+                cmd.push_str(&format!(" --bash-pattern '{}'", bp));
+            }
+        }
+        cmd.push_str(" --ttl 8");
+        if let Some(ref sid) = session_id.map(|s| s.to_string()).or_else(|| d.session_id.clone()) {
+            cmd.push_str(&format!(" --session {}", sid));
+        }
+        cmd
+    }).collect();
+
+    // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
+    let _ = &auto_created_pattern; // suppress unused warning
+
+    Ok(SpawnResult {
+        mission_name,
+        pattern_id: recommendation.pattern_id,
+        pattern_auto_created,
+        agent_prompts,
+        delegation_commands,
+        role_gaps,
+        mission_config,
+    })
 }
 
 // ── Formatting ────────────────────────────────────────────────────────────────
@@ -1917,6 +2098,153 @@ mod tests {
                 !contents.contains("Colmena Inter-Agent Protocol"),
                 "CLAUDE.md for solo agent should NOT contain inter-agent directive",
             );
+        }
+    }
+
+    // ── 19. spawn_mission — matching pattern ────────────────────────────────
+
+    #[test]
+    fn test_spawn_mission_with_matching_pattern() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        // Write prompt files
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Developer\nYou write code.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nYou review.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["feature_implementation", "code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit", "compliance"]),
+        ];
+
+        let patterns = vec![
+            make_pattern(
+                "code-review-cycle",
+                "Code Review Cycle",
+                vec!["Feature implementation with quality review", "Code writing followed by structured review"],
+                vec![],
+                vec![("agent", "developer"), ("critic", "auditor")],
+            ),
+        ];
+
+        let result = spawn_mission(
+            "implement feature with code review",
+            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
+        );
+        assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
+
+        let spawn = result.unwrap();
+        assert_eq!(spawn.pattern_id, "code-review-cycle");
+        assert!(!spawn.pattern_auto_created);
+        assert!(!spawn.agent_prompts.is_empty());
+        // All prompts should contain mission marker
+        for ap in &spawn.agent_prompts {
+            assert!(
+                ap.prompt.contains(MISSION_MARKER_PREFIX),
+                "Prompt for {} should contain mission marker",
+                ap.role_id
+            );
+        }
+        assert!(!spawn.delegation_commands.is_empty());
+    }
+
+    // ── 20. spawn_mission — auto-creates pattern ────────────────────────────
+
+    #[test]
+    fn test_spawn_mission_auto_creates_pattern() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+        ];
+
+        // Empty patterns — will auto-create
+        let patterns: Vec<Pattern> = vec![];
+
+        let result = spawn_mission(
+            "do something completely unique",
+            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
+        );
+        assert!(result.is_ok(), "spawn_mission should auto-create: {:?}", result.err());
+
+        let spawn = result.unwrap();
+        assert!(spawn.pattern_auto_created, "pattern should be auto-created");
+        assert!(!spawn.agent_prompts.is_empty());
+    }
+
+    // ── 21. spawn_mission — empty library fails ─────────────────────────────
+
+    #[test]
+    fn test_spawn_mission_empty_library_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(&library_dir).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        let result = spawn_mission(
+            "some mission",
+            &[], &[], &library_dir, &missions_dir, None, &[], None,
+        );
+        assert!(result.is_err(), "spawn_mission with empty library should fail");
+        assert!(result.unwrap_err().to_string().contains("No roles"));
+    }
+
+    // ── 22. spawn_mission — marker format ───────────────────────────────────
+
+    #[test]
+    fn test_spawn_mission_marker_format() {
+        assert!(MISSION_MARKER_PREFIX.starts_with("<!--"));
+        assert!(MISSION_MARKER_PREFIX.contains("colmena:mission_id="));
+    }
+
+    // ── 23. spawn_mission — delegation commands ─────────────────────────────
+
+    #[test]
+    fn test_spawn_mission_includes_delegation_commands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let mut dev = make_role("developer", "Developer", vec!["code_writing"]);
+        dev.tools_allowed = vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()];
+        let roles = vec![dev, make_role("auditor", "Auditor", vec!["audit"])];
+
+        let patterns = vec![
+            make_pattern(
+                "code-review-cycle", "Code Review Cycle",
+                vec!["Feature implementation with quality review"],
+                vec![],
+                vec![("agent", "developer"), ("critic", "auditor")],
+            ),
+        ];
+
+        let result = spawn_mission(
+            "implement feature with code review",
+            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
+        ).unwrap();
+
+        assert!(!result.delegation_commands.is_empty(), "should have delegation commands");
+        // Commands should reference `colmena delegate add`
+        for cmd in &result.delegation_commands {
+            assert!(cmd.starts_with("colmena delegate add"), "cmd should start with delegate add: {}", cmd);
         }
     }
 }

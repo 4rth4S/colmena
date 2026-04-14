@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.9.0 (semver, single workspace version)
+- **Version:** 0.10.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -93,7 +93,7 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - MCP delegate/revoke tools are read-only: return CLI commands for human confirmation, never execute directly
 - `library_generate` MCP is read-only — returns CLI commands for delegations, never persists directly
 - MCP error messages sanitized via `colmena_core::sanitize::sanitize_error` — no filesystem paths leak to agents
-- MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate, alerts_ack, calibrate_auditor_feedback)
+- MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate, mission_spawn, alerts_ack, calibrate_auditor_feedback)
 - MCP evaluate uses evaluate_with_elo() — includes ELO overrides so probation agents show correct restrictions
 - rmcp: uses `#[tool_router]` on impl + `#[tool_handler(router = self.tool_router)]` on ServerHandler
 
@@ -165,6 +165,11 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Auditor QPC framework: Quality + Precision + Comprehensiveness (1-10 each) — role-agnostic evaluation
 - Inter-agent directive (`INTER_AGENT_DIRECTIVE`) injected into multi-agent missions (2+ agents) by `generate_mission()`
 - Inter-agent protocol: facts only, path:line references, no prose — code/commands never compressed
+- `spawn_mission()` is the one-step pipeline: select → auto-create → map_topology_roles → generate_mission with markers
+- `MISSION_MARKER_PREFIX` (`<!-- colmena:mission_id=...-->`) embedded in agent prompts for Mission Gate validation
+- Mission Gate (`enforce_missions: bool`): opt-in, default false, "ask" not "deny" — human always overrides
+- Mission Gate only checks Agent tool — fires after trust rules (step 4c in PreToolUse), never on blocked tools
+- `mission_spawn` MCP is rate-limited (generative) + restricted (creates patterns/delegations)
 
 ### Setup & Install
 
@@ -209,7 +214,7 @@ colmena stats                          # Combined firewall + filter savings summ
 colmena stats --session <id>           # Stats for a specific session
 ```
 
-## MCP Tools (25 total)
+## MCP Tools (26 total)
 
 ```
 Firewall & Delegations:
@@ -243,6 +248,7 @@ Alerts & Calibration:
   calibrate_auditor_feedback — submit calibration feedback (adjusts auditor ELO)
 
 Operations:
+  mission_spawn      — one-step mission creation (select→map→generate→markers)
   mission_deactivate — request mission deactivation (returns CLI command, read-only)
   calibrate          — show ELO-based trust calibration state + recommend CLI commands
   session_stats      — show prompts saved + tokens saved + alert count (call before ending session)
@@ -271,14 +277,14 @@ Operations:
 - **M6.3** Role tools_allowed firewall — PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch (done)
 - **M6.4** Enforced Peer Review — SubagentStop hook blocks workers without review, centralized auditor, alerts system, auditor calibration (done)
 - **M7** Generic roles + patterns + topology mapping — 4 dev roles, 3 dev patterns, map_topology_roles, QPC auditor framework, inter-agent directive (done)
-- **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (planned)
+- **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (done)
 - **M7.2** Mission Sizing / colmena suggest — complexity analysis, recommends Colmena vs vanilla CC (planned)
 
 ## Current State (2026-04-14)
 
-**Branch:** `main` (v0.9.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping)
-**Next:** M7.1 (Mission Spawn + Mission Gate)
+**Branch:** `main` (v0.10.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping), M7.1 (mission spawn + mission gate)
+**Next:** M7.2 (Mission Sizing / colmena suggest)
 
 ## Key Docs
 
