@@ -437,6 +437,7 @@ mod tests {
                 path_within: vec![],
                 path_not_match: vec![],
             }),
+            role_type: None,
             elo: EloConfig { initial: 1500, categories: Default::default() },
             mentoring: MentoringConfig { can_mentor: vec![], mentored_by: vec![] },
         }
