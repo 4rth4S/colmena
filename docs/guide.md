@@ -1403,7 +1403,22 @@ developer refactors → tester validates tests pass → auditor approves
 ```
 Best for: code restructuring where you can't afford regressions.
 
-### Example: Feature implementation with review
+### Example: Feature implementation with mission_spawn (one step)
+
+```bash
+# One-step via MCP — selects pattern, maps roles, generates everything:
+# mcp__colmena__mission_spawn(mission: "implement JWT authentication")
+#
+# Returns:
+#   - Agent prompts with mission markers (ready to paste into Agent tool)
+#   - Delegation CLI commands (run to activate)
+#   - Role gap warnings (if applicable)
+#
+# The prompts contain <!-- colmena:mission_id=... --> markers that
+# the Mission Gate uses to validate mission binding.
+```
+
+### Example: Step-by-step workflow
 
 ```bash
 # 1. Select pattern for your mission
@@ -1420,6 +1435,16 @@ colmena library select --mission "implement JWT authentication"
 # 4. Inter-agent communication uses token-efficient protocol:
 #    "Facts only. path:line references. No prose."
 ```
+
+### Mission Gate (optional enforcement)
+
+Enable in `trust-firewall.yaml` to require mission binding for Agent calls:
+
+```yaml
+enforce_missions: true
+```
+
+When enabled, any Agent call without a Colmena mission marker triggers "ask" — the human can still approve ad-hoc agents. This ensures all agents go through the Colmena stack (firewall + ELO + review + SubagentStop) by default.
 
 ### Auditor QPC Framework
 
