@@ -86,6 +86,18 @@ pub enum AuditEvent<'a> {
         tool: &'a str,
         role_id: &'a str,
     },
+    /// Mission spawned via mission_spawn
+    MissionSpawn {
+        mission_id: &'a str,
+        pattern_id: &'a str,
+        pattern_auto_created: bool,
+        agent_count: usize,
+    },
+    /// Mission Gate triggered — Agent call without mission marker
+    MissionGate {
+        session_id: &'a str,
+        agent_id: Option<&'a str>,
+    },
 }
 
 /// Format an audit event as a single log line.
@@ -141,6 +153,13 @@ fn format_event(event: &AuditEvent) -> String {
         }
         AuditEvent::RoleToolsAllow { agent, tool, role_id } => {
             format!("[{ts}] ROLE_TOOLS_ALLOW agent={agent} tool={tool} role={role_id}")
+        }
+        AuditEvent::MissionSpawn { mission_id, pattern_id, pattern_auto_created, agent_count } => {
+            format!("[{ts}] MISSION_SPAWN mission={mission_id} pattern={pattern_id} auto_created={pattern_auto_created} agents={agent_count}")
+        }
+        AuditEvent::MissionGate { session_id, agent_id } => {
+            let agent = agent_id.unwrap_or("*");
+            format!("[{ts}] MISSION_GATE session={session_id} agent={agent}")
         }
     }
 }
@@ -428,6 +447,44 @@ mod tests {
         // Should be truncated with ...
         assert!(contents.contains("..."));
         assert!(!contents.contains(&long_key));
+    }
+
+    #[test]
+    fn test_mission_spawn_audit_event_format() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        let event = AuditEvent::MissionSpawn {
+            mission_id: "2026-04-14-jwt-auth",
+            pattern_id: "code-review-cycle",
+            pattern_auto_created: false,
+            agent_count: 3,
+        };
+
+        log_event(&log_path, &event).unwrap();
+        let contents = std::fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("MISSION_SPAWN"));
+        assert!(contents.contains("mission=2026-04-14-jwt-auth"));
+        assert!(contents.contains("pattern=code-review-cycle"));
+        assert!(contents.contains("auto_created=false"));
+        assert!(contents.contains("agents=3"));
+    }
+
+    #[test]
+    fn test_mission_gate_audit_event_format() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        let event = AuditEvent::MissionGate {
+            session_id: "sess_abc123",
+            agent_id: Some("developer"),
+        };
+
+        log_event(&log_path, &event).unwrap();
+        let contents = std::fs::read_to_string(&log_path).unwrap();
+        assert!(contents.contains("MISSION_GATE"));
+        assert!(contents.contains("session=sess_abc123"));
+        assert!(contents.contains("agent=developer"));
     }
 
     #[test]
