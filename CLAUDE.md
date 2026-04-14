@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.8.0 (semver, single workspace version)
+- **Version:** 0.9.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -149,7 +149,7 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ### Wisdom Library
 
-- 6 built-in roles + 7 built-in patterns. New roles/patterns created via `library_create_role`/`library_create_pattern`
+- 10 built-in roles (6 security + 4 dev) + 10 built-in patterns (7 security + 3 dev). New roles/patterns created via `library_create_role`/`library_create_pattern`
 - RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative)
 - PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)
 - `library_select` suggests creating a pattern when no existing one matches the mission
@@ -157,6 +157,14 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools
 - Prompt review detection uses compound keyword matching: prefix + role name/id + suffix — all three required to avoid false positives
 - Findings with `category: "prompt_improvement"` are suggestions about role prompts — queryable via `findings_query`, human decides
+- Dev roles (developer, code_reviewer, tester, architect) all start at "ask" trust level — ELO calibration needed before elevation
+- Developer has `Agent` in tools_allowed (can spawn sub-agents); code_reviewer is read-only (no Write/Edit)
+- Architect Write scoped to `${MISSION_DIR}` + `docs/` — cannot modify production code
+- `map_topology_roles()` maps real roles to topology slots by SlotRoleType preference + mission keyword scoring. No duplicates.
+- SlotRoleType: Lead, Offensive, Defensive, Research, Worker, Judge — each with preferred role list
+- Auditor QPC framework: Quality + Precision + Comprehensiveness (1-10 each) — role-agnostic evaluation
+- Inter-agent directive (`INTER_AGENT_DIRECTIVE`) injected into multi-agent missions (2+ agents) by `generate_mission()`
+- Inter-agent protocol: facts only, path:line references, no prose — code/commands never compressed
 
 ### Setup & Install
 
@@ -262,13 +270,15 @@ Operations:
 - **M6.2** P0+P1 hardening — MCP calibrate/evaluate precision, reviewer randomization, Elevated Bash guard, --session delegations, regex validation, expire audit trail (done)
 - **M6.3** Role tools_allowed firewall — PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch (done)
 - **M6.4** Enforced Peer Review — SubagentStop hook blocks workers without review, centralized auditor, alerts system, auditor calibration (done)
-- **M7** Library Guardian — prompt validation, file integrity, trust elevation (planned)
+- **M7** Generic roles + patterns + topology mapping — 4 dev roles, 3 dev patterns, map_topology_roles, QPC auditor framework, inter-agent directive (done)
+- **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (planned)
+- **M7.2** Mission Sizing / colmena suggest — complexity analysis, recommends Colmena vs vanilla CC (planned)
 
 ## Current State (2026-04-14)
 
-**Branch:** `main` (v0.8.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts)
-**Next:** M7 (Library Guardian — prompt validation, integrity checks)
+**Branch:** `main` (v0.9.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping)
+**Next:** M7.1 (Mission Spawn + Mission Gate)
 
 ## Key Docs
 
@@ -285,3 +295,6 @@ Operations:
 - `docs/superpowers/specs/2026-04-02-colmena-setup-design.md` — M5 spec (colmena setup onboarding command)
 - `docs/superpowers/specs/2026-04-02-intelligent-role-creation-design.md` — M6 spec (intelligent role + pattern creation)
 - `docs/superpowers/specs/2026-04-13-enforced-peer-review-design.md` — M6.4 spec (SubagentStop + centralized auditor + alerts)
+- `docs/superpowers/specs/2026-04-14-m7-generic-roles-patterns-design.md` — M7 spec (dev roles + patterns + topology mapping + QPC + inter-agent)
+- `docs/superpowers/specs/2026-04-14-m71-mission-spawn-gate-design.md` — M7.1 spec (mission_spawn + Mission Gate)
+- `docs/superpowers/specs/2026-04-14-m72-mission-sizing-suggest-design.md` — M7.2 spec (mission sizing + colmena suggest)

@@ -556,6 +556,158 @@ pub fn scaffold_pattern(
     Ok(pattern_path)
 }
 
+// ── Topology-Aware Role Mapping ──────────────────────────────────────────────
+
+/// Semantic slot types for topology positions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SlotRoleType {
+    Lead,       // Orchestrator, coordinator
+    Offensive,  // Active testing, implementation
+    Defensive,  // Review, validation, protection
+    Research,   // Discovery, analysis
+    Worker,     // General execution
+    Judge,      // Final evaluation
+}
+
+impl SlotRoleType {
+    /// Preferred role IDs for this slot type, in priority order.
+    fn preferred_roles(&self) -> &'static [&'static str] {
+        match self {
+            SlotRoleType::Lead => &["security_architect", "architect"],
+            SlotRoleType::Offensive => &["pentester", "web_pentester", "api_pentester", "developer"],
+            SlotRoleType::Defensive => &["code_reviewer", "auditor", "security_architect"],
+            SlotRoleType::Research => &["researcher", "architect"],
+            SlotRoleType::Worker => &["developer", "tester"],
+            SlotRoleType::Judge => &["auditor"],
+        }
+    }
+}
+
+/// A named slot in a topology with its semantic type.
+#[derive(Debug, Clone)]
+pub struct SlotDesc {
+    pub name: String,
+    pub slot_type: SlotRoleType,
+}
+
+/// Return the slot layout for a given topology.
+fn topology_slots(topology: PatternTopology) -> Vec<SlotDesc> {
+    match topology {
+        PatternTopology::Hierarchical => vec![
+            SlotDesc { name: "lead".into(), slot_type: SlotRoleType::Lead },
+            SlotDesc { name: "offensive".into(), slot_type: SlotRoleType::Offensive },
+            SlotDesc { name: "research".into(), slot_type: SlotRoleType::Research },
+        ],
+        PatternTopology::Sequential => vec![
+            SlotDesc { name: "stage_1".into(), slot_type: SlotRoleType::Research },
+            SlotDesc { name: "stage_2".into(), slot_type: SlotRoleType::Defensive },
+            SlotDesc { name: "stage_3".into(), slot_type: SlotRoleType::Offensive },
+        ],
+        PatternTopology::Adversarial => vec![
+            SlotDesc { name: "attacker".into(), slot_type: SlotRoleType::Offensive },
+            SlotDesc { name: "defender".into(), slot_type: SlotRoleType::Defensive },
+            SlotDesc { name: "judge".into(), slot_type: SlotRoleType::Judge },
+        ],
+        PatternTopology::Peer => vec![
+            SlotDesc { name: "participant_1".into(), slot_type: SlotRoleType::Offensive },
+            SlotDesc { name: "participant_2".into(), slot_type: SlotRoleType::Defensive },
+            SlotDesc { name: "participant_3".into(), slot_type: SlotRoleType::Research },
+            SlotDesc { name: "synthesizer".into(), slot_type: SlotRoleType::Lead },
+        ],
+        PatternTopology::FanOutMerge => vec![
+            SlotDesc { name: "coordinator".into(), slot_type: SlotRoleType::Lead },
+            SlotDesc { name: "mapper_1".into(), slot_type: SlotRoleType::Offensive },
+            SlotDesc { name: "mapper_2".into(), slot_type: SlotRoleType::Research },
+            SlotDesc { name: "reducer".into(), slot_type: SlotRoleType::Defensive },
+        ],
+        PatternTopology::Recursive => vec![
+            SlotDesc { name: "root".into(), slot_type: SlotRoleType::Lead },
+            SlotDesc { name: "sub_agent_1".into(), slot_type: SlotRoleType::Offensive },
+            SlotDesc { name: "sub_agent_2".into(), slot_type: SlotRoleType::Research },
+        ],
+        PatternTopology::Iterative => vec![
+            SlotDesc { name: "worker".into(), slot_type: SlotRoleType::Worker },
+            SlotDesc { name: "judge".into(), slot_type: SlotRoleType::Judge },
+        ],
+    }
+}
+
+/// Score a role against mission keywords based on specialization overlap.
+fn mission_role_score(mission: &str, specializations: &[String]) -> usize {
+    let mission_lower = mission.to_lowercase();
+    let mission_words: Vec<&str> = mission_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.len() > 2)
+        .collect();
+
+    specializations
+        .iter()
+        .filter(|spec| {
+            let spec_lower = spec.to_lowercase();
+            let spec_variants = vec![
+                spec_lower.clone(),
+                spec_lower.replace('_', " "),
+                spec_lower.replace('_', "-"),
+            ];
+            spec_variants.iter().any(|variant| {
+                mission_words.iter().any(|w| w.contains(variant.as_str()))
+                    || mission_lower.contains(variant.as_str())
+            })
+        })
+        .count()
+}
+
+/// Map real roles to topology slots based on slot type preferences and mission keywords.
+///
+/// Each role is assigned to at most one slot (no duplicates).
+/// Tie-breaking: when multiple roles match a slot type, the one with higher
+/// mission keyword overlap wins.
+///
+/// Returns `(slot_name, role_id)` pairs.
+pub fn map_topology_roles(
+    topology: PatternTopology,
+    mission: &str,
+    role_ids: &[String],
+    role_specializations: &HashMap<String, Vec<String>>,
+) -> Vec<(String, String)> {
+    let slots = topology_slots(topology);
+    let mut assigned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut result = Vec::new();
+
+    for slot in &slots {
+        let preferred = slot.slot_type.preferred_roles();
+
+        // Collect candidate roles: those in preferred list AND available (not yet assigned)
+        let mut candidates: Vec<(&str, usize)> = preferred
+            .iter()
+            .filter(|&&pref| role_ids.contains(&pref.to_string()) && !assigned.contains(pref))
+            .map(|&pref| {
+                let score = role_specializations
+                    .get(pref)
+                    .map(|specs| mission_role_score(mission, specs))
+                    .unwrap_or(0);
+                (pref, score)
+            })
+            .collect();
+
+        // Sort by mission keyword score (descending), then by preference order (implicit from iter order)
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+
+        if let Some((role_id, _)) = candidates.first() {
+            assigned.insert(role_id.to_string());
+            result.push((slot.name.clone(), role_id.to_string()));
+        } else {
+            // Fallback: pick any unassigned role
+            if let Some(fallback) = role_ids.iter().find(|r| !assigned.contains(r.as_str())) {
+                assigned.insert(fallback.clone());
+                result.push((slot.name.clone(), fallback.clone()));
+            }
+        }
+    }
+
+    result
+}
+
 // ── Pattern suggestion ───────────────────────────────────────────────────────
 
 /// Suggestion for a new pattern based on mission analysis.
@@ -803,5 +955,119 @@ mod tests {
             Some(true),
             "FanOutMerge should have elo_lead_selection true"
         );
+    }
+
+    // ── map_topology_roles tests ────────────────────────────────────────────
+
+    fn make_specs() -> HashMap<String, Vec<String>> {
+        let mut m = HashMap::new();
+        m.insert("security_architect".into(), vec!["threat_modeling".into(), "architecture_review".into()]);
+        m.insert("pentester".into(), vec!["web_vulnerabilities".into(), "injection_attacks".into()]);
+        m.insert("auditor".into(), vec!["compliance".into(), "audit".into()]);
+        m.insert("developer".into(), vec!["feature_implementation".into(), "refactoring".into()]);
+        m.insert("tester".into(), vec!["test_writing".into(), "coverage_analysis".into()]);
+        m.insert("architect".into(), vec!["system_design".into(), "tradeoff_analysis".into()]);
+        m.insert("code_reviewer".into(), vec!["code_review".into(), "bug_detection".into()]);
+        m.insert("researcher".into(), vec!["research".into(), "analysis".into()]);
+        m
+    }
+
+    #[test]
+    fn test_map_topology_roles_hierarchical() {
+        let roles = vec![
+            "security_architect".into(), "pentester".into(), "researcher".into(),
+        ];
+        let specs = make_specs();
+        let result = map_topology_roles(
+            PatternTopology::Hierarchical,
+            "coordinate security audit with researchers",
+            &roles, &specs,
+        );
+        assert_eq!(result.len(), 3);
+        // Lead slot should get security_architect (preferred for Lead)
+        assert_eq!(result[0].0, "lead");
+        assert_eq!(result[0].1, "security_architect");
+    }
+
+    #[test]
+    fn test_map_topology_roles_adversarial() {
+        let roles = vec![
+            "pentester".into(), "code_reviewer".into(), "auditor".into(),
+        ];
+        let specs = make_specs();
+        let result = map_topology_roles(
+            PatternTopology::Adversarial,
+            "debate security findings with opposing perspectives",
+            &roles, &specs,
+        );
+        assert_eq!(result.len(), 3);
+        // Attacker = Offensive → pentester, Defender = Defensive → code_reviewer, Judge → auditor
+        assert_eq!(result[0].0, "attacker");
+        assert_eq!(result[0].1, "pentester");
+        assert_eq!(result[2].0, "judge");
+        assert_eq!(result[2].1, "auditor");
+    }
+
+    #[test]
+    fn test_map_topology_roles_iterative() {
+        let roles = vec!["developer".into(), "auditor".into()];
+        let specs = make_specs();
+        let result = map_topology_roles(
+            PatternTopology::Iterative,
+            "implement feature with review cycle",
+            &roles, &specs,
+        );
+        assert_eq!(result.len(), 2);
+        // Worker → developer, Judge → auditor
+        assert_eq!(result[0].0, "worker");
+        assert_eq!(result[0].1, "developer");
+        assert_eq!(result[1].0, "judge");
+        assert_eq!(result[1].1, "auditor");
+    }
+
+    #[test]
+    fn test_map_topology_roles_no_duplicates() {
+        let roles = vec![
+            "security_architect".into(), "architect".into(), "auditor".into(),
+        ];
+        let specs = make_specs();
+        let result = map_topology_roles(
+            PatternTopology::Hierarchical,
+            "review system architecture",
+            &roles, &specs,
+        );
+        // Ensure no role appears twice
+        let assigned: Vec<&str> = result.iter().map(|(_, r)| r.as_str()).collect();
+        let unique: std::collections::HashSet<&str> = assigned.iter().copied().collect();
+        assert_eq!(assigned.len(), unique.len(), "Duplicate role assignments found: {:?}", assigned);
+    }
+
+    #[test]
+    fn test_map_topology_roles_empty_library() {
+        let roles: Vec<String> = vec![];
+        let specs = HashMap::new();
+        let result = map_topology_roles(
+            PatternTopology::Iterative,
+            "some mission",
+            &roles, &specs,
+        );
+        // No roles available — all slots empty
+        assert!(result.is_empty(), "Should produce no assignments with empty library");
+    }
+
+    #[test]
+    fn test_map_topology_roles_mission_keyword_scoring() {
+        // Both architect and security_architect match Lead, but "system design tradeoff"
+        // should score architect higher due to specialization overlap
+        let roles = vec!["architect".into(), "security_architect".into(), "developer".into()];
+        let specs = make_specs();
+        let result = map_topology_roles(
+            PatternTopology::Hierarchical,
+            "system design tradeoff analysis for new module",
+            &roles, &specs,
+        );
+        // Lead slot: architect should win due to "system_design" + "tradeoff_analysis" overlap
+        assert_eq!(result[0].0, "lead");
+        assert_eq!(result[0].1, "architect");
     }
 }
