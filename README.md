@@ -138,8 +138,8 @@ Every firewall decision is logged to `config/audit.log`:
 
 Curated role definitions and orchestration patterns for multi-agent missions.
 
-- **6 roles:** security_architect, pentester, auditor, researcher, web_pentester, api_pentester — each with system prompt, tools (including MCP tool globs like `mcp__caido__*`), and trust config
-- **7 patterns:** pipeline, oracle-workers, debate, plan-then-execute, mentored-execution, swarm-consensus, caido-pentest
+- **10 roles:** security_architect, pentester, auditor, researcher, web_pentester, api_pentester, developer, code_reviewer, tester, architect — each with system prompt, scoped permissions, and trust config
+- **10 patterns:** pipeline, oracle-workers, debate, plan-then-execute, mentored-execution, swarm-consensus, caido-pentest, code-review-cycle, docs-from-code, refactor-safe
 - **Pattern selector:** keyword scoring recommends the right pattern for your mission
 - **Mission generator:** produces per-agent CLAUDE.md files with role-specific instructions
 
