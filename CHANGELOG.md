@@ -6,6 +6,42 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-14
+
+### Added
+- **Enforced Peer Review (M6.4):** SubagentStop hook blocks mission workers from stopping without calling `review_submit`
+  - `SubagentStopPayload` + `SubagentStopResponse` — separate lifecycle event types (no tool_name/tool_input)
+  - Hook routing refactored: peek `hook_event_name` from raw JSON, then deserialize to correct type
+  - `run_subagent_stop_hook()`: check delegation → role_type → review existence → approve/block
+  - Safe fallback: any error → approve (never trap an agent)
+- **Centralized auditor model:** replaces cross-review with one dedicated evaluator role
+  - `role_type: Option<String>` on Role struct — auditor.yaml has `role_type: auditor`
+  - Auditor exempt from review enforcement via role_type check (human-controlled)
+  - `evaluation_narrative: Option<String>` on ReviewEntry for auditor reasoning
+  - Auditor CLAUDE.md includes full evaluation protocol (score dimensions, narrative, 3 alternatives)
+- **Alerts system:** `colmena-core/src/alerts.rs` — surfaces low-score reviews without blocking
+  - `Alert` struct with severity (critical/warning), append-only JSON, atomic writes
+  - `create_alert()` triggered by `review_evaluate` when trust_gate returns NeedsHumanReview
+  - `alerts.json` protected in trust-firewall.yaml path_not_match
+- **4 new MCP tools (21→25):**
+  - `alerts_list` — read-only, lists alerts with optional severity/acknowledged filters
+  - `alerts_ack` — restricted, acknowledges alert(s) by ID or "all"
+  - `calibrate_auditor` — read-only, presents last N auditor evaluations with narrative + alternatives (bilingual en/es)
+  - `calibrate_auditor_feedback` — restricted, adjusts auditor ELO (+10/−5/−10), saves corrections as findings
+- **`session_stats` enriched:** shows unacknowledged alert count warning
+- **`has_submitted_review()`** in review.rs — check if agent submitted review for mission
+
+### Changed
+- SubagentStop registered as 4th hook in install.rs + setup.rs (was 3 hooks)
+- `alerts.json` added to RUNTIME_FILES in setup.rs
+- trust-firewall.yaml: restricted rules for `alerts_ack` and `calibrate_auditor_feedback`, path_not_match for alerts.json
+- Tests: 303 (was 281), 22 new tests (5 integration + 17 unit)
+
+## [0.7.0] - 2026-04-13
+
+### Added
+- **Role tools_allowed firewall (M6.3):** PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch
+
 ## [0.5.0] - 2026-04-02
 
 ### Added
