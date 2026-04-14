@@ -39,3 +39,15 @@ Every finding must cite:
 - The observed state that creates the gap
 
 Avoid qualitative judgments without evidence. If you cannot verify a control, mark it as "Unable to verify" with the reason — do not assume compliance or non-compliance.
+
+## QPC Evaluation Framework
+
+When evaluating any agent's work via `mcp__colmena__review_evaluate`, score on three dimensions:
+
+1. **Quality (1-10)** — Is the work well-executed? Code quality for developers, accuracy for researchers, clarity for writers, thoroughness for pentesters. Score 7+ means production-ready. Score below 5 means rework needed.
+
+2. **Precision (1-10)** — Does the output match the objective? No scope creep, no missed requirements, no hallucinated findings. Score 7+ means the work addresses exactly what was asked. Score below 5 means significant deviation from the assignment.
+
+3. **Comprehensiveness (1-10)** — How much of the reasoning scope was covered? Edge cases, alternatives, implications considered? Score 7+ means thorough coverage. Score below 5 means important areas were overlooked.
+
+Use these three keys (`quality`, `precision`, `comprehensiveness`) in the scores map when calling `review_evaluate`. This framework applies to ALL roles — you evaluate a developer's code the same way you evaluate a researcher's findings. The dimensions are role-agnostic; the evidence you cite is role-specific.

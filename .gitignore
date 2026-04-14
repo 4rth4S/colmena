@@ -6,6 +6,7 @@ colmena-errors.log
 config/audit.log
 config/queue/pending/
 config/queue/processed/
+config/missions/
 
 # Security — local reference only
 docs/security/

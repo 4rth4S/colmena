@@ -4,7 +4,7 @@ use crate::delegate::{DelegationConditions, RuntimeDelegation};
 use crate::elo::AgentRating;
 use crate::findings::{FindingsFilter, load_findings};
 use crate::library::{Role, Pattern};
-pub use crate::pattern_scaffold::{scaffold_pattern, PatternTopology, suggest_pattern_for_mission, PatternSuggestion};
+pub use crate::pattern_scaffold::{scaffold_pattern, PatternTopology, suggest_pattern_for_mission, PatternSuggestion, map_topology_roles, SlotRoleType, SlotDesc};
 use crate::templates::{RoleCategory, detect_category, generate_role_yaml, generate_role_prompt};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -34,6 +34,17 @@ pub struct RoleAssignment {
 
 /// Default TTL for mission-generated delegations: 8 hours.
 pub const DEFAULT_MISSION_TTL_HOURS: i64 = 8;
+
+/// Inter-agent token efficiency directive injected into multi-agent missions.
+pub const INTER_AGENT_DIRECTIVE: &str = "\
+## Colmena Inter-Agent Protocol
+When communicating with other agents in this mission:
+- Facts only. No explanations unless requested.
+- Format: [finding] [evidence] [severity/status]. Next.
+- Reference artifacts as path:line — no prose descriptions.
+- Skip articles, filler, hedging, pleasantries.
+- NEVER compress: code, commands, file contents, configurations, error messages.
+- Human-facing output: normal verbosity (this protocol is agent-to-agent only).";
 
 /// Generated mission configuration
 #[derive(Debug)]
@@ -332,13 +343,20 @@ pub fn generate_mission(
         // Append prompt review context if this is a prompt review mission
         let review_context_section = prompt_review_context.as_deref().unwrap_or("");
 
+        // Inter-agent directive for multi-agent missions (2+ agents)
+        let interagent_section = if recommendation.role_assignments.len() >= 2 {
+            format!("\n\n{}", INTER_AGENT_DIRECTIVE)
+        } else {
+            String::new()
+        };
+
         // Build CLAUDE.md combining role prompt + mission context + permissions + review
         let claude_md = if review_context_section.is_empty() {
             format!(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -352,13 +370,14 @@ pub fn generate_mission(
                 role.default_trust_level,
                 pre_approved,
                 review_section,
+                interagent_section,
             )
         } else {
             format!(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}\n\n---\n\n{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n\n---\n\n{}\n",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -372,6 +391,7 @@ pub fn generate_mission(
                 role.default_trust_level,
                 pre_approved,
                 review_section,
+                interagent_section,
                 review_context_section,
             )
         };
@@ -1678,6 +1698,224 @@ mod tests {
                 !contents.contains("Prompt Review Context"),
                 "CLAUDE.md for {} should NOT contain prompt review context in normal mission",
                 agent.role_id
+            );
+        }
+    }
+
+    // ── 14. New dev roles load from YAML ────────────────────────────────────
+
+    #[test]
+    fn test_new_roles_load_valid() {
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let library_dir = workspace_root.join("config/library");
+
+        for role_file in &["developer.yaml", "code-reviewer.yaml", "tester.yaml", "architect.yaml"] {
+            let role_path = library_dir.join("roles").join(role_file);
+            assert!(role_path.exists(), "Role file should exist: {}", role_file);
+
+            let content = std::fs::read_to_string(&role_path).unwrap();
+            let role: crate::library::Role = serde_yml::from_str(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", role_file, e));
+
+            assert!(!role.id.is_empty(), "{}: id should not be empty", role_file);
+            assert!(!role.tools_allowed.is_empty(), "{}: tools_allowed should not be empty", role_file);
+            assert!(!role.specializations.is_empty(), "{}: specializations should not be empty", role_file);
+            assert_eq!(role.default_trust_level, "ask", "{}: new roles should start at ask", role_file);
+            assert!(role.permissions.is_some(), "{}: should have permissions block", role_file);
+        }
+    }
+
+    // ── 15. New dev patterns load from YAML ─────────────────────────────────
+
+    #[test]
+    fn test_new_patterns_load_valid() {
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let library_dir = workspace_root.join("config/library");
+
+        for pattern_file in &["code-review-cycle.yaml", "docs-from-code.yaml", "refactor-safe.yaml"] {
+            let pattern_path = library_dir.join("patterns").join(pattern_file);
+            assert!(pattern_path.exists(), "Pattern file should exist: {}", pattern_file);
+
+            let content = std::fs::read_to_string(&pattern_path).unwrap();
+            let pattern: crate::library::Pattern = serde_yml::from_str(&content)
+                .unwrap_or_else(|e| panic!("Failed to parse {}: {}", pattern_file, e));
+
+            assert!(!pattern.id.is_empty(), "{}: id should not be empty", pattern_file);
+            assert!(!pattern.when_to_use.is_empty(), "{}: when_to_use should not be empty", pattern_file);
+            assert_eq!(pattern.source.as_deref(), Some("builtin"), "{}: dev patterns should be builtin", pattern_file);
+        }
+    }
+
+    // ── 16. select_patterns matches dev mission ─────────────────────────────
+
+    #[test]
+    fn test_select_patterns_matches_dev_mission() {
+        let roles = vec![
+            make_role("developer", "Developer", vec!["feature_implementation", "refactoring", "code_writing"]),
+            make_role("tester", "Tester", vec!["test_writing", "coverage_analysis", "regression_detection"]),
+            make_role("auditor", "Auditor", vec!["compliance", "audit"]),
+        ];
+
+        let patterns = vec![
+            make_pattern(
+                "code-review-cycle",
+                "Code Review Cycle",
+                vec![
+                    "Feature implementation with quality review",
+                    "Code writing followed by structured review",
+                    "Feedback loop between implementer and reviewer",
+                ],
+                vec!["Tasks requiring multiple parallel specialists"],
+                vec![("agent", "developer"), ("critic", "auditor")],
+            ),
+            make_pattern(
+                "refactor-safe",
+                "Refactor Safe",
+                vec![
+                    "Refactoring that must not break existing behavior",
+                    "Code restructuring with regression risk",
+                    "Technical debt cleanup requiring test validation",
+                ],
+                vec!["Simple rename or cosmetic changes"],
+                vec![("stage_1", "developer"), ("stage_2", "tester"), ("stage_3", "auditor")],
+            ),
+        ];
+
+        let mission = "implement JWT authentication feature with code review";
+        let recs = select_patterns(mission, &patterns, &roles);
+        assert!(!recs.is_empty(), "should match at least one dev pattern");
+        assert!(
+            recs[0].pattern_id == "code-review-cycle" || recs[0].pattern_id == "refactor-safe",
+            "top pattern should be a dev pattern, got: {}",
+            recs[0].pattern_id
+        );
+    }
+
+    // ── 17. generate_mission includes inter-agent directive ─────────────────
+
+    #[test]
+    fn test_generate_mission_includes_interagent_directive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/developer.md"),
+            "# Developer\n\nYou write code.",
+        ).unwrap();
+        std::fs::write(
+            library_dir.join("prompts/auditor.md"),
+            "# Auditor\n\nYou review.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+
+        let rec = Recommendation {
+            pattern_id: "code-review-cycle".to_string(),
+            pattern_name: "Code Review Cycle".to_string(),
+            score: 3.0,
+            matched_criteria: vec![],
+            anti_matched: vec![],
+            role_assignments: vec![
+                RoleAssignment {
+                    slot: "agent".to_string(),
+                    role_id: "developer".to_string(),
+                    role_name: "Developer".to_string(),
+                    icon: "💻".to_string(),
+                },
+                RoleAssignment {
+                    slot: "critic".to_string(),
+                    role_id: "auditor".to_string(),
+                    role_name: "Auditor".to_string(),
+                    icon: "📋".to_string(),
+                },
+            ],
+        };
+
+        let mission_config = generate_mission(
+            "implement JWT auth",
+            &rec,
+            &roles,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
+        ).expect("generate_mission should succeed");
+
+        // Both agents should have the inter-agent directive (2 agents = multi-agent)
+        for agent in &mission_config.agent_configs {
+            let contents = std::fs::read_to_string(&agent.claude_md_path).unwrap();
+            assert!(
+                contents.contains("Colmena Inter-Agent Protocol"),
+                "CLAUDE.md for {} should contain inter-agent directive",
+                agent.role_id
+            );
+            assert!(
+                contents.contains("Facts only"),
+                "directive should include communication rules for {}",
+                agent.role_id
+            );
+        }
+    }
+
+    // ── 18. inter-agent directive not in solo missions ───────────────────────
+
+    #[test]
+    fn test_interagent_directive_not_in_solo_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(
+            library_dir.join("prompts/researcher.md"),
+            "# Researcher\n\nYou research.",
+        ).unwrap();
+
+        let roles = vec![
+            make_role("researcher", "Researcher", vec!["research"]),
+        ];
+
+        let rec = Recommendation {
+            pattern_id: "single-agent".to_string(),
+            pattern_name: "Single Agent".to_string(),
+            score: 2.0,
+            matched_criteria: vec![],
+            anti_matched: vec![],
+            role_assignments: vec![
+                RoleAssignment {
+                    slot: "agent".to_string(),
+                    role_id: "researcher".to_string(),
+                    role_name: "Researcher".to_string(),
+                    icon: "🔬".to_string(),
+                },
+            ],
+        };
+
+        let mission_config = generate_mission(
+            "research API security best practices",
+            &rec,
+            &roles,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
+        ).expect("generate_mission should succeed");
+
+        // Single agent should NOT have inter-agent directive
+        for agent in &mission_config.agent_configs {
+            let contents = std::fs::read_to_string(&agent.claude_md_path).unwrap();
+            assert!(
+                !contents.contains("Colmena Inter-Agent Protocol"),
+                "CLAUDE.md for solo agent should NOT contain inter-agent directive",
             );
         }
     }
