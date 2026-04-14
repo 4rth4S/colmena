@@ -546,8 +546,8 @@
 <span class="comment">         |     Agent tool para sub-agentes |</span>
 <span class="comment">         +--+--------------+---------------+</span>
 <span class="comment">            |              |</span>
-<span class="comment">  PreToolUse  PermissionReq  MCP stdio</span>
-<span class="comment">   (hook)       (hook)      (21 tools)</span>
+<span class="comment">  PreToolUse  PermissionReq  SubagentStop  MCP stdio</span>
+<span class="comment">   (hook)       (hook)        (hook)      (25 tools)</span>
 <span class="comment">            |              |</span>
 <span class="comment">         +--+--------------+---------------+</span>
 <span class="comment">         |          COLMENA                |</span>
@@ -568,9 +568,13 @@
         <h3 style="font-size: 1rem; color: var(--cyan);">PermissionRequest (auto-approve)</h3>
         <p style="font-size: 0.9rem;">Intercepta prompts de CC para agentes en mision. Si el rol permite el tool, auto-aprueba y ensena reglas de sesion a CC. Calls posteriores: sin hooks.</p>
       </div>
+      <div class="card" style="margin-bottom: 12px; border-left: 3px solid var(--red);">
+        <h3 style="font-size: 1rem; color: var(--red);">SubagentStop (review enforcement)</h3>
+        <p style="font-size: 0.9rem;">Bloquea workers de mision que intentan parar sin review. Auditor centralizado exento. Error = approve (nunca atrapa agentes).</p>
+      </div>
       <div class="card green-border" style="margin-bottom: 12px;">
         <h3 style="font-size: 1rem; color: var(--green);">MCP (proactivo)</h3>
-        <p style="font-size: 0.9rem;">CC llama 21 herramientas nativamente: patterns, misiones, reviews, ELO, findings, stats, calibracion.</p>
+        <p style="font-size: 0.9rem;">CC llama 25 herramientas nativamente: patterns, misiones, reviews, ELO, findings, alerts, stats, calibracion.</p>
       </div>
       <div class="card" style="padding: 16px;">
         <h3 style="font-size: 1rem;">Principio de diseno</h3>
@@ -964,7 +968,7 @@
 <!-- Slide 11: Arquitectura + Roadmap -->
 <div class="slide slide-dense" id="s11">
   <span class="tag cyan">Arquitectura + Roadmap</span>
-  <h2 style="margin-top: 16px;">Rust workspace, 4 crates, <span class="highlight">21 MCP tools</span></h2>
+  <h2 style="margin-top: 16px;">Rust workspace, 4 crates, <span class="highlight">25 MCP tools</span></h2>
   <div class="grid-2" style="align-items: start;">
     <div>
       <div class="grid-2" style="gap: 12px; margin-top: 0;">
@@ -973,11 +977,11 @@
           <div class="stat-label">Hook latency</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number green" style="font-size: 3rem;">281</div>
+          <div class="stat-number green" style="font-size: 3rem;">303</div>
           <div class="stat-label">Tests passing</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number purple" style="font-size: 3rem;">21</div>
+          <div class="stat-number purple" style="font-size: 3rem;">25</div>
           <div class="stat-label">MCP tools</div>
         </div>
         <div class="card" style="text-align: center; padding: 20px;">
@@ -992,8 +996,9 @@
           <span class="tag green" style="font-size: 0.7rem;">Library</span> library_list, library_show, library_select, library_generate, library_create_role, library_create_pattern<br>
           <span class="tag blue" style="font-size: 0.7rem;">Review</span> review_submit, review_list, review_evaluate<br>
           <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings, findings_query, findings_list<br>
+          <span class="tag" style="font-size: 0.7rem; border-color: var(--red); color: var(--red);">Alerts</span> alerts_list, alerts_ack, calibrate_auditor, calibrate_auditor_feedback<br>
           <span class="tag cyan" style="font-size: 0.7rem;">Ops</span> mission_deactivate, calibrate, session_stats<br>
-          <span class="tag" style="font-size: 0.7rem; border-color: var(--cyan); color: var(--cyan);">Hook</span> PermissionRequest &rarr; role tools_allowed auto-approve + CC session rules
+          <span class="tag" style="font-size: 0.7rem; border-color: var(--cyan); color: var(--cyan);">Hook</span> PermissionRequest + SubagentStop &rarr; auto-approve + review enforcement
         </p>
       </div>
       <div class="card" style="margin-top: 12px; padding: 16px;">
@@ -1053,6 +1058,13 @@
             <p style="font-size: 0.85rem; color: var(--text-dim);">8 categorias de roles, PermissionRequest hook, session rules, mission revocation kill switch</p>
           </div>
         </div>
+        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
+          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
+          <div>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6.4</span> Enforced Peer Review</p>
+            <p style="font-size: 0.85rem; color: var(--text-dim);">SubagentStop hook, auditor centralizado, alertas, calibracion de auditor (25 MCP tools)</p>
+          </div>
+        </div>
         <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0;">
           <span class="tag amber" style="font-size: 0.7rem; min-width: 50px; text-align: center;">NEXT</span>
           <div>
@@ -1079,8 +1091,8 @@
       <p class="mono" style="font-size: 0.9rem;">Rust + MCP + YAML</p>
     </div>
     <div class="card" style="padding: 16px 28px; text-align: center;">
-      <p style="font-size: 0.85rem; color: var(--text-dim);">v0.3.0</p>
-      <p class="mono" style="font-size: 0.9rem;">4 crates, 184 tests, 20 MCP tools</p>
+      <p style="font-size: 0.85rem; color: var(--text-dim);">v0.8.0</p>
+      <p class="mono" style="font-size: 0.9rem;">4 crates, 303 tests, 25 MCP tools</p>
     </div>
   </div>
   <p style="margin-top: 40px; font-size: 1rem; color: var(--text-dim);">
