@@ -1,0 +1,49 @@
+name: Architect
+id: architect
+icon: "📐"
+description: "Software architect — system design, tradeoff analysis, documentation, and technical decision making"
+
+system_prompt_ref: prompts/architect.md
+
+default_trust_level: ask
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+
+permissions:
+  bash_patterns:
+    - '^git (log|diff|show|blame)'
+    - '^(ls|cat|head|tail|wc|find|tree|grep|rg|tokei|cloc|scc)\b'
+  path_within:
+    - '${MISSION_DIR}'
+    - 'docs/'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+
+specializations:
+  - system_design
+  - architecture_review
+  - tradeoff_analysis
+  - technical_documentation
+  - api_design
+  - interface_design
+
+elo:
+  initial: 1500
+  categories:
+    system_design: 1500
+    architecture_review: 1500
+    tradeoff_analysis: 1500
+    technical_documentation: 1500
+
+mentoring:
+  can_mentor: [developer, code_reviewer]
+  mentored_by: []

@@ -1,0 +1,34 @@
+name: Refactor Safe
+id: refactor-safe
+source: builtin
+description: >
+  Sequential pipeline for safe refactoring. Developer performs the refactor,
+  tester validates nothing broke with comprehensive test execution, auditor
+  approves the final result. If tests fail, pipeline halts.
+topology: sequential
+communication: chain
+when_to_use:
+  - "Refactoring that must not break existing behavior"
+  - "Code restructuring with regression risk"
+  - "Technical debt cleanup requiring test validation"
+  - "Migration or upgrade requiring test coverage"
+  - "Each phase depends on previous output"
+when_not_to_use:
+  - "Simple rename or cosmetic changes"
+  - "Tasks that are naturally parallel and independent"
+  - "Greenfield development with no existing tests"
+pros:
+  - "Lower cost — each agent runs sequentially"
+  - "Tests validate refactoring before approval"
+  - "Clear checkpoint: tests must pass before review"
+cons:
+  - "Slower — fully sequential execution"
+  - "Halts entirely if tests fail"
+  - "Late-stage agents can't inform early-stage decisions"
+estimated_token_cost: low
+estimated_agents: "3"
+roles_suggested:
+  stage_1: developer
+  stage_2: tester
+  stage_3: auditor
+elo_lead_selection: false
