@@ -15,7 +15,7 @@ cargo build --release
 ```
 
 `colmena setup` does everything in one command:
-- Registers Pre/PostToolUse/PermissionRequest hooks in `~/.claude/settings.json`
+- Registers Pre/PostToolUse/PermissionRequest/SubagentStop hooks in `~/.claude/settings.json`
 - Registers the MCP server in `~/.mcp.json` (global)
 - Validates config and library files
 - Prints a verification checklist
@@ -50,6 +50,64 @@ That's it. Next time you open a Claude Code session, colmena is active.
 ---
 
 ## 1.5 Upgrading
+
+### From 0.7.0 to 0.8.0
+
+**Rebuild and re-setup:**
+
+```bash
+cd ~/colmena
+git pull
+cargo build --release
+./target/release/colmena setup
+```
+
+`colmena setup` detects the new SubagentStop hook and registers it alongside Pre/PostToolUse/PermissionRequest (4 hooks total). Existing config is preserved.
+
+**What's new in 0.8.0 (M6.4 — Enforced Peer Review):**
+
+- **SubagentStop hook** -- new CC integration point. When a mission worker agent attempts to stop, Colmena checks whether the agent has called `review_submit`. If not, the stop is blocked with a message telling the agent to submit a review first. The centralized auditor role is exempt.
+- **Centralized auditor model** -- instead of cross-review (agents reviewing each other), a dedicated auditor role evaluates all workers with consistent criteria. The auditor's `role_type: auditor` in YAML exempts it from the review requirement.
+- **Alerts system** -- when `review_evaluate` triggers NeedsHumanReview (low scores or critical findings), an alert is written to `config/alerts.json`. Alerts are append-only and can only be acknowledged by the human via MCP.
+- **4 new MCP tools** -- `alerts_list` (read-only), `alerts_ack` (restricted), `calibrate_auditor` (read-only, bilingual en/es), `calibrate_auditor_feedback` (restricted, adjusts auditor ELO)
+- **`session_stats` enriched** -- now shows unacknowledged alert count
+- **`evaluation_narrative`** -- new optional field on ReviewEntry for auditor reasoning
+
+**How enforced review works:**
+
+```
+1. Worker finishes work → calls review_submit (MCP)
+2. Worker attempts to stop → SubagentStop hook fires
+3. Colmena: has delegation with source="role"?
+   → No: approve (not a mission worker)
+   → Yes: role_type is "auditor"? → approve (exempt)
+   → No: has_submitted_review() → approve/block
+4. Auditor picks up pending reviews → calls review_evaluate
+5. Low score → alert written to alerts.json → session_stats shows warning
+6. Human calls alerts_list/alerts_ack when ready
+```
+
+**Auditor calibration (optional, human-initiated):**
+
+```
+1. Human calls calibrate_auditor → sees last N evaluations with narrative + alternatives
+2. Human calls calibrate_auditor_feedback → chooses best approach
+   - Agreed with auditor: ELO +10
+   - Chose auditor's own alternative: ELO -5
+   - Wrote own correction: ELO -10, saved as finding
+```
+
+**New files:**
+- `config/alerts.json` -- runtime file, protected in trust-firewall.yaml path_not_match
+- `colmena-core/src/alerts.rs` -- alerts module
+
+**Verify:**
+
+```bash
+colmena --version              # should show 0.8.0
+colmena doctor                 # full health check
+colmena library show auditor   # should show role_type: auditor
+```
 
 ### From 0.6.2 to 0.7.0
 
@@ -554,10 +612,11 @@ Each line includes:
 - **Key** (the command or file path)
 - **Rule** (which config rule matched, with index)
 
-Additional event types (M6.3):
+Additional event types (M6.3+):
 - `ROLE_TOOLS_ALLOW` — PermissionRequest auto-approved a tool based on role's `tools_allowed`
 - `DELEGATE_CREATE`, `DELEGATE_MATCH`, `DELEGATE_EXPIRE`, `DELEGATE_REVOKE` — delegation lifecycle
 - `MISSION_ACTIVATE`, `MISSION_DEACTIVATE` — mission lifecycle
+- `AGENT_STOP` — SubagentStop hook approved a worker after review verification (M6.4)
 
 The log rotates at 10 MiB (current log renamed to `audit.log.1`). Use standard Unix tools to analyze it:
 

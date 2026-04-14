@@ -14,7 +14,7 @@ Colmena eliminates the noise, coordinates the swarm, and tracks who delivers.
 
 ## How It Works
 
-Four integration points with Claude Code:
+Five integration points with Claude Code:
 
 **1. PreToolUse Hook (reactive — before execution)** — Every tool call is evaluated against declarative YAML rules. Auto-approves ~70%, blocks destructive ops, asks for the rest. Includes mission revocation kill switch. Every decision is logged.
 
@@ -54,7 +54,21 @@ CC about to prompt user --> colmena PermissionRequest hook
                               +-- otherwise --> no output (CC prompts user)
 ```
 
-**4. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
+**4. SubagentStop Hook (reactive — when agent stops)** — Blocks mission workers from stopping until they've called `review_submit`. The centralized auditor role is exempt. Any error approves (safe fallback — never traps an agent).
+
+```
+Agent attempts to stop --> colmena SubagentStop hook
+                              |
+                              |-- has delegation with source="role"?
+                              |     --> No: approve (not a mission worker)
+                              |     --> Yes: role_type is "auditor"?
+                              |       --> Yes: approve (auditor exempt)
+                              |       --> No: has submitted review?
+                              |         --> Yes: approve
+                              |         --> No: block + "Call review_submit before stopping"
+```
+
+**5. MCP Server (proactive)** — CC calls colmena tools natively to manage trust, select orchestration patterns, coordinate agents, submit reviews, and query findings.
 
 ```
 CC: "use colmena to select a pattern for auditing the payments API"
@@ -76,7 +90,7 @@ cargo build --release
 ./target/release/colmena setup
 ```
 
-That's it. `setup` registers the PreToolUse + PostToolUse + PermissionRequest hooks in `~/.claude/settings.json`, registers the MCP server in `~/.mcp.json`, validates config and library, and prints a checklist. Restart Claude Code to pick up the MCP server.
+That's it. `setup` registers the PreToolUse + PostToolUse + PermissionRequest + SubagentStop hooks in `~/.claude/settings.json`, registers the MCP server in `~/.mcp.json`, validates config and library, and prints a checklist. Restart Claude Code to pick up the MCP server.
 
 For standalone installs (release binary, no repo), `setup` embeds all default config and library files — the binary is self-contained.
 
@@ -299,15 +313,24 @@ colmena stats --session <id>              # Stats for a specific session
 | `findings_query` | Query findings by criteria |
 | `findings_list` | List all findings |
 
+### Alerts & Auditor Calibration (M6.4) — 4 tools
+
+| Tool | Description |
+|------|-------------|
+| `alerts_list` | List alerts (filter by severity/acknowledged) |
+| `alerts_ack` | Acknowledge alert(s) by ID or "all" |
+| `calibrate_auditor` | Present auditor evaluations for human calibration (bilingual en/es) |
+| `calibrate_auditor_feedback` | Submit calibration feedback (adjusts auditor ELO) |
+
 ### Dynamic Trust (M3) — 3 tools
 
 | Tool | Description |
 |------|-------------|
 | `mission_deactivate` | Show deactivation CLI command (read-only) |
 | `calibrate` | Show calibration state and recommend actions |
-| `session_stats` | Show prompts saved + tokens saved (call before ending session) |
+| `session_stats` | Show prompts saved + tokens saved + alert count (call before ending session) |
 
-**21 tools total** across all milestones (20 MCP + PermissionRequest hook).
+**25 tools total** across all milestones (24 MCP + PermissionRequest hook + SubagentStop hook).
 
 ## Configuration
 
@@ -357,15 +380,16 @@ colmena/
 │       ├── paths.rs           # Path resolution utilities
 │       ├── library.rs         # Wisdom Library — roles + patterns
 │       ├── selector.rs        # Pattern selector + mission generator
-│       ├── review.rs          # Peer Review Protocol
+│       ├── review.rs          # Peer Review Protocol + has_submitted_review()
 │       ├── elo.rs             # ELO Engine — ratings, decay, leaderboard
-│       └── findings.rs        # Findings Store — persistent knowledge base
+│       ├── findings.rs        # Findings Store — persistent knowledge base
+│       └── alerts.rs          # Alerts — low-score review warnings (append-only)
 ├── colmena-cli/               # CLI binary — hook handler + subcommands
 │   └── src/
-│       ├── main.rs            # Clap CLI, Pre/Post/PermissionRequest hooks, all cmds
-│       ├── hook.rs            # CC hook payload/response types (Pre + Post + PermissionRequest)
+│       ├── main.rs            # Clap CLI, Pre/Post/PermissionRequest/SubagentStop hooks, all cmds
+│       ├── hook.rs            # CC hook payload/response types (Pre + Post + PermissionRequest + SubagentStop)
 │       ├── notify.rs          # Notification hook (no-op placeholder)
-│       └── install.rs         # Hook registration (PreToolUse + PostToolUse + PermissionRequest)
+│       └── install.rs         # Hook registration (4 hooks: Pre/Post/PermissionRequest/SubagentStop)
 ├── colmena-filter/            # Output filtering pipeline
 │   └── src/
 │       ├── lib.rs             # Public API surface
@@ -380,13 +404,14 @@ colmena/
 │           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
-│       └── main.rs            # rmcp server, stdio transport, 21 tools
+│       └── main.rs            # rmcp server, stdio transport, 25 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
 │   ├── filter-config.yaml     # Output filter settings
 │   ├── review-config.yaml     # Review thresholds
 │   ├── runtime-delegations.json  # Active trust delegations
 │   ├── revoked-missions.json    # Agent IDs from deactivated missions (kill switch)
+│   ├── alerts.json              # Low-score review alerts (append-only, human-ack only)
 │   ├── elo-overrides.json       # ELO-calibrated agent overrides (auto-generated)
 │   ├── queue/
 │   │   ├── pending/           # Approval items awaiting decision
@@ -406,7 +431,7 @@ colmena/
 - **Files over databases** — YAML config, JSON queue, JSONL logs, git-versionable
 - **Build on CC, not around it** — hooks + MCP + Agent Teams, no hacks
 - **Domain-agnostic** — the engine is generic, the domain is in YAML templates
-- **6 security invariants** — no self-review, no reciprocal, artifact hash, min 2 scores, append-only ELO, trust gate floor
+- **7 security invariants** — no self-review, no reciprocal, artifact hash, min 2 scores, append-only ELO, trust gate floor, mandatory review before stop
 
 ## Roadmap
 
@@ -426,12 +451,13 @@ colmena/
 | M6.1 | Done | Security hardening — error sanitization, rate limiting, log rotation, permissions checks |
 | M6.2 | Done | P0+P1 hardening — MCP precision, collusion prevention, delegate scoping |
 | M6.3 | Done | Role tools_allowed firewall — PermissionRequest auto-approve + mission revocation kill switch |
+| M6.4 | Done | Enforced Peer Review — SubagentStop hook, centralized auditor, alerts, auditor calibration |
 
 ## Docs
 
 - [Changelog](CHANGELOG.md) — version history and upgrade notes
 - [Contributing](CONTRIBUTING.md) — branching, PRs, versioning, releasing
-- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M6.3
+- [User Guide](docs/guide.md) — setup, upgrading, daily workflow, all features M0-M6.4
 - [Design Spec](docs/specs/2026-03-29-hivemind-design.md) — full M0-M3 design
 - [Dark Corners](docs/dark-corners.md) — M0 edge case analysis
 - [Dark Corners M1](docs/dark-corners-m1.md) — M1 edge case analysis
