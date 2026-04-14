@@ -178,6 +178,14 @@ struct LibraryGenerateInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct MissionSpawnInput {
+    /// Mission description (e.g., "implement JWT authentication with tests and security review")
+    mission: String,
+    /// Optional pattern ID override — skip auto-selection and use this pattern directly
+    pattern_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct LibraryCreateRoleInput {
     /// Role ID (e.g., "cloud-security")
     id: String,
@@ -1180,6 +1188,107 @@ impl ColmenaServer {
              MCP tools cannot deactivate missions directly — human confirmation required.",
             input.mission_id, cmd
         ))
+    }
+
+    // ── Mission Spawn ────────────────────────────────────────────────────────
+
+    #[rmcp::tool(description = "One-step mission creation — selects pattern, maps roles, generates agent prompts with mission markers, and returns delegation commands. Use this instead of library_select + library_generate when you want everything in one call.")]
+    fn mission_spawn(
+        &self,
+        Parameters(input): Parameters<MissionSpawnInput>,
+    ) -> Result<String, String> {
+        self.rate_limiter.check("mission_spawn")?;
+        let library_dir = self.config_dir.join("library");
+        let missions_dir = self.config_dir.join("missions");
+
+        let roles = colmena_core::library::load_roles(&library_dir)
+            .map_err(|e| sanitize_error(&format!("Failed to load roles: {e}")))?;
+        let mut patterns = colmena_core::library::load_patterns(&library_dir)
+            .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
+
+        // If pattern_id specified, filter to just that pattern
+        if let Some(ref pid) = input.pattern_id {
+            let found = patterns.iter().any(|p| p.id == *pid);
+            if !found {
+                return Err(sanitize_error(&format!("Pattern '{}' not found in library", pid)));
+            }
+            patterns.retain(|p| p.id == *pid);
+        }
+
+        // Query ELO ratings
+        let elo_log_path = self.config_dir.join("elo/elo-log.jsonl");
+        let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
+        let baselines: Vec<(String, u32)> = roles.iter()
+            .map(|r| (r.id.clone(), r.elo.initial))
+            .collect();
+        let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
+
+        let spawn_result = colmena_core::selector::spawn_mission(
+            &input.mission,
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            None, // session_id
+            &elo_ratings,
+            Some(&self.config_dir),
+        )
+        .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
+
+        // Log audit event
+        let audit_path = self.config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::MissionSpawn {
+            mission_id: &spawn_result.mission_name,
+            pattern_id: &spawn_result.pattern_id,
+            pattern_auto_created: spawn_result.pattern_auto_created,
+            agent_count: spawn_result.agent_prompts.len(),
+        });
+
+        // Format output
+        let mut output = format!(
+            "## Mission: {}\n\nPattern: {}{}\nAgents: {}\n",
+            spawn_result.mission_name,
+            spawn_result.pattern_id,
+            if spawn_result.pattern_auto_created { " (auto-created)" } else { "" },
+            spawn_result.agent_prompts.len(),
+        );
+
+        // Role gaps
+        if !spawn_result.role_gaps.is_empty() {
+            output.push_str(&format!(
+                "\n**Role gaps detected:** {}. Consider creating roles with `library_create_role`.\n",
+                spawn_result.role_gaps.join(", ")
+            ));
+        }
+
+        // Agent prompts (ready to paste into Agent tool)
+        output.push_str("\n## Agent Prompts\n\n");
+        output.push_str("Paste each prompt into the Agent tool's `prompt` parameter:\n\n");
+        for ap in &spawn_result.agent_prompts {
+            output.push_str(&format!(
+                "### {} ({})\n\nCLAUDE.md: {}\n\n<details><summary>Prompt (click to expand)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
+                ap.role_id,
+                ap.role_name,
+                ap.claude_md_path.display(),
+                // Show first 200 chars + indicator
+                if ap.prompt.len() > 200 {
+                    format!("{}...\n[Full prompt at {}]", &ap.prompt[..200], ap.claude_md_path.display())
+                } else {
+                    ap.prompt.clone()
+                },
+            ));
+        }
+
+        // Delegation commands
+        if !spawn_result.delegation_commands.is_empty() {
+            output.push_str("\n## Delegations (require human confirmation)\n\n```\n");
+            for cmd in &spawn_result.delegation_commands {
+                output.push_str(&format!("{}\n", cmd));
+            }
+            output.push_str("```\n");
+        }
+
+        Ok(output)
     }
 
     // ── Calibration ──────────────────────────────────────────────────────────
