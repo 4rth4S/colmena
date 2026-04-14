@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.7.0 (semver, single workspace version)
+- **Version:** 0.8.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -25,22 +25,23 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 Rust workspace with 4 crates:
 
 - **colmena-core** — shared library: config, firewall, delegate, calibrate, queue, models, paths. Zero platform deps.
-- **colmena-cli** — CLI binary: Pre/PostToolUse/PermissionRequest hooks, clap subcommands, notifications (no-op placeholder), install
+- **colmena-cli** — CLI binary: Pre/PostToolUse/PermissionRequest/SubagentStop hooks, clap subcommands, notifications (no-op placeholder), install
 - **colmena-filter** — output filtering pipeline: OutputFilter trait, 4 base filters, FilterPipeline with catch_unwind, JSONL stats
 - **colmena-mcp** — MCP server: rmcp, stdio transport, exposes core functions as CC tools
 
-Four CC integration points:
+Five CC integration points:
 1. **PreToolUse Hook (reactive):** evaluates every tool call against YAML firewall rules + mission revocation kill switch
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
 3. **PermissionRequest Hook (reactive):** intercepts CC permission prompts, auto-approves tools in role's `tools_allowed` via session rules
-4. **MCP (proactive):** CC calls 21 colmena tools natively — firewall, library, review, ELO, findings, calibration, stats
+4. **SubagentStop Hook (reactive):** blocks mission workers from stopping without calling `review_submit` — auditor role exempt
+5. **MCP (proactive):** CC calls 25 colmena tools natively — firewall, library, review, ELO, findings, alerts, calibration, stats
 
 PreToolUse precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`
 PermissionRequest precedence: `role delegation exists + tool in tools_allowed → allow + teach CC session rules`
 
 ## Tech Stack
 
-- **Language:** Rust (edition 2021, workspace)
+- **Language:** Rust (edition 2021, workspace, stable toolchain — no nightly features)
 - **Core deps:** serde, serde_json, serde_yml, regex, anyhow, chrono
 - **CLI deps:** clap (derive)
 - **MCP deps:** rmcp (server, transport-io, macros), tokio
@@ -49,94 +50,126 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ## Conventions
 
+### General
+
 - Git: always use branches (feature/, fix/, chore/, docs/). Never commit to main. MR workflow.
 - Signature: "built with ❤️‍🔥 by AppSec" on all public-facing docs and commit trailers
 - Error handling: `anyhow::Result` everywhere. Never panic in the hook path.
+- HOME fallback to /tmp is banned — fail explicitly if HOME is not set
+- Run clippy before release — must be clean
+
+### Hooks (PreToolUse / PostToolUse / PermissionRequest / SubagentStop)
+
 - Hook path must complete in <100ms — no network calls, no heavy I/O
-- Any hook failure returns `ask` (safe fallback), never `deny` or exit 2
-- PermissionRequest hook safe fallback: any error → no output (CC continues to prompt user)
+- PreToolUse safe fallback: any error → `ask`, never `deny` or exit 2
+- PostToolUse safe fallback: any error → passthrough (return original unchanged), never "ask" or "deny"
+- PermissionRequest safe fallback: any error → no output (CC continues to prompt user)
 - PermissionRequest only activates for agents with `source: "role"` delegation (human-approved mission)
 - PermissionRequest teaches CC session rules via `updatedPermissions` — subsequent calls auto-approved by CC without hooks
 - Mission revocation (`revoked-missions.json`) overrides CC session rules — PreToolUse deny fires before CC checks learned rules
-- Role `tools_allowed` supports glob patterns: `mcp__caido__*` matches all Caido MCP tools
+- CC hooks JSON format: `{ "matcher": "", "hooks": [{ "type": "command", "command": "..." }] }`
+- CLI maps `HookPayload` → `colmena_core::models::EvaluationInput` before calling core (protocol-agnostic boundary)
+- Watchdog timeout (5s) logged as TIMEOUT event in audit.log before exit
+- CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
+- SubagentStop safe fallback: any error → approve (never trap an agent)
+- SubagentStop checks: delegation with `source: "role"` → role_type != "auditor" → has_submitted_review() → approve/block
+- SubagentStop uses separate `SubagentStopPayload` (lifecycle event, no tool_name/tool_input)
+- Auditor role exempt from review check via `role_type: auditor` in YAML (human-controlled)
+
+### Delegations
+
+- Delegations always have a TTL (max 24h), `--permanent` removed. Validate with `validate_ttl()`
+- Mission delegation TTL default: 8h (DEFAULT_MISSION_TTL_HOURS), max 24h
+- Bash delegations require mandatory conditions (bash_pattern or path_within) — enforced in save_delegations and CLI
+- Bash delegation bash_pattern validated as compilable regex before persisting
+- Delegations without `expires_at` are skipped on load with warning (no permanent delegations via JSON injection)
+- Expired delegations logged as DELEGATE_EXPIRE audit events on load
+- CLI `delegate add` supports `--session <id>` to limit delegation scope to one CC session
+- Delegations without `--session` warn about global scope (applies to ALL CC sessions)
 - `revoked-missions.json` is a runtime file — tracks agent IDs whose missions were deactivated mid-session
+
+### MCP Server
+
+- MCP delegate/revoke tools are read-only: return CLI commands for human confirmation, never execute directly
+- `library_generate` MCP is read-only — returns CLI commands for delegations, never persists directly
+- MCP error messages sanitized via `colmena_core::sanitize::sanitize_error` — no filesystem paths leak to agents
+- MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate, alerts_ack, calibrate_auditor_feedback)
+- MCP evaluate uses evaluate_with_elo() — includes ELO overrides so probation agents show correct restrictions
+- rmcp: uses `#[tool_router]` on impl + `#[tool_handler(router = self.tool_router)]` on ServerHandler
+
+### Security & Trust
+
+- Agent tool is in `restricted` (ask), not `trust_circle` (auto-approve)
+- `library_create_role` and `library_create_pattern` are in `restricted` — require human review (prevent library poisoning)
+- Review MCP tools (submit, evaluate) are in `restricted` — require human oversight
+- `gh pr merge` is blocked in firewall — PRs are merged by human only, never by Claude or agents
+- Elevated trust without bash_patterns generates "ask" (not auto-approve) for Bash — forces pattern definition
+- Reviewer selection randomized via rand::seq::SliceRandom — prevents deterministic assignment and collusion
+- Review invariants are hardcoded in review.rs: author!=reviewer, no reciprocal, min 2 scores, hash verification
+- Trust gate floor (5.0) is hardcoded — config can raise threshold but never below floor
+- YAML agent_overrides take precedence over ELO overrides (human always wins)
+- Config file permissions checked on load: warns if critical files are world-writable (Unix only)
+- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json, alerts.json)
+- Alerts are append-only — agents can't acknowledge or delete alerts
+- `alerts_ack` and `calibrate_auditor_feedback` in restricted (ELO/alert modification needs human oversight)
+
+### Config & Data
+
 - YAML regex patterns use single-quoted strings to avoid `\b` → backspace escaping issues
-- Queue filenames use millisecond timestamps + tool_use_id for uniqueness
 - Firewall `bash_pattern` conditions only apply when tool is `Bash` — skip for other tools
 - Glob matching in `path_not_match` operates on **filename only** (last path component)
 - Path comparison uses component-based normalization (not `canonicalize()`)
 - Regex patterns compiled once at config load time (`compile_config`)
 - Atomic file writes (temp + rename) for concurrent CC instances
-- Integration tests spawn the CLI binary as subprocess and pipe JSON via stdin
-- Core library tests use `env!("CARGO_MANIFEST_DIR")` + `../config/` to reach workspace root
-- Run clippy before release — must be clean
-- CC hooks format: `{ "matcher": "", "hooks": [{ "type": "command", "command": "..." }] }`
-- MCP delegate/revoke tools are read-only: return CLI commands for human confirmation, never execute directly
-- Delegations always have a TTL (max 24h), `--permanent` removed. Validate with `validate_ttl()`
 - All firewall decisions logged to `config/audit.log` (append-only, one line per decision)
-- Agent tool is in `restricted` (ask), not `trust_circle` (auto-approve)
+- Queue filenames use millisecond timestamps + tool_use_id for uniqueness
 - Queue entries truncate tool_input: commands to 200 chars, Write content redacted
-- HOME fallback to /tmp is banned — fail explicitly if HOME is not set
-- PostToolUse hook must be as fast as PreToolUse (<100ms) — no network calls
-- PostToolUse safe fallback: any error → passthrough (return original output unchanged), never "ask" or "deny"
+- ELO is append-only JSONL log with 10MB rotation — never mutable state. Rating calculated at read time with temporal decay
+- ELO overrides stored separately in `config/elo-overrides.json`, never pollute trust-firewall.yaml
+- `load_findings()` hard cap: 5000 records max to prevent OOM
+- Finding severity validated against closed enum: `["critical", "high", "medium", "low"]`
+- Role `tools_allowed` supports glob patterns: `mcp__caido__*` matches all Caido MCP tools
+- Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl` (10MB rotation)
+
+### Output Filtering (PostToolUse)
+
 - Filter pipeline order: ANSI strip → stderr-only → dedup → truncate (clean first, hard cap last)
 - Each filter wrapped in catch_unwind — a buggy filter never crashes the hook
 - FilterConfig max_output_chars (30K) must be < CC's internal limit (50K)
 - Filters only apply to Bash tool outputs (Read/Write/Edit don't need filtering)
-- Token savings logged to JSONL at `<colmena_home>/config/filter-stats.jsonl` (10MB rotation)
-- MCP error messages sanitized via `colmena_core::sanitize::sanitize_error` — no filesystem paths leak to agents
-- MCP generative tools rate-limited: 30 calls/min per tool (library_generate, review_submit, review_evaluate, library_create_role/pattern, mission_deactivate)
-- MCP evaluate uses evaluate_with_elo() — includes ELO overrides so probation agents show correct restrictions
-- Reviewer selection randomized via rand::seq::SliceRandom — prevents deterministic assignment and collusion
-- Elevated trust without bash_patterns generates "ask" (not auto-approve) for Bash — forces pattern definition
-- CLI `delegate add` supports `--session <id>` to limit delegation scope to one CC session
-- Bash delegation bash_pattern validated as compilable regex before persisting — prevents silently inactive delegations
-- Expired delegations logged as DELEGATE_EXPIRE audit events on load
-- `library_create_role` and `library_create_pattern` are in `restricted` — require human review (prevent library poisoning)
-- Delegations without `--session` warn about global scope (applies to ALL CC sessions)
-- Watchdog timeout (5s) logged as TIMEOUT event in audit.log before exit
-- `load_findings()` hard cap: 5000 records max to prevent OOM
-- `calibrate run` cleans orphan ELO overrides (agent_ids with no matching role in library)
-- Review IDs include random component: `r_{timestamp}_{hex4}` to prevent collisions
-- Config file permissions checked on load: warns if critical files are world-writable (Unix only)
-- Review invariants are hardcoded in review.rs, not configurable: author!=reviewer, no reciprocal, min 2 scores, hash verification
-- ELO is append-only JSONL log with 10MB rotation — never mutable state. Rating calculated at read time with temporal decay
-- Review MCP tools (submit, evaluate) are in `restricted` — require human oversight
-- Trust gate floor (5.0) is hardcoded — config can raise threshold but never below floor
-- rmcp MCP server: uses `#[tool_router]` on impl + `#[tool_handler(router = self.tool_router)]` on ServerHandler
-- CLI maps `HookPayload` → `colmena_core::models::EvaluationInput` before calling core (protocol-agnostic boundary)
-- Integration test paths: use `Path::parent()` for workspace root, never string concat with `..`
-- Role `permissions` block is optional — existing roles without it parse fine (backward compatible)
-- RuntimeDelegation has optional `source`, `mission_id`, `conditions` fields (serde(default))
-- Mission delegations are session-bound when session_id is provided at generate_mission()
-- ELO overrides stored separately in `config/elo-overrides.json`, never pollute trust-firewall.yaml
-- YAML agent_overrides take precedence over ELO overrides (human always wins)
+
+### ELO & Calibration
+
 - Calibration warm-up: agents need min_reviews_to_calibrate (default 3) before ELO trust applies
 - TrustTier: Uncalibrated → Standard → Elevated/Restricted/Probation
+- `calibrate run` cleans orphan ELO overrides (agent_ids with no matching role in library)
 - `colmena calibrate reset` instantly revokes all ELO-based trust
-- Mission delegation TTL default: 8h (DEFAULT_MISSION_TTL_HOURS), max 24h
-- Bash delegations require mandatory conditions (bash_pattern or path_within) — enforced in save_delegations and CLI
-- Delegations without `expires_at` are skipped on load with warning (no permanent delegations via JSON injection)
-- Finding severity validated against closed enum: `["critical", "high", "medium", "low"]`
-- `library_generate` MCP is read-only — returns CLI commands for delegations, never persists directly
+- Review IDs include random component: `r_{timestamp}_{hex4}` to prevent collisions
 - `generate_mission()` accepts ELO ratings to assign reviewer lead (highest ELO in squad)
-- CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
-- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json)
-- `gh pr merge` is blocked in firewall — PRs are merged by human only, never by Claude or agents
-- `generate_mission()` accepts optional `config_dir` for M4 prompt review detection — `None` skips detection (backward compatible)
-- Prompt review detection uses compound keyword matching: prefix ("review", "improve", "refine") + role name/id + suffix ("prompt", "instructions", "approach") — all three required to avoid false positives
-- Findings with `category: "prompt_improvement"` are suggestions from debate/mentor agents about role prompts — queryable via `findings_query`, human decides what to apply
-- Wisdom Library has 6 built-in roles + 7 built-in patterns. New roles/patterns created via `library_create_role`/`library_create_pattern`
-- RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative) — each with distinct trust level, tools, methodology, safety rails
-- PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative) — aligned with agentic-patterns.com
+
+### Wisdom Library
+
+- 6 built-in roles + 7 built-in patterns. New roles/patterns created via `library_create_role`/`library_create_pattern`
+- RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative)
+- PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)
 - `library_select` suggests creating a pattern when no existing one matches the mission
 - Generated role prompts have 5 sections: Core Responsibilities, Methodology (5 phases), Escalation, Output Format, Boundaries
-- Generated roles/patterns are starting points — human/CC customizes after creation
-- Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools, designed for bug bounty missions
-- `colmena setup` embeds all 22 default config + library files via `include_str!()` (~46KB) — binary is self-contained
+- Caido pentester roles (web_pentester, api_pentester) are Caido-native — every methodology step references specific Caido MCP tools
+- Prompt review detection uses compound keyword matching: prefix + role name/id + suffix — all three required to avoid false positives
+- Findings with `category: "prompt_improvement"` are suggestions about role prompts — queryable via `findings_query`, human decides
+
+### Setup & Install
+
+- `colmena setup` embeds all default config + library files via `include_str!()` — binary is self-contained
 - Setup detects repo mode (Cargo.toml nearby) vs standalone mode (release binary) automatically
 - Setup merge strategy: new defaults copied, custom files preserved (new defaults saved to `.defaults/` for reference)
 - `~/.mcp.json` is the global MCP registration target — setup writes absolute path to colmena-mcp binary
+
+### Testing
+
+- Integration tests spawn the CLI binary as subprocess and pipe JSON via stdin
+- Core library tests use `env!("CARGO_MANIFEST_DIR")` + `../config/` to reach workspace root
+- Integration test paths: use `Path::parent()` for workspace root, never string concat with `..`
 
 ## CLI Subcommands
 
@@ -168,45 +201,43 @@ colmena stats                          # Combined firewall + filter savings summ
 colmena stats --session <id>           # Stats for a specific session
 ```
 
-## MCP Tools (M0.5)
+## MCP Tools (25 total)
 
 ```
-config_check       — validate firewall config
-queue_list         — list pending approvals
-delegate           — request delegation (returns CLI command, read-only)
-delegate_list      — list active delegations
-delegate_revoke    — request revocation (returns CLI command, read-only)
-evaluate           — evaluate a tool call against firewall
-```
+Firewall & Delegations:
+  config_check       — validate firewall config
+  evaluate           — evaluate a tool call against firewall
+  queue_list         — list pending approvals
+  delegate           — request delegation (returns CLI command, read-only)
+  delegate_list      — list active delegations
+  delegate_revoke    — request revocation (returns CLI command, read-only)
 
-## MCP Tools (M1)
+Wisdom Library:
+  library_list       — list roles + patterns
+  library_show       — show role/pattern details
+  library_select     — recommend patterns for a mission
+  library_generate   — generate CLAUDE.md per agent for a mission
+  library_create_role — create role with intelligent defaults (8 categories)
+  library_create_pattern — create pattern with topology detection (7 topologies)
 
-```
-library_list       — list roles + patterns
-library_show       — show role/pattern details
-library_select     — recommend patterns for a mission
-library_generate   — generate CLAUDE.md per agent for a mission
-library_create_role — create role with intelligent defaults (8 categories)
-library_create_pattern — create pattern with topology detection (7 topologies)
-```
+Peer Review & Findings:
+  review_submit      — submit artifact for peer review (assigns reviewer)
+  review_list        — list peer reviews (pending/completed)
+  review_evaluate    — submit scores + findings as reviewer (triggers ELO + trust gate + alerts)
+  elo_ratings        — ELO leaderboard with temporal decay
+  findings_query     — search findings by role/category/severity/date/mission
+  findings_list      — list recent findings
 
-## MCP Tools (M2)
+Alerts & Calibration:
+  alerts_list        — list alerts (filter by severity/acknowledged)
+  alerts_ack         — acknowledge alert(s) by ID or "all"
+  calibrate_auditor  — present auditor evaluations for human calibration (bilingual en/es)
+  calibrate_auditor_feedback — submit calibration feedback (adjusts auditor ELO)
 
-```
-review_submit      — submit artifact for peer review (assigns reviewer)
-review_list        — list peer reviews (pending/completed)
-review_evaluate    — submit scores + findings as reviewer (triggers ELO + trust gate)
-elo_ratings        — ELO leaderboard with temporal decay
-findings_query     — search findings by role/category/severity/date/mission
-findings_list      — list recent findings
-```
-
-## MCP Tools (M3)
-
-```
-mission_deactivate — request mission deactivation (returns CLI command, read-only)
-calibrate          — show ELO-based trust calibration state + recommend CLI commands
-session_stats      — show prompts saved + tokens saved (call before ending session)
+Operations:
+  mission_deactivate — request mission deactivation (returns CLI command, read-only)
+  calibrate          — show ELO-based trust calibration state + recommend CLI commands
+  session_stats      — show prompts saved + tokens saved + alert count (call before ending session)
 ```
 
 ## Environment Variables
@@ -230,12 +261,13 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - **M6.1** Security hardening — STRIDE/DREAD threat model fixes: error sanitization, rate limiting, log rotation, orphan cleanup, permissions checks (done)
 - **M6.2** P0+P1 hardening — MCP calibrate/evaluate precision, reviewer randomization, Elevated Bash guard, --session delegations, regex validation, expire audit trail (done)
 - **M6.3** Role tools_allowed firewall — PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch (done)
+- **M6.4** Enforced Peer Review — SubagentStop hook blocks workers without review, centralized auditor, alerts system, auditor calibration (done)
 - **M7** Library Guardian — prompt validation, file integrity, trust elevation (planned)
 
-## Current State (2026-04-13)
+## Current State (2026-04-14)
 
-**Branch:** `main` (v0.7.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation)
+**Branch:** `main` (v0.8.0)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts)
 **Next:** M7 (Library Guardian — prompt validation, integrity checks)
 
 ## Key Docs
@@ -252,3 +284,4 @@ session_stats      — show prompts saved + tokens saved (call before ending ses
 - `docs/caido-pentester-roles-plan.md` — M4.1 plan (Caido-native web_pentester + api_pentester roles)
 - `docs/superpowers/specs/2026-04-02-colmena-setup-design.md` — M5 spec (colmena setup onboarding command)
 - `docs/superpowers/specs/2026-04-02-intelligent-role-creation-design.md` — M6 spec (intelligent role + pattern creation)
+- `docs/superpowers/specs/2026-04-13-enforced-peer-review-design.md` — M6.4 spec (SubagentStop + centralized auditor + alerts)

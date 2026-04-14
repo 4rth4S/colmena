@@ -33,6 +33,8 @@ pub struct Role {
     pub specializations: Vec<String>,
     #[serde(default)]
     pub permissions: Option<RolePermissions>,
+    #[serde(default)]
+    pub role_type: Option<String>,
     pub elo: EloConfig,
     pub mentoring: MentoringConfig,
 }
@@ -561,6 +563,32 @@ elo_lead_selection: true
         };
         assert!(!rta.allows_tool("Read"));
         assert!(!rta.allows_tool("mcp__anything__here"));
+    }
+
+    // ── M6.4: role_type field tests ─────────────────────────────────────────
+
+    #[test]
+    fn test_role_type_field_parsing() {
+        // Load auditor.yaml from the real config directory
+        let config_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/library");
+        let roles = load_roles(&config_dir).expect("should load roles");
+        let auditor = roles.iter().find(|r| r.id == "auditor");
+        assert!(auditor.is_some(), "auditor role should exist in library");
+        assert_eq!(
+            auditor.unwrap().role_type,
+            Some("auditor".to_string()),
+            "auditor role should have role_type = Some(\"auditor\")"
+        );
+    }
+
+    #[test]
+    fn test_role_type_default_none() {
+        // A role without role_type should parse as None
+        let role: Role = serde_yml::from_str(sample_role_yaml()).expect("should parse role");
+        assert_eq!(
+            role.role_type, None,
+            "role without role_type field should parse as None"
+        );
     }
 
     #[test]

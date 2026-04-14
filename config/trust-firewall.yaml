@@ -57,7 +57,7 @@ trust_circle:
   - tools: [Write, Edit]
     conditions:
       path_within: ['${PROJECT_DIR}']
-      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*']
+      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*', '*alerts*']
     action: auto-approve
     reason: 'Project-scoped file writes excluding secrets'
 
@@ -100,6 +100,11 @@ restricted:
   - tools: [mcp__colmena__library_create_role, mcp__colmena__library_create_pattern]
     action: ask
     reason: 'Library creation requires human review to prevent prompt poisoning'
+
+  # Alert acknowledgment and auditor calibration require human oversight
+  - tools: [mcp__colmena__alerts_ack, mcp__colmena__calibrate_auditor_feedback]
+    action: ask
+    reason: 'Alert acknowledgment and auditor calibration require human review'
 
   # External communications
   - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]

@@ -6,6 +6,7 @@ description: "Compliance and governance specialist — standards mapping, eviden
 system_prompt_ref: prompts/auditor.md
 
 default_trust_level: ask
+role_type: auditor
 tools_allowed:
   - Read
   - Write
