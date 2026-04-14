@@ -6,6 +6,40 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-14
+
+### Added
+- **Generic development roles (M7):** 4 new roles for general software engineering workflows
+  - `developer` — feature implementation, code writing, build/test execution (includes Agent in tools_allowed)
+  - `code_reviewer` — code quality reviews, bug detection, style/performance analysis (read-only Bash)
+  - `tester` — test writing, test execution, coverage analysis, regression detection
+  - `architect` — system design, tradeoff analysis, technical documentation (Write scoped to docs/)
+  - All start at trust level "ask" — ELO calibration elevates over time
+  - Each role has scoped `bash_patterns` and `path_not_match` for credentials/secrets
+- **3 dev workflow patterns:** purpose-built for software engineering tasks
+  - `code-review-cycle` (iterative) — developer implements → auditor reviews → feedback loop
+  - `docs-from-code` (sequential) — architect reads → developer generates docs → auditor validates
+  - `refactor-safe` (sequential) — developer refactors → tester validates → auditor approves
+- **`map_topology_roles()`** — topology-aware role-to-slot mapping with mission keyword scoring
+  - `SlotRoleType` enum: Lead, Offensive, Defensive, Research, Worker, Judge
+  - Preferred role lists per slot type with specialization-based tie-breaking
+  - No-duplicate invariant: each role assigned to at most one slot
+  - Topology slot layouts for all 7 topologies
+- **Auditor QPC evaluation framework:** formalized 3-dimension scoring
+  - Quality (1-10), Precision (1-10), Comprehensiveness (1-10)
+  - Role-agnostic evaluation — same dimensions for developers, researchers, pentesters
+  - Integrated into auditor.md system prompt
+- **Inter-agent token efficiency directive:** injected into multi-agent missions
+  - "Facts only" communication protocol for agent-to-agent messages
+  - Code/commands/configs never compressed — only prose communication
+  - Automatic injection via `generate_mission()` for missions with 2+ agents
+
+### Changed
+- Library grows from 6→10 roles, 7→10 patterns
+- `defaults.rs` embeds 11 new files (4 roles + 3 patterns + 4 prompts)
+- `selector.rs` re-exports `map_topology_roles`, `SlotRoleType`, `SlotDesc`
+- Tests: 314 (was 303), 11 new tests
+
 ## [0.8.0] - 2026-04-14
 
 ### Added
