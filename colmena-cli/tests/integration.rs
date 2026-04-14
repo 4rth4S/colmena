@@ -722,3 +722,125 @@ fn test_hook_subagent_stop_auditor_exempt() {
     let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(parsed["decision"], "approve");
 }
+
+// ── Mission Gate integration tests ──────────────────────────────────────────
+
+fn make_colmena_home_with_enforce_missions() -> tempfile::TempDir {
+    let tmp = make_colmena_home();
+    // Modify config to enable enforce_missions
+    let config_path = tmp.path().join("config/trust-firewall.yaml");
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    let modified = content.replace("enforce_missions: false", "enforce_missions: true");
+    std::fs::write(&config_path, modified).unwrap();
+    tmp
+}
+
+#[test]
+fn test_mission_gate_blocks_bare_agent_when_enforced() {
+    let tmp = make_colmena_home_with_enforce_missions();
+    // Agent call without mission marker
+    let payload = json!({
+        "session_id": "gate-test",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"prompt": "Just do something without a mission"},
+        "tool_use_id": "tu_gate_1",
+        "cwd": workspace_root()
+    });
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    // Should be "ask" (not deny) — human can override
+    assert!(
+        parsed.get("decision").is_none() || parsed["decision"] != "deny",
+        "Mission gate should ask, not deny"
+    );
+    // Response should contain mission gate message
+    let response_str = stdout.to_lowercase();
+    assert!(
+        response_str.contains("mission") && response_str.contains("gate")
+            || response_str.contains("mission_spawn")
+            || response_str.contains("mission gate"),
+        "Response should mention mission gate: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_mission_gate_allows_agent_with_marker() {
+    let tmp = make_colmena_home_with_enforce_missions();
+    // Agent call WITH mission marker in prompt
+    let prompt = format!(
+        "{}test-mission-123 -->\n# Developer\nYou write code.",
+        colmena_core::selector::MISSION_MARKER_PREFIX
+    );
+    let payload = json!({
+        "session_id": "gate-test",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"prompt": prompt},
+        "tool_use_id": "tu_gate_2",
+        "cwd": workspace_root()
+    });
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    // Should NOT trigger mission gate — passes through to normal Agent handling (ask from restricted)
+    let response_str = serde_json::to_string(&parsed).unwrap().to_lowercase();
+    assert!(
+        !response_str.contains("mission gate"),
+        "Agent with marker should not trigger mission gate: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_mission_gate_inactive_when_not_enforced() {
+    // Use default config (enforce_missions: false)
+    let tmp = make_colmena_home();
+    let payload = json!({
+        "session_id": "gate-test",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Agent",
+        "tool_input": {"prompt": "bare agent without marker"},
+        "tool_use_id": "tu_gate_3",
+        "cwd": workspace_root()
+    });
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    // Should NOT mention mission gate
+    let response_str = serde_json::to_string(&parsed).unwrap().to_lowercase();
+    assert!(
+        !response_str.contains("mission gate"),
+        "Mission gate should not fire when enforce_missions=false: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_mission_gate_skips_non_agent_tools() {
+    let tmp = make_colmena_home_with_enforce_missions();
+    // Read tool call — mission gate should not fire even with enforce_missions=true
+    let payload = json!({
+        "session_id": "gate-test",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/tmp/test.txt"},
+        "tool_use_id": "tu_gate_4",
+        "cwd": workspace_root()
+    });
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    let response_str = serde_json::to_string(&parsed).unwrap().to_lowercase();
+    assert!(
+        !response_str.contains("mission gate"),
+        "Non-Agent tools should never trigger mission gate: {}",
+        stdout
+    );
+}

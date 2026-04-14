@@ -5,6 +5,10 @@ version: 1
 defaults:
   action: ask
 
+# Mission Gate: when true, Agent calls without a Colmena mission marker trigger "ask".
+# Off by default — opt-in. Human can always override.
+enforce_missions: false
+
 trust_circle:
   # Local read operations - always safe
   - tools: [Read, Glob, Grep, Bash]
@@ -105,6 +109,11 @@ restricted:
   - tools: [mcp__colmena__alerts_ack, mcp__colmena__calibrate_auditor_feedback]
     action: ask
     reason: 'Alert acknowledgment and auditor calibration require human review'
+
+  # Mission spawn creates patterns, delegations, and missions — requires human review
+  - tools: [mcp__colmena__mission_spawn]
+    action: ask
+    reason: 'Mission spawn creates patterns and delegations — requires human review'
 
   # External communications
   - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]

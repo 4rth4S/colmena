@@ -330,7 +330,7 @@ colmena stats --session <id>              # Stats for a specific session
 | `calibrate` | Show calibration state and recommend actions |
 | `session_stats` | Show prompts saved + tokens saved + alert count (call before ending session) |
 
-**25 tools total** across all milestones (24 MCP + PermissionRequest hook + SubagentStop hook).
+**26 tools total** across all milestones (25 MCP + PermissionRequest hook + SubagentStop hook).
 
 ## Configuration
 
@@ -404,7 +404,7 @@ colmena/
 │           └── stderr_only.rs # Discard stdout on command failure
 ├── colmena-mcp/               # MCP server — CC native integration
 │   └── src/
-│       └── main.rs            # rmcp server, stdio transport, 25 tools
+│       └── main.rs            # rmcp server, stdio transport, 26 tools
 ├── config/
 │   ├── trust-firewall.yaml    # Firewall rules
 │   ├── filter-config.yaml     # Output filter settings
