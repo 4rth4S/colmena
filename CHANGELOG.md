@@ -6,6 +6,27 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-04-14
+
+### Added
+- **Mission Spawn (M7.1):** one-step mission creation via `mission_spawn` MCP tool
+  - `spawn_mission()` core function: select pattern → auto-create if no match → map roles → generate mission with markers
+  - `SpawnResult`, `AgentPrompt` structs — returns ready-to-paste prompts + delegation CLI commands
+  - `MISSION_MARKER_PREFIX` (`<!-- colmena:mission_id=...-->`) embedded in agent prompts
+  - Auto-creates patterns via `scaffold_pattern()` when no existing pattern matches
+  - Uses `map_topology_roles()` (from M7) to assign real roles to auto-created pattern slots
+- **Mission Gate:** opt-in enforcement for Agent tool calls
+  - `enforce_missions: bool` on `FirewallConfig` (default false, zero impact on existing installs)
+  - PreToolUse step 4c: checks Agent calls for `MISSION_MARKER_PREFIX` when enforced
+  - "ask" not "deny" — human can always override and proceed without mission binding
+  - Only applies to Agent tool — other tools pass through normally
+- **2 new audit events:** `MissionSpawn` (mission_id, pattern_id, auto_created, agent_count) + `MissionGate` (session_id, agent_id)
+- **`mission_spawn` MCP tool (25→26):** rate-limited, restricted, returns formatted output with agent prompts + delegation commands + role gap warnings
+
+### Changed
+- trust-firewall.yaml: `enforce_missions: false` field, `mission_spawn` in restricted rules
+- Tests: 328 (was 314), 14 new tests (5 selector + 3 config + 2 audit + 4 integration)
+
 ## [0.9.0] - 2026-04-14
 
 ### Added

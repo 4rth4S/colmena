@@ -440,6 +440,38 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         rule: decision.matched_rule.as_deref().unwrap_or("none"),
     });
 
+    // 4c. Mission Gate: if enforce_missions and tool is Agent, check for mission marker
+    let decision = if cfg.enforce_missions
+        && eval_input.tool_name == "Agent"
+        && decision.action != Action::Block
+    {
+        // Check if the Agent prompt contains a mission marker
+        let prompt = eval_input.tool_input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
+            // Log Mission Gate event
+            let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::MissionGate {
+                session_id: &eval_input.session_id,
+                agent_id: eval_input.agent_id.as_deref(),
+            });
+            colmena_core::firewall::Decision {
+                action: Action::Ask,
+                reason: "Mission gate: this Agent call has no Colmena mission binding. \
+                         Use mcp__colmena__mission_spawn to create a mission first, \
+                         then paste the generated agent prompts into Agent calls. \
+                         Approve manually to proceed without mission binding.".to_string(),
+                matched_rule: Some("mission_gate".to_string()),
+                priority: colmena_core::firewall::Priority::Medium,
+            }
+        } else {
+            decision
+        }
+    } else {
+        decision
+    };
+
     // 5. If Ask → enqueue pending
     if decision.action == Action::Ask {
         if let Err(e) = colmena_core::queue::enqueue_pending(config_dir, &eval_input, &decision) {
