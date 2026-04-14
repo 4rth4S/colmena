@@ -3,8 +3,9 @@ id: mentored-execution
 source: custom
 description: >
   A senior agent guides a junior agent through a task, providing advice
-  before critical actions. Designed for skill development and high-stakes
-  tasks where quality assurance is essential.
+  before critical actions. Auditor evaluates the final output with QPC scoring.
+  Designed for skill development and high-stakes tasks where quality assurance
+  is essential.
 topology: hierarchical
 communication: hub-and-spoke
 when_to_use:
@@ -18,16 +19,17 @@ when_not_to_use:
   - "Task is routine and well-understood"
   - "Speed is the primary concern"
 pros:
-  - "Quality assurance at each step"
+  - "Quality assurance at each step via mentor"
   - "Knowledge transfer from senior to junior"
-  - "Catches mistakes before they compound"
+  - "Final evaluation by auditor provides ELO signal for both"
 cons:
   - "Slower — mentor review adds latency"
   - "Mentor context grows with each interaction"
-  - "Only two agents active"
+  - "Three agents for what might be a focused task"
 estimated_token_cost: medium
-estimated_agents: "2"
+estimated_agents: "3"
 roles_suggested:
   mentor: security_architect
   mentee: pentester
+  evaluator: auditor
 elo_lead_selection: true
