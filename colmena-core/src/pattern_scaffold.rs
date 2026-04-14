@@ -92,6 +92,7 @@ impl PatternTopology {
     }
 
     /// Estimated number of agents for this topology.
+    /// Minimum 3 agents per topology — Colmena requires auditor + 2 workers minimum.
     pub fn estimated_agents(&self) -> &'static str {
         match self {
             PatternTopology::Hierarchical => "3-5",
@@ -99,8 +100,8 @@ impl PatternTopology {
             PatternTopology::Adversarial => "3",
             PatternTopology::Peer => "4-6",
             PatternTopology::FanOutMerge => "4-6",
-            PatternTopology::Recursive => "2-4",
-            PatternTopology::Iterative => "2",
+            PatternTopology::Recursive => "3-4",
+            PatternTopology::Iterative => "3",
         }
     }
 
@@ -415,11 +416,11 @@ fn roles_suggested_yaml(topology: PatternTopology) -> String {
                 .to_string()
         }
         PatternTopology::Recursive => {
-            "roles_suggested:\n  root: agent_root\n  sub_agents: [agent_sub_1, agent_sub_2]"
+            "roles_suggested:\n  root: agent_root\n  sub_agents: [agent_sub_1, agent_sub_2]\n  evaluator: agent_evaluator"
                 .to_string()
         }
         PatternTopology::Iterative => {
-            "roles_suggested:\n  agent: agent_primary\n  critic: agent_critic".to_string()
+            "roles_suggested:\n  worker: agent_worker\n  reviewer: agent_reviewer\n  evaluator: agent_evaluator".to_string()
         }
     }
 }
@@ -624,10 +625,12 @@ fn topology_slots(topology: PatternTopology) -> Vec<SlotDesc> {
             SlotDesc { name: "root".into(), slot_type: SlotRoleType::Lead },
             SlotDesc { name: "sub_agent_1".into(), slot_type: SlotRoleType::Offensive },
             SlotDesc { name: "sub_agent_2".into(), slot_type: SlotRoleType::Research },
+            SlotDesc { name: "evaluator".into(), slot_type: SlotRoleType::Judge },
         ],
         PatternTopology::Iterative => vec![
             SlotDesc { name: "worker".into(), slot_type: SlotRoleType::Worker },
-            SlotDesc { name: "judge".into(), slot_type: SlotRoleType::Judge },
+            SlotDesc { name: "reviewer".into(), slot_type: SlotRoleType::Defensive },
+            SlotDesc { name: "evaluator".into(), slot_type: SlotRoleType::Judge },
         ],
     }
 }
@@ -1010,19 +1013,21 @@ mod tests {
 
     #[test]
     fn test_map_topology_roles_iterative() {
-        let roles = vec!["developer".into(), "auditor".into()];
+        let roles = vec!["developer".into(), "code_reviewer".into(), "auditor".into()];
         let specs = make_specs();
         let result = map_topology_roles(
             PatternTopology::Iterative,
             "implement feature with review cycle",
             &roles, &specs,
         );
-        assert_eq!(result.len(), 2);
-        // Worker → developer, Judge → auditor
+        assert_eq!(result.len(), 3);
+        // Worker → developer, Reviewer (Defensive) → code_reviewer, Evaluator (Judge) → auditor
         assert_eq!(result[0].0, "worker");
         assert_eq!(result[0].1, "developer");
-        assert_eq!(result[1].0, "judge");
-        assert_eq!(result[1].1, "auditor");
+        assert_eq!(result[1].0, "reviewer");
+        assert_eq!(result[1].1, "code_reviewer");
+        assert_eq!(result[2].0, "evaluator");
+        assert_eq!(result[2].1, "auditor");
     }
 
     #[test]

@@ -2,32 +2,33 @@ name: Code Review Cycle
 id: code-review-cycle
 source: builtin
 description: >
-  Developer completes a full feature, then submits for auditor evaluation.
-  Iterative loop: developer implements, auditor reviews, feedback cycle
-  continues until quality bar is met. Best for focused feature work.
-topology: iterative
-communication: loop
+  Developer implements a feature, code reviewer checks for bugs/style/performance,
+  auditor evaluates the overall output with QPC scoring. Sequential pipeline
+  ensuring separation of concerns between implementation, review, and evaluation.
+topology: sequential
+communication: chain
 when_to_use:
-  - "Feature implementation with quality review"
-  - "Code writing followed by structured review"
-  - "Quality improves through repeated refinement"
-  - "Feedback loop between implementer and reviewer"
-  - "Single developer working on a focused task"
+  - "Feature implementation with structured code review"
+  - "Code writing followed by quality review and evaluation"
+  - "Quality improves through review before final evaluation"
+  - "Need both code quality review and process evaluation"
+  - "Single feature with clear review checkpoints"
 when_not_to_use:
   - "Tasks requiring multiple parallel specialists"
   - "Broad exploration where coverage matters more than depth"
   - "First draft quality is sufficient"
 pros:
-  - "Low agent count keeps costs manageable"
-  - "Output quality improves with each review cycle"
-  - "Catches errors through structured critique"
+  - "Separation of concerns — reviewer finds bugs, auditor evaluates process"
+  - "Clear checkpoints between implementation, review, and evaluation"
+  - "ELO signal for both code reviewer and developer"
 cons:
-  - "Only two agents active — limited perspectives"
-  - "Convergence not guaranteed for ambiguous requirements"
-  - "Diminishing returns after initial review cycles"
+  - "Slower — fully sequential execution"
+  - "Three agents for what might be a simple feature"
+  - "Late-stage agents can't inform early-stage decisions"
 estimated_token_cost: low
-estimated_agents: "2"
+estimated_agents: "3"
 roles_suggested:
-  agent: developer
-  critic: auditor
+  stage_1: developer
+  stage_2: code_reviewer
+  stage_3: auditor
 elo_lead_selection: false
