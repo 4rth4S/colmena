@@ -6,6 +6,29 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-04-14
+
+### Added
+- **Mission Sizing (M7.2):** `suggest_mission_size()` analyzes mission descriptions and recommends Colmena vs vanilla CC
+  - `Complexity` enum: Trivial/Small/Medium/Large with domain detection across 7 categories
+  - Domain keywords: code, testing, security, documentation, architecture, review, operations
+  - Risk bumpers (production, compliance) and simplicity reducers (fix, typo, quick)
+  - Threshold: `needs_colmena = true` when 3+ agents recommended
+  - Confidence score based on keyword match density
+- **`colmena suggest` CLI command:** formatted output with complexity, agents, pattern, roles
+  - Honest: recommends NOT using Colmena for trivial/small tasks
+- **`mission_suggest` MCP tool (26→27):** read-only, not rate-limited, not restricted (informational)
+  - Mission Gate systemMessage now references `mission_suggest`
+- **Pattern minimum enforcement:** all topologies now generate 3+ agents (auditor always included)
+  - `code-review-cycle` updated: 2→3 agents (developer → code_reviewer → auditor)
+  - `mentored-execution` updated: 2→3 agents (mentor → mentee → auditor)
+  - Iterative topology: 2→3 slots (worker + reviewer + evaluator)
+  - Recursive topology: 3→4 slots (root + sub_agents + evaluator)
+
+### Changed
+- Tests: 336 (was 328), 8 new tests
+- Mission Gate message now references `mission_suggest` for pre-flight checks
+
 ## [0.10.0] - 2026-04-14
 
 ### Added

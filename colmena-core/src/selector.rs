@@ -922,6 +922,184 @@ pub fn scaffold_role(
     Ok((role_path, prompt_path))
 }
 
+// ── Mission Sizing ──────────────────────────────────────────────────────────
+
+/// Complexity level for a mission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Complexity {
+    Trivial,  // 1 agent — don't use Colmena
+    Small,    // 2 agents — marginal benefit
+    Medium,   // 3-4 agents — sweet spot for Colmena
+    Large,    // 5-6 agents — full orchestration
+}
+
+impl Complexity {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Complexity::Trivial => "trivial",
+            Complexity::Small => "small",
+            Complexity::Medium => "medium",
+            Complexity::Large => "large",
+        }
+    }
+}
+
+/// Result of mission sizing analysis.
+#[derive(Debug, Clone)]
+pub struct MissionSuggestion {
+    pub complexity: Complexity,
+    pub recommended_agents: usize,
+    pub needs_colmena: bool,
+    pub suggested_pattern: Option<String>,
+    pub suggested_roles: Vec<String>,
+    pub confidence: f64,
+    pub reason: String,
+    pub domains_detected: Vec<String>,
+}
+
+/// Domain keywords for mission sizing.
+const DOMAIN_KEYWORDS: &[(&str, &[&str])] = &[
+    ("code", &["implement", "develop", "build", "feature", "code", "refactor", "migrate", "write", "function", "module", "class", "method"]),
+    ("testing", &["test", "coverage", "validate", "edge", "regression", "spec", "assertion", "mock", "fixture"]),
+    ("security", &["vulnerability", "pentest", "audit", "owasp", "cve", "exploit", "injection", "xss", "csrf", "authentication"]),
+    ("documentation", &["docs", "document", "readme", "guide", "changelog", "api_docs", "tutorial", "comment"]),
+    ("architecture", &["design", "architecture", "tradeoff", "adr", "interface", "api_design", "schema", "diagram"]),
+    ("review", &["review", "quality", "standards", "best_practices", "lint", "style", "convention"]),
+    ("operations", &["deploy", "cicd", "pipeline", "monitor", "infrastructure", "docker", "kubernetes", "terraform"]),
+];
+
+/// Keywords that bump complexity (risk/scope indicators).
+const COMPLEXITY_BUMPERS: &[&str] = &[
+    "production", "migration", "security", "compliance", "critical", "sensitive",
+    "full", "comprehensive", "end-to-end", "complete", "entire", "all",
+];
+
+/// Keywords that reduce complexity (simplicity indicators).
+const COMPLEXITY_REDUCERS: &[&str] = &[
+    "fix", "typo", "rename", "small", "quick", "simple", "minor", "trivial", "tweak",
+];
+
+/// Analyze a mission description and recommend whether to use Colmena.
+pub fn suggest_mission_size(
+    description: &str,
+    roles: &[Role],
+    patterns: &[Pattern],
+) -> MissionSuggestion {
+    if description.trim().is_empty() {
+        return MissionSuggestion {
+            complexity: Complexity::Trivial,
+            recommended_agents: 1,
+            needs_colmena: false,
+            suggested_pattern: None,
+            suggested_roles: vec![],
+            confidence: 0.0,
+            reason: "Empty description. Provide a mission description for analysis.".into(),
+            domains_detected: vec![],
+        };
+    }
+
+    let desc_lower = description.to_lowercase();
+    let desc_words: Vec<&str> = desc_lower
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.len() > 2)
+        .collect();
+
+    // 1. Detect domains
+    let mut domains_detected: Vec<String> = Vec::new();
+    let mut keyword_hits = 0usize;
+    let mut total_keywords = 0usize;
+
+    for (domain, keywords) in DOMAIN_KEYWORDS {
+        let hits: usize = keywords.iter().filter(|kw| {
+            let kw_lower = kw.to_lowercase();
+            let variants = vec![
+                kw_lower.clone(),
+                kw_lower.replace('_', " "),
+                kw_lower.replace('_', "-"),
+            ];
+            variants.iter().any(|v| desc_words.iter().any(|w| w.contains(v.as_str())) || desc_lower.contains(v.as_str()))
+        }).count();
+        total_keywords += keywords.len();
+        if hits > 0 {
+            domains_detected.push(domain.to_string());
+            keyword_hits += hits;
+        }
+    }
+
+    // 2. Calculate base complexity from domain count
+    let mut complexity_score: i32 = domains_detected.len() as i32;
+
+    // 3. Apply bumpers and reducers
+    let bumps: usize = COMPLEXITY_BUMPERS.iter().filter(|kw| desc_lower.contains(**kw)).count();
+    let reduces: usize = COMPLEXITY_REDUCERS.iter().filter(|kw| desc_lower.contains(**kw)).count();
+    complexity_score += bumps as i32;
+    complexity_score -= reduces as i32;
+
+    // 4. Map to Complexity enum
+    let (complexity, recommended_agents) = match complexity_score {
+        ..=1 => (Complexity::Trivial, 1),
+        2 => (Complexity::Small, 2),
+        3 => (Complexity::Medium, 3),
+        _ => (Complexity::Large, complexity_score.min(6) as usize),
+    };
+
+    let needs_colmena = recommended_agents >= 3;
+
+    // 5. Confidence: keyword match density
+    let confidence = if total_keywords > 0 {
+        let raw = (keyword_hits as f64) / (desc_words.len().max(1) as f64);
+        (raw * 2.0).min(1.0) // scale up, cap at 1.0
+    } else {
+        0.0
+    };
+
+    // 6. Pattern and role suggestions (only if needs_colmena)
+    let (suggested_pattern, suggested_roles) = if needs_colmena {
+        let recs = select_patterns(description, patterns, roles);
+        if let Some(top) = recs.first() {
+            let roles_list: Vec<String> = top.role_assignments.iter()
+                .map(|a| a.role_id.clone())
+                .collect();
+            (Some(top.pattern_id.clone()), roles_list)
+        } else {
+            (None, vec![])
+        }
+    } else {
+        (None, vec![])
+    };
+
+    // 7. Build reason
+    let reason = match complexity {
+        Complexity::Trivial => format!(
+            "Single-domain task ({}). Use Claude Code directly — Colmena adds overhead without value for simple tasks.",
+            if domains_detected.is_empty() { "none detected".to_string() } else { domains_detected.join(", ") }
+        ),
+        Complexity::Small => format!(
+            "Two domains detected ({}). Marginal benefit from Colmena — consider if the task truly needs multi-agent coordination.",
+            domains_detected.join(", ")
+        ),
+        Complexity::Medium => format!(
+            "Three domains detected ({}). Good fit for Colmena — {} agents with structured review and ELO tracking.",
+            domains_detected.join(", "), recommended_agents
+        ),
+        Complexity::Large => format!(
+            "Multi-domain task ({}) with complexity indicators. Full Colmena orchestration recommended — {} agents.",
+            domains_detected.join(", "), recommended_agents
+        ),
+    };
+
+    MissionSuggestion {
+        complexity,
+        recommended_agents,
+        needs_colmena,
+        suggested_pattern,
+        suggested_roles,
+        confidence,
+        reason,
+        domains_detected,
+    }
+}
+
 // ── Mission Spawn — One-Step Pipeline ────────────────────────────────────────
 
 /// One-step mission creation: select pattern → auto-create if needed → map roles →
@@ -2246,5 +2424,111 @@ mod tests {
         for cmd in &result.delegation_commands {
             assert!(cmd.starts_with("colmena delegate add"), "cmd should start with delegate add: {}", cmd);
         }
+    }
+
+    // ── 24. suggest_mission_size — trivial ──────────────────────────────────
+
+    #[test]
+    fn test_suggest_trivial_single_domain() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size("fix typo in README", &roles, &patterns);
+        assert_eq!(s.complexity, Complexity::Trivial);
+        assert!(!s.needs_colmena);
+        assert_eq!(s.recommended_agents, 1);
+    }
+
+    // ── 25. suggest_mission_size — small ────────────────────────────────────
+
+    #[test]
+    fn test_suggest_small_two_domains() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size("implement feature and write tests for it", &roles, &patterns);
+        assert_eq!(s.complexity, Complexity::Small);
+        assert!(!s.needs_colmena);
+        assert_eq!(s.recommended_agents, 2);
+    }
+
+    // ── 26. suggest_mission_size — medium ───────────────────────────────────
+
+    #[test]
+    fn test_suggest_medium_three_domains() {
+        let roles = vec![
+            make_role("developer", "Developer", vec!["feature_implementation"]),
+            make_role("tester", "Tester", vec!["test_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size(
+            "implement authentication feature with test coverage and security review",
+            &roles, &patterns,
+        );
+        assert!(s.complexity == Complexity::Medium || s.complexity == Complexity::Large);
+        assert!(s.needs_colmena);
+        assert!(s.recommended_agents >= 3);
+    }
+
+    // ── 27. suggest_mission_size — large ────────────────────────────────────
+
+    #[test]
+    fn test_suggest_large_many_domains() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size(
+            "full platform migration with security audit, comprehensive testing, documentation, and CI/CD pipeline deployment",
+            &roles, &patterns,
+        );
+        assert_eq!(s.complexity, Complexity::Large);
+        assert!(s.needs_colmena);
+        assert!(s.recommended_agents >= 4);
+    }
+
+    // ── 28. risk keywords bump complexity ───────────────────────────────────
+
+    #[test]
+    fn test_suggest_risk_keywords_bump_complexity() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        // "production" and "security" are bumpers
+        let s = suggest_mission_size("deploy to production with security constraints", &roles, &patterns);
+        // Should be higher than base domain count alone
+        assert!(s.recommended_agents >= 2, "risk keywords should bump complexity");
+    }
+
+    // ── 29. simplicity keywords reduce complexity ───────────────────────────
+
+    #[test]
+    fn test_suggest_simplicity_keywords_reduce() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size("quick simple fix for a small typo", &roles, &patterns);
+        assert_eq!(s.complexity, Complexity::Trivial);
+        assert!(!s.needs_colmena);
+    }
+
+    // ── 30. needs_colmena threshold ─────────────────────────────────────────
+
+    #[test]
+    fn test_suggest_needs_colmena_threshold() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        // Exactly at threshold
+        let s = suggest_mission_size("implement code, write tests, and review security", &roles, &patterns);
+        assert!(s.needs_colmena == (s.recommended_agents >= 3),
+            "needs_colmena should be true iff agents >= 3, got agents={} needs={}",
+            s.recommended_agents, s.needs_colmena);
+    }
+
+    // ── 31. empty description ───────────────────────────────────────────────
+
+    #[test]
+    fn test_suggest_empty_description() {
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
+        let patterns: Vec<Pattern> = vec![];
+        let s = suggest_mission_size("", &roles, &patterns);
+        assert_eq!(s.complexity, Complexity::Trivial);
+        assert_eq!(s.confidence, 0.0);
+        assert!(!s.needs_colmena);
     }
 }

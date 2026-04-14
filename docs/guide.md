@@ -1446,6 +1446,26 @@ enforce_missions: true
 
 When enabled, any Agent call without a Colmena mission marker triggers "ask" — the human can still approve ad-hoc agents. This ensures all agents go through the Colmena stack (firewall + ELO + review + SubagentStop) by default.
 
+### Mission Sizing (`colmena suggest`)
+
+Before creating a mission, check if you actually need Colmena:
+
+```bash
+colmena suggest "fix typo in README"
+# → Complexity: trivial | Agents: 1
+# → ⚡ You don't need Colmena for this. Use Claude Code directly.
+
+colmena suggest "implement JWT auth with tests and security review"
+# → Complexity: medium | Agents: 3 | Pattern: code-review-cycle
+# → Roles: developer → code_reviewer → auditor
+
+colmena suggest "full platform migration with security audit, testing, docs, and CI/CD"
+# → Complexity: large | Agents: 5
+# → Ready to go: colmena library select --mission "..."
+```
+
+Design principle: **honesty over hype.** If you don't need Colmena, Colmena tells you.
+
 ### Auditor QPC Framework
 
 When evaluating any agent's work, the auditor scores three dimensions:
