@@ -786,10 +786,22 @@ fn subagent_stop_inner(
         }
     }
 
-    // 5. Check if agent has submitted a review for this mission
+    // 5. Check review obligations for this mission
     let mission_id = delegation.mission_id.as_deref().unwrap_or("unknown");
     let review_dir = config_dir.join("reviews");
 
+    // 5a. Reviewer gate: block if agent has pending evaluations to complete.
+    // Must come BEFORE the review_submit check — an agent that is both author
+    // AND reviewer could pass has_submitted_review but still owe evaluations.
+    if colmena_core::review::has_pending_evaluations(&review_dir, agent_id, mission_id) {
+        return Ok(hook::SubagentStopResponse::block(format!(
+            "You have pending reviews to evaluate for mission '{}'. \
+             Call mcp__colmena__review_evaluate for each pending review before stopping.",
+            mission_id
+        )));
+    }
+
+    // 5b. Worker gate: check if agent has submitted their work for review
     if colmena_core::review::has_submitted_review(&review_dir, agent_id, mission_id) {
         // 6. Review exists → approve
         // Audit log
@@ -864,14 +876,19 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64, session: Op
         eprintln!("WARNING: {w}");
     }
 
-    // Fix #4: Bash delegations via CLI currently have no conditions support,
-    // so block them with an explanatory message directing users to add scope.
+    // Bash delegations blocked at CLI level: unscoped Bash auto-approve is a security risk.
+    // The CLI does not support --bash-pattern or --path-within flags.
     if tool == "Bash" {
         anyhow::bail!(
-            "Bash delegations require scope conditions (--bash-pattern or --path-within). \
-             Unscoped Bash delegations auto-approve ALL commands and are not allowed.\n\
-             Hint: use trust-firewall.yaml agent_overrides for scoped Bash access, \
-             or create role-based delegations via 'colmena library select --mission'."
+            "Bash delegations blocked: unscoped Bash auto-approve means ALL commands \
+             run without human review.\n\n\
+             To grant scoped Bash access:\n  \
+             1. Edit trust-firewall.yaml → agent_overrides, add rules with \
+             bash_pattern (regex) or path_within conditions.\n  \
+             2. Or use 'colmena library select --mission <desc>' to generate a \
+             mission with scoped Bash patterns automatically.\n\n\
+             Note: --bash-pattern and --path-within are NOT CLI flags. \
+             Scoped Bash is configured via YAML or mission generation only."
         );
     }
 
@@ -1568,6 +1585,7 @@ fn format_review_state(state: &ReviewState) -> &'static str {
         ReviewState::Completed => "completed",
         ReviewState::NeedsHumanReview => "needs_human",
         ReviewState::Rejected => "rejected",
+        ReviewState::Invalidated => "invalidated",
     }
 }
 
