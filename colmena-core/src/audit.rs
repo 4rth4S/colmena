@@ -58,6 +58,14 @@ pub enum AuditEvent<'a> {
         review_id: &'a str,
         outcome: &'a str,
     },
+    /// Review invalidated due to artifact modification (hash mismatch)
+    ReviewInvalidated {
+        review_id: &'a str,
+        artifact_path: &'a str,
+        mission: &'a str,
+        old_hash: &'a str,
+        new_hash: &'a str,
+    },
     /// Mission activated with role-bound delegations
     MissionActivate {
         mission_id: &'a str,
@@ -138,6 +146,9 @@ fn format_event(event: &AuditEvent) -> String {
         }
         AuditEvent::ReviewCompleted { review_id, outcome } => {
             format!("[{ts}] REVIEW_COMPLETED review={review_id} outcome={outcome}")
+        }
+        AuditEvent::ReviewInvalidated { review_id, artifact_path, mission, old_hash, new_hash } => {
+            format!("[{ts}] REVIEW_INVALIDATED review={review_id} artifact={artifact_path} mission={mission} old_hash={old_hash} new_hash={new_hash}")
         }
         AuditEvent::MissionActivate { mission_id, agent_count, delegation_count } => {
             format!("[{ts}] MISSION_ACTIVATE mission={mission_id} agents={agent_count} delegations={delegation_count}")
