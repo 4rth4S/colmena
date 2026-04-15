@@ -723,6 +723,85 @@ fn test_hook_subagent_stop_auditor_exempt() {
     assert_eq!(parsed["decision"], "approve");
 }
 
+/// Build a COLMENA_HOME where agent has both a submitted review (as author)
+/// AND a pending evaluation (as reviewer) — tests that evaluation check takes priority.
+fn make_colmena_home_with_pending_evaluation(
+    agent_id: &str,
+    mission_id: &str,
+) -> tempfile::TempDir {
+    let tmp = make_colmena_home_with_delegation(agent_id);
+    let config_dir = tmp.path().join("config");
+
+    let review_dir = config_dir.join("reviews/pending");
+    std::fs::create_dir_all(&review_dir).unwrap();
+
+    // Review where this agent is the REVIEWER (must evaluate)
+    let eval_review = json!({
+        "review_id": "r_8888888_eval",
+        "mission": mission_id,
+        "author_role": "some-other-agent",
+        "reviewer_role": agent_id,
+        "artifact_path": "/tmp/test-artifact.rs",
+        "artifact_hash": "sha256:0000",
+        "state": "pending",
+        "created_at": "2099-01-01T00:00:00Z",
+        "evaluated_at": null,
+        "scores": null,
+        "score_average": null,
+        "finding_count": null,
+        "evaluation_narrative": null
+    });
+    std::fs::write(
+        review_dir.join("r_8888888_eval.json"),
+        serde_json::to_string_pretty(&eval_review).unwrap(),
+    )
+    .unwrap();
+
+    // Review where this agent is the AUTHOR (has submitted work)
+    let author_review = json!({
+        "review_id": "r_7777777_submit",
+        "mission": mission_id,
+        "author_role": agent_id,
+        "reviewer_role": "auditor",
+        "artifact_path": "/tmp/other-artifact.rs",
+        "artifact_hash": "sha256:1111",
+        "state": "pending",
+        "created_at": "2099-01-01T00:00:00Z",
+        "evaluated_at": null,
+        "scores": null,
+        "score_average": null,
+        "finding_count": null,
+        "evaluation_narrative": null
+    });
+    std::fs::write(
+        review_dir.join("r_7777777_submit.json"),
+        serde_json::to_string_pretty(&author_review).unwrap(),
+    )
+    .unwrap();
+
+    tmp
+}
+
+#[test]
+fn test_hook_subagent_stop_reviewer_with_pending_evaluation() {
+    // Agent has submitted their own review AND has a pending evaluation to complete.
+    // Should be blocked — pending evaluation check takes priority over review_submit.
+    let tmp = make_colmena_home_with_pending_evaluation("pentester", "test-mission");
+    let payload = make_subagent_stop_payload(Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(parsed["decision"], "block");
+    assert!(
+        parsed["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("review_evaluate"),
+        "Block message should tell agent to call review_evaluate"
+    );
+}
+
 // ── Mission Gate integration tests ──────────────────────────────────────────
 
 fn make_colmena_home_with_enforce_missions() -> tempfile::TempDir {
