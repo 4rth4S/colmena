@@ -35,6 +35,7 @@ pub enum ReviewState {
     Completed,
     NeedsHumanReview,
     Rejected,
+    Invalidated,
 }
 
 /// Result of the trust gate decision (internal only, not serialized).
@@ -328,6 +329,112 @@ pub fn has_submitted_review(review_dir: &Path, author_role: &str, mission_id: &s
     }
 
     false
+}
+
+/// Check if a reviewer has pending reviews to evaluate for a given mission.
+///
+/// Scans `pending/` for ReviewEntry where `reviewer_role == reviewer_id`
+/// AND `mission == mission_id` AND `state == Pending`. Returns true if any found.
+/// On any error, returns false (safe fallback — never trap an agent).
+pub fn has_pending_evaluations(review_dir: &Path, reviewer_id: &str, mission_id: &str) -> bool {
+    let dir = review_dir.join("pending");
+    if !dir.exists() {
+        return false;
+    }
+
+    let read = match std::fs::read_dir(&dir) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    for file_entry in read {
+        let file_entry = match file_entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let path = file_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if let Ok(entry) = serde_json::from_str::<ReviewEntry>(&content) {
+            if entry.reviewer_role == reviewer_id
+                && entry.mission == mission_id
+                && entry.state == ReviewState::Pending
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Invalidate stale pending reviews whose artifact hash no longer matches.
+///
+/// Scans `pending/` for reviews matching `(artifact_path, mission)` where
+/// `artifact_hash != current_hash`. Sets state to `Invalidated`, moves to
+/// `completed/`. Returns `(review_id, old_hash)` tuples for audit logging.
+///
+/// Idempotent: a second call with the same parameters finds nothing to invalidate.
+pub fn invalidate_stale_reviews(
+    review_dir: &Path,
+    artifact_path: &str,
+    mission: &str,
+    current_hash: &str,
+) -> Result<Vec<(String, String)>> {
+    let pending_dir = review_dir.join("pending");
+    if !pending_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let read = std::fs::read_dir(&pending_dir)
+        .with_context(|| format!("reading pending dir {}", pending_dir.display()))?;
+
+    let mut invalidated = Vec::new();
+
+    for file_entry in read {
+        let file_entry = file_entry?;
+        let path = file_entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+
+        let mut entry: ReviewEntry = match serde_json::from_str(&content) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if entry.artifact_path == artifact_path
+            && entry.mission == mission
+            && entry.artifact_hash != current_hash
+            && entry.state == ReviewState::Pending
+        {
+            let old_hash = entry.artifact_hash.clone();
+            entry.state = ReviewState::Invalidated;
+
+            save_review_to(review_dir, &entry, "completed")?;
+
+            if path.exists() {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("removing stale pending {}", path.display()))?;
+            }
+
+            invalidated.push((entry.review_id.clone(), old_hash));
+        }
+    }
+
+    Ok(invalidated)
 }
 
 // ── Private helpers ────────────────────────────────────────────────
@@ -898,5 +1005,255 @@ mod tests {
         let saved_content = std::fs::read_to_string(&completed_path).unwrap();
         let saved_entry: ReviewEntry = serde_json::from_str(&saved_content).unwrap();
         assert_eq!(saved_entry.evaluation_narrative, Some(narrative_text));
+    }
+
+    // ── has_pending_evaluations tests ───────────────────────────────
+
+    #[test]
+    fn test_has_pending_evaluations_found() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        // The assigned reviewer should have a pending evaluation
+        assert!(
+            has_pending_evaluations(&review_dir, &entry.reviewer_role, "audit-payments"),
+            "reviewer should have pending evaluation"
+        );
+    }
+
+    #[test]
+    fn test_has_pending_evaluations_not_found() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+
+        assert!(
+            !has_pending_evaluations(&review_dir, "pentester", "audit-payments"),
+            "should return false for empty/nonexistent review dir"
+        );
+    }
+
+    #[test]
+    fn test_has_pending_evaluations_wrong_mission() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        assert!(
+            !has_pending_evaluations(&review_dir, "pentester", "different-mission"),
+            "should return false for wrong mission"
+        );
+    }
+
+    #[test]
+    fn test_has_pending_evaluations_after_evaluate() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        let reviewer = entry.reviewer_role.clone();
+
+        // Evaluate the review (moves to completed/)
+        let mut scores = HashMap::new();
+        scores.insert("quality".to_string(), 8);
+        scores.insert("precision".to_string(), 7);
+        evaluate_review(
+            &review_dir, &entry.review_id, &reviewer, scores, vec![], &artifact, None,
+        )
+        .unwrap();
+
+        // After evaluation, no pending reviews should remain
+        assert!(
+            !has_pending_evaluations(&review_dir, &reviewer, "audit-payments"),
+            "should return false after review is evaluated"
+        );
+    }
+
+    // ── invalidate_stale_reviews tests ──────────────────────────────
+
+    #[test]
+    fn test_invalidate_stale_reviews_basic() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        let entry = submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        // Modify the artifact (new hash)
+        std::fs::write(&artifact, "fn main() { improved() }").unwrap();
+        let new_hash = hash_artifact(&artifact).unwrap();
+
+        let invalidated = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "audit-payments",
+            &new_hash,
+        )
+        .unwrap();
+
+        assert_eq!(invalidated.len(), 1);
+        assert_eq!(invalidated[0].0, entry.review_id);
+
+        // Should be in completed/ with Invalidated state
+        let completed_path = review_dir
+            .join("completed")
+            .join(format!("{}.json", entry.review_id));
+        assert!(completed_path.exists());
+        let saved: ReviewEntry =
+            serde_json::from_str(&std::fs::read_to_string(&completed_path).unwrap()).unwrap();
+        assert_eq!(saved.state, ReviewState::Invalidated);
+
+        // Should NOT be in pending/
+        let pending_path = review_dir
+            .join("pending")
+            .join(format!("{}.json", entry.review_id));
+        assert!(!pending_path.exists());
+    }
+
+    #[test]
+    fn test_invalidate_stale_reviews_same_hash() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        // Same hash — nothing should be invalidated
+        let same_hash = hash_artifact(&artifact).unwrap();
+        let invalidated = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "audit-payments",
+            &same_hash,
+        )
+        .unwrap();
+
+        assert!(invalidated.is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_stale_reviews_different_mission() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        std::fs::write(&artifact, "fn main() { changed() }").unwrap();
+        let new_hash = hash_artifact(&artifact).unwrap();
+
+        let invalidated = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "different-mission",
+            &new_hash,
+        )
+        .unwrap();
+
+        assert!(invalidated.is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_stale_reviews_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        std::fs::write(&artifact, "fn main() { changed() }").unwrap();
+        let new_hash = hash_artifact(&artifact).unwrap();
+
+        // First call invalidates
+        let inv1 = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "audit-payments",
+            &new_hash,
+        )
+        .unwrap();
+        assert_eq!(inv1.len(), 1);
+
+        // Second call finds nothing (idempotent)
+        let inv2 = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "audit-payments",
+            &new_hash,
+        )
+        .unwrap();
+        assert!(inv2.is_empty());
+    }
+
+    #[test]
+    fn test_invalidated_state_serde_roundtrip() {
+        let entry = ReviewEntry {
+            review_id: "r_test".to_string(),
+            mission: "test".to_string(),
+            author_role: "a".to_string(),
+            reviewer_role: "b".to_string(),
+            artifact_path: "/tmp/x".to_string(),
+            artifact_hash: "sha256:000".to_string(),
+            state: ReviewState::Invalidated,
+            created_at: chrono::Utc::now(),
+            evaluated_at: None,
+            scores: None,
+            score_average: None,
+            finding_count: None,
+            evaluation_narrative: None,
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"invalidated\""));
+        let deserialized: ReviewEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.state, ReviewState::Invalidated);
     }
 }
