@@ -834,6 +834,7 @@ impl ColmenaServer {
             &review_dir,
             &input.artifact_path,
             &input.mission,
+            &input.author_role,
             &current_hash,
         )
         .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
