@@ -378,15 +378,20 @@ pub fn has_pending_evaluations(review_dir: &Path, reviewer_id: &str, mission_id:
 
 /// Invalidate stale pending reviews whose artifact hash no longer matches.
 ///
-/// Scans `pending/` for reviews matching `(artifact_path, mission)` where
-/// `artifact_hash != current_hash`. Sets state to `Invalidated`, moves to
-/// `completed/`. Returns `(review_id, old_hash)` tuples for audit logging.
+/// Scans `pending/` for reviews matching `(artifact_path, mission, author_role)` where
+/// `artifact_hash != current_hash`. Only invalidates reviews from the same author —
+/// prevents cross-agent invalidation (STRIDE TM: an agent cannot invalidate another
+/// agent's reviews by modifying a shared artifact and re-submitting).
+///
+/// Sets state to `Invalidated`, moves to `completed/`.
+/// Returns `(review_id, old_hash)` tuples for audit logging.
 ///
 /// Idempotent: a second call with the same parameters finds nothing to invalidate.
 pub fn invalidate_stale_reviews(
     review_dir: &Path,
     artifact_path: &str,
     mission: &str,
+    author_role: &str,
     current_hash: &str,
 ) -> Result<Vec<(String, String)>> {
     let pending_dir = review_dir.join("pending");
@@ -417,6 +422,7 @@ pub fn invalidate_stale_reviews(
 
         if entry.artifact_path == artifact_path
             && entry.mission == mission
+            && entry.author_role == author_role
             && entry.artifact_hash != current_hash
             && entry.state == ReviewState::Pending
         {
@@ -1117,6 +1123,7 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "audit-payments",
+            "coder",
             &new_hash,
         )
         .unwrap();
@@ -1160,6 +1167,7 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "audit-payments",
+            "coder",
             &same_hash,
         )
         .unwrap();
@@ -1188,6 +1196,7 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "different-mission",
+            "coder",
             &new_hash,
         )
         .unwrap();
@@ -1217,6 +1226,7 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "audit-payments",
+            "coder",
             &new_hash,
         )
         .unwrap();
@@ -1227,10 +1237,46 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "audit-payments",
+            "coder",
             &new_hash,
         )
         .unwrap();
         assert!(inv2.is_empty());
+    }
+
+    #[test]
+    fn test_invalidate_stale_reviews_cross_agent_blocked() {
+        // STRIDE TM P0: agent B cannot invalidate agent A's reviews
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string(), "architect".to_string()];
+        let existing: Vec<(String, String)> = vec![];
+
+        // Coder submits a review
+        submit_review(
+            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+        )
+        .unwrap();
+
+        // Pentester modifies the artifact and tries to invalidate coder's review
+        std::fs::write(&artifact, "fn main() { pentester_was_here() }").unwrap();
+        let new_hash = hash_artifact(&artifact).unwrap();
+
+        let invalidated = invalidate_stale_reviews(
+            &review_dir,
+            &artifact.to_string_lossy(),
+            "audit-payments",
+            "pentester",  // different author — should NOT invalidate coder's review
+            &new_hash,
+        )
+        .unwrap();
+
+        assert!(
+            invalidated.is_empty(),
+            "cross-agent invalidation should be blocked"
+        );
     }
 
     #[test]

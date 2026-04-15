@@ -107,12 +107,13 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Elevated trust without bash_patterns generates "ask" (not auto-approve) for Bash — forces pattern definition
 - Reviewer selection randomized via rand::seq::SliceRandom — prevents deterministic assignment and collusion
 - Review invariants are hardcoded in review.rs: author!=reviewer, no reciprocal, min 2 scores, hash verification
-- Stale review auto-invalidation: `review_submit` invalidates prior pending reviews for same artifact+mission with hash mismatch (state → `Invalidated`, moved to `completed/`)
+- Stale review auto-invalidation: `review_submit` invalidates prior pending reviews for same artifact+mission+author with hash mismatch (state → `Invalidated`, moved to `completed/`)
+- Cross-agent invalidation blocked: only the original author can trigger invalidation of their own reviews (STRIDE TM P0)
 - `ReviewState::Invalidated` reviews are excluded from anti-reciprocal pairing so freed reviewer slots can be reused
 - Trust gate floor (5.0) is hardcoded — config can raise threshold but never below floor
 - YAML agent_overrides take precedence over ELO overrides (human always wins)
 - Config file permissions checked on load: warns if critical files are world-writable (Unix only)
-- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json, alerts.json)
+- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json, alerts.json, reviews/, findings/)
 - Alerts are append-only — agents can't acknowledge or delete alerts
 - `alerts_ack` and `calibrate_auditor_feedback` in restricted (ELO/alert modification needs human oversight)
 
