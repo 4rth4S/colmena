@@ -823,12 +823,40 @@ impl ColmenaServer {
         self.rate_limiter.check("review_submit")?;
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
+        let audit_log = self.config_dir.join("audit.log");
 
-        // Load existing reviews to enforce anti-reciprocal invariant
+        // Auto-invalidate stale reviews before submission.
+        // Computes current hash and moves any pending reviews with mismatched hash
+        // to completed/ with Invalidated state, freeing reviewer slots.
+        let current_hash = colmena_core::review::hash_artifact(&artifact_path)
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
+        let invalidated = colmena_core::review::invalidate_stale_reviews(
+            &review_dir,
+            &input.artifact_path,
+            &input.mission,
+            &current_hash,
+        )
+        .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
+
+        for (inv_id, old_hash) in &invalidated {
+            let _ = colmena_core::audit::log_event(
+                &audit_log,
+                &colmena_core::audit::AuditEvent::ReviewInvalidated {
+                    review_id: inv_id,
+                    artifact_path: &input.artifact_path,
+                    mission: &input.mission,
+                    old_hash,
+                    new_hash: &current_hash,
+                },
+            );
+        }
+
+        // Load existing reviews, filter out Invalidated so freed reviewer slots are available
         let existing = colmena_core::review::list_reviews(&review_dir, None)
             .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
         let existing_pairs: Vec<(String, String)> = existing
             .iter()
+            .filter(|r| r.state != colmena_core::review::ReviewState::Invalidated)
             .map(|r| (r.reviewer_role.clone(), r.author_role.clone()))
             .collect();
 
@@ -843,7 +871,6 @@ impl ColmenaServer {
         .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         // Audit log (best-effort)
-        let audit_log = self.config_dir.join("audit.log");
         let _ = colmena_core::audit::log_event(
             &audit_log,
             &colmena_core::audit::AuditEvent::ReviewSubmit {
@@ -854,10 +881,20 @@ impl ColmenaServer {
             },
         );
 
-        Ok(format!(
+        let mut result = format!(
             "Review created:\n  review_id: {}\n  author: {}\n  reviewer: {}\n  hash: {}\n  state: pending",
             entry.review_id, entry.author_role, entry.reviewer_role, entry.artifact_hash
-        ))
+        );
+
+        if !invalidated.is_empty() {
+            result.push_str(&format!(
+                "\n\n  {} stale review(s) invalidated: {}",
+                invalidated.len(),
+                invalidated.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+
+        Ok(result)
     }
 
     #[rmcp::tool(description = "List peer reviews — pending, completed, or all")]
@@ -875,6 +912,7 @@ impl ColmenaServer {
                 Some(colmena_core::review::ReviewState::NeedsHumanReview)
             }
             Some("rejected") => Some(colmena_core::review::ReviewState::Rejected),
+            Some("invalidated") => Some(colmena_core::review::ReviewState::Invalidated),
             Some(other) => return Err(sanitize_error(&format!("Unknown state filter: '{other}'"))),
             None => None,
         };
