@@ -10,6 +10,7 @@ config/missions/
 
 # Security — local reference only
 docs/security/
+docs/dark-corners*.md
 
 # OS files
 .DS_Store
