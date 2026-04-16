@@ -128,13 +128,14 @@ blocked:
     action: block
     reason: 'Destructive operation requires explicit human confirmation'
 
-  # Critical config files protected against Bash manipulation (Finding #4/#6, DREAD 7.6/6.8)
-  # Blocks any Bash command referencing protected config files — prevents truncate, sed, python, jq etc.
+  # Critical config files protected against destructive Bash manipulation (Finding #4/#6, DREAD 7.6/6.8)
+  # Only blocks DESTRUCTIVE operations (truncate, rm, sed -i, echo >, tee, python write, jq write)
+  # targeting protected files. Read-only commands (cat, grep, git add/commit) are NOT blocked.
   - tools: [Bash]
     conditions:
-      bash_pattern: '(audit\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
+      bash_pattern: '(truncate|rm\s|rm$|shred|dd\s+of=|sed\s+-i|perl\s+-[ip]|python3?\s+-c|ruby\s+-e|node\s+-e|jq\s+--arg|tee\s|>\s*|>>\s*).*(audit\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
     action: block
-    reason: 'Bash commands referencing critical config files are blocked — use dedicated Colmena tools'
+    reason: 'Destructive Bash operations on critical config files are blocked — use dedicated Colmena tools'
 
   # PR merges are human-only — Claude creates PRs, Coco merges
   - tools: [Bash]
