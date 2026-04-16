@@ -171,6 +171,11 @@ pub fn read_elo_log(log_path: &Path) -> Result<Vec<StoredEloEvent>> {
     Ok(events)
 }
 
+/// Minimum activity window for ELO rehabilitation: agents must have positive
+/// activity within this period for temporal decay to raise their ELO above
+/// baseline. Prevents passive rehabilitation via inactivity.
+const REHABILITATION_ACTIVITY_WINDOW_DAYS: i64 = 30;
+
 /// Calculate an agent's rating from stored events with temporal decay.
 ///
 /// - Starts from `baseline` ELO
@@ -178,6 +183,11 @@ pub fn read_elo_log(log_path: &Path) -> Result<Vec<StoredEloEvent>> {
 /// - `trend_7d` is the sum of deltas from events in the last 7 days (no decay)
 /// - `review_count` is the number of `Reviewed` events for this agent
 /// - `last_active` is the most recent event timestamp for this agent
+///
+/// Fix Finding #26 (DREAD 5.2): Temporal decay does not allow an agent's ELO
+/// to rise above their last active rating without recent positive reviews.
+/// An inactive agent in probation cannot passively rehabilitate by waiting for
+/// negative events to decay.
 pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -> AgentRating {
     let now = Utc::now();
     let agent_events: Vec<&StoredEloEvent> = events
@@ -189,6 +199,17 @@ pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -
     let mut trend_7d: i32 = 0;
     let mut review_count: u32 = 0;
     let mut last_active: Option<DateTime<Utc>> = None;
+
+    // Track whether agent has recent positive activity
+    let has_recent_positive = agent_events.iter().any(|e| {
+        e.delta > 0 && (now - e.ts) < Duration::days(REHABILITATION_ACTIVITY_WINDOW_DAYS)
+    });
+
+    // Calculate ELO without decay to get the "undecayed floor"
+    let mut elo_no_decay = baseline as i32;
+    for event in &agent_events {
+        elo_no_decay += event.delta;
+    }
 
     for event in &agent_events {
         let decay = decay_factor(event.ts, now);
@@ -207,6 +228,14 @@ pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -
             Some(prev) if event.ts > prev => last_active = Some(event.ts),
             _ => {}
         }
+    }
+
+    // Anti-rehabilitation: if agent has NO recent positive activity and their decayed
+    // ELO is higher than their undecayed ELO, cap at the undecayed value.
+    // This prevents passive rehabilitation: negative events decaying to 10% without
+    // any improvement means the agent shouldn't rise above their actual performance.
+    if !agent_events.is_empty() && !has_recent_positive && elo > elo_no_decay {
+        elo = elo_no_decay;
     }
 
     AgentRating {
@@ -421,6 +450,84 @@ mod tests {
         assert_eq!(finding_delta_author("high"), -5);
         assert_eq!(finding_delta_author("medium"), 0);
         assert_eq!(finding_delta_author("low"), 0);
+    }
+
+    // ── Finding #26 (DREAD 5.2): Passive rehabilitation prevention tests ──
+
+    #[test]
+    fn test_passive_rehabilitation_blocked_without_recent_positive() {
+        // Agent has only old negative events (> 90 days). Without the fix,
+        // temporal decay (0.1) would raise ELO close to baseline.
+        // With the fix, ELO is capped at the undecayed value.
+        let now = Utc::now();
+        let events = vec![
+            // 100-day-old negative event: -50 * 0.1 = -5 (decayed)
+            // Without cap: 1000 - 5 = 995
+            // With cap (undecayed): 1000 - 50 = 950
+            make_stored_event("bad-agent", EloEventType::FindingAgainst, -50, now - Duration::days(100)),
+        ];
+
+        let rating = calculate_rating("bad-agent", &events, 1000);
+
+        // Undecayed: 1000 + (-50) = 950
+        // Decayed would be: 1000 + (-50 * 0.1) = 995
+        // Anti-rehabilitation cap should kick in: no recent positive activity
+        assert_eq!(
+            rating.elo, 950,
+            "Without recent positive activity, ELO should be capped at undecayed value (950), not decayed value (~995)"
+        );
+    }
+
+    #[test]
+    fn test_rehabilitation_allowed_with_recent_positive() {
+        // Agent has old negative events AND recent positive events.
+        // Decay should apply normally — the agent has demonstrated improvement.
+        let now = Utc::now();
+        let events = vec![
+            // Old negative: -50 * 0.1 = -5 (decayed)
+            make_stored_event("improving-agent", EloEventType::FindingAgainst, -50, now - Duration::days(100)),
+            // Recent positive: +10 * 1.0 = +10 (no decay, within 7 days)
+            make_stored_event("improving-agent", EloEventType::Reviewed, 10, now - Duration::days(1)),
+        ];
+
+        let rating = calculate_rating("improving-agent", &events, 1000);
+
+        // With decay: 1000 + (-50 * 0.1) + (10 * 1.0) = 1000 - 5 + 10 = 1005
+        // Undecayed: 1000 + (-50) + 10 = 960
+        // Has recent positive → decay applies normally → 1005
+        assert_eq!(
+            rating.elo, 1005,
+            "With recent positive activity, ELO should use decayed values normally"
+        );
+    }
+
+    #[test]
+    fn test_no_events_no_rehabilitation_cap() {
+        // Agent with no events — baseline unchanged, no cap needed
+        let events: Vec<StoredEloEvent> = vec![];
+        let rating = calculate_rating("new-agent", &events, 1000);
+        assert_eq!(rating.elo, 1000, "Agent with no events should stay at baseline");
+    }
+
+    #[test]
+    fn test_rehabilitation_cap_with_multiple_old_negatives() {
+        // Agent with multiple old negative events, no positive activity at all
+        let now = Utc::now();
+        let events = vec![
+            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -30, now - Duration::days(95)),
+            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -20, now - Duration::days(100)),
+            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -10, now - Duration::days(120)),
+        ];
+
+        let rating = calculate_rating("repeat-offender", &events, 1000);
+
+        // Undecayed: 1000 - 30 - 20 - 10 = 940
+        // Decayed: 1000 + (-30*0.1) + (-20*0.1) + (-10*0.1) = 1000 - 3 - 2 - 1 = 994
+        // Anti-rehabilitation: cap at 940
+        assert_eq!(
+            rating.elo, 940,
+            "Multiple old negatives without positive activity should cap at undecayed floor"
+        );
     }
 
     #[test]
