@@ -663,6 +663,28 @@ fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> 
         None => return Ok(()), // No agent_id → not a mission agent, pass through
     };
 
+    // Fix Finding #8 (DREAD 5.6): Check revoked-missions BEFORE checking role delegation.
+    // Without this, a revoked agent's PermissionRequest fires before PreToolUse processes
+    // the revocation, teaching CC session rules that persist beyond the revocation.
+    let revoked_agents = colmena_core::delegate::load_revoked_missions(&config_dir);
+    if revoked_agents.contains(agent_id.as_str()) {
+        // Agent is revoked — do NOT teach session rules. Return no output so CC prompts user.
+        // The PreToolUse mission_revocation check will deny the actual tool call.
+        let audit_path = config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::Decision {
+                action: "PERM_REQ_REVOKED",
+                session_id: &payload.session_id,
+                agent_id: Some(agent_id),
+                tool: &payload.tool_name,
+                key_field: "mission_revoked",
+                rule: "revoked_missions_check",
+            },
+        );
+        return Ok(()); // No output = CC prompts user (revoked agent gets no session rules)
+    }
+
     let delegations_path = config_dir.join("runtime-delegations.json");
     let delegations = colmena_core::delegate::load_delegations(&delegations_path);
 
@@ -712,6 +734,12 @@ fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> 
 
 /// Build PermissionUpdate rules from role's tools_allowed.
 /// Teaches CC to auto-approve ALL tools this role is allowed to use.
+/// STRIDE TM Finding #1 (DREAD 7.0): Bash and Agent MUST always go through
+/// PreToolUse firewall — never teach CC to auto-approve them via session rules.
+/// Once CC learns a session rule, it applies BEFORE the hook, bypassing chain guard,
+/// blocked rules, ELO restrictions, and mission revocation entirely.
+const NEVER_SESSION_RULE_TOOLS: &[&str] = &["Bash", "Agent"];
+
 fn build_permission_updates(
     role_data: &colmena_core::library::RoleToolsAllowed,
 ) -> Vec<hook::PermissionUpdate> {
@@ -719,6 +747,7 @@ fn build_permission_updates(
         .tools
         .iter()
         .chain(role_data.tool_patterns.iter())
+        .filter(|t| !NEVER_SESSION_RULE_TOOLS.iter().any(|blocked| t.eq_ignore_ascii_case(blocked)))
         .map(|t| hook::PermissionRule {
             tool_name: t.clone(),
         })
@@ -734,6 +763,9 @@ fn build_permission_updates(
 
 /// SubagentStop: enforce peer review before mission workers can stop.
 /// Safe fallback: any error → approve (never trap an agent).
+///
+/// Fix Finding #19 (DREAD 5.4): When safe fallback triggers, create a warning-level
+/// alert so the human has visibility that the review gate was bypassed.
 fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
     let result = subagent_stop_inner(&payload);
 
@@ -741,6 +773,28 @@ fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
         Ok(resp) => resp,
         Err(e) => {
             log_error(&format!("SubagentStop error (safe fallback approve): {e}"));
+
+            // Create a warning alert for the safe fallback (best-effort)
+            let config_dir = colmena_core::paths::default_config_dir();
+            let alerts_path = config_dir.join("alerts.json");
+            let agent_id_str = payload.agent_id.as_deref().unwrap_or("unknown");
+            let alert = colmena_core::alerts::Alert {
+                alert_id: colmena_core::alerts::generate_alert_id(),
+                timestamp: chrono::Utc::now(),
+                severity: "warning".to_string(),
+                mission_id: "unknown".to_string(),
+                agent_id: agent_id_str.to_string(),
+                review_id: "n/a".to_string(),
+                score_average: 0.0,
+                critical_findings: 0,
+                message: format!(
+                    "SubagentStop safe fallback activated for agent '{}': review gate bypassed due to error: {}",
+                    agent_id_str, e
+                ),
+                acknowledged: false,
+            };
+            let _ = colmena_core::alerts::create_alert(&alerts_path, alert);
+
             hook::SubagentStopResponse::approve()
         }
     };
@@ -786,10 +840,22 @@ fn subagent_stop_inner(
         }
     }
 
-    // 5. Check if agent has submitted a review for this mission
+    // 5. Check review obligations for this mission
     let mission_id = delegation.mission_id.as_deref().unwrap_or("unknown");
     let review_dir = config_dir.join("reviews");
 
+    // 5a. Reviewer gate: block if agent has pending evaluations to complete.
+    // Must come BEFORE the review_submit check — an agent that is both author
+    // AND reviewer could pass has_submitted_review but still owe evaluations.
+    if colmena_core::review::has_pending_evaluations(&review_dir, agent_id, mission_id) {
+        return Ok(hook::SubagentStopResponse::block(format!(
+            "You have pending reviews to evaluate for mission '{}'. \
+             Call mcp__colmena__review_evaluate for each pending review before stopping.",
+            mission_id
+        )));
+    }
+
+    // 5b. Worker gate: check if agent has submitted their work for review
     if colmena_core::review::has_submitted_review(&review_dir, agent_id, mission_id) {
         // 6. Review exists → approve
         // Audit log
@@ -864,14 +930,19 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64, session: Op
         eprintln!("WARNING: {w}");
     }
 
-    // Fix #4: Bash delegations via CLI currently have no conditions support,
-    // so block them with an explanatory message directing users to add scope.
+    // Bash delegations blocked at CLI level: unscoped Bash auto-approve is a security risk.
+    // The CLI does not support --bash-pattern or --path-within flags.
     if tool == "Bash" {
         anyhow::bail!(
-            "Bash delegations require scope conditions (--bash-pattern or --path-within). \
-             Unscoped Bash delegations auto-approve ALL commands and are not allowed.\n\
-             Hint: use trust-firewall.yaml agent_overrides for scoped Bash access, \
-             or create role-based delegations via 'colmena library select --mission'."
+            "Bash delegations blocked: unscoped Bash auto-approve means ALL commands \
+             run without human review.\n\n\
+             To grant scoped Bash access:\n  \
+             1. Edit trust-firewall.yaml → agent_overrides, add rules with \
+             bash_pattern (regex) or path_within conditions.\n  \
+             2. Or use 'colmena library select --mission <desc>' to generate a \
+             mission with scoped Bash patterns automatically.\n\n\
+             Note: --bash-pattern and --path-within are NOT CLI flags. \
+             Scoped Bash is configured via YAML or mission generation only."
         );
     }
 
@@ -1568,6 +1639,7 @@ fn format_review_state(state: &ReviewState) -> &'static str {
         ReviewState::Completed => "completed",
         ReviewState::NeedsHumanReview => "needs_human",
         ReviewState::Rejected => "rejected",
+        ReviewState::Invalidated => "invalidated",
     }
 }
 
@@ -1780,10 +1852,23 @@ fn run_calibrate_reset() -> Result<()> {
 }
 
 /// Best-effort append to colmena error log. Never panics.
+/// STRIDE TM Finding #3 (DREAD 6.8): Error log with rotation.
+/// Max 5 MiB before rotating (colmena-errors.log.1). Single rotation is sufficient
+/// for error logs (much lower volume than audit.log).
 fn log_error(msg: &str) {
     let log_path = colmena_core::paths::colmena_home().join("colmena-errors.log");
     let timestamp = chrono::Utc::now().to_rfc3339();
     let line = format!("[{timestamp}] {msg}\n");
+
+    // Rotate if over 5 MiB
+    const MAX_ERROR_LOG_BYTES: u64 = 5 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() >= MAX_ERROR_LOG_BYTES {
+            let rotated = log_path.with_extension("log.1");
+            let _ = std::fs::rename(&log_path, rotated);
+        }
+    }
+
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
