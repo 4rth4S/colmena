@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Action, Rule, Conditions};
+use crate::config::{Action, Conditions, Rule};
 use crate::elo::AgentRating;
 use crate::library::Role;
 
@@ -115,10 +115,7 @@ impl TrustTier {
 }
 
 /// Determine the trust tier for an agent given their rating and thresholds.
-pub fn determine_tier(
-    rating: &AgentRating,
-    thresholds: &TrustThresholds,
-) -> TrustTier {
+pub fn determine_tier(rating: &AgentRating, thresholds: &TrustThresholds) -> TrustTier {
     if rating.review_count < thresholds.min_reviews_to_calibrate {
         return TrustTier::Uncalibrated;
     }
@@ -175,9 +172,7 @@ pub fn calibrate(
         let new_tier = determine_tier(rating, thresholds);
 
         // Determine old tier from previous overrides
-        let old_tier = infer_tier_from_overrides(
-            previous_overrides.get(rating.agent.as_str()),
-        );
+        let old_tier = infer_tier_from_overrides(previous_overrides.get(rating.agent.as_str()));
 
         if new_tier != old_tier {
             changes.push(CalibrationChange {
@@ -185,10 +180,7 @@ pub fn calibrate(
                 old_tier: old_tier.clone(),
                 new_tier: new_tier.clone(),
                 elo: rating.elo,
-                reason: format!(
-                    "ELO {} with {} reviews",
-                    rating.elo, rating.review_count
-                ),
+                reason: format!("ELO {} with {} reviews", rating.elo, rating.review_count),
             });
         }
 
@@ -197,15 +189,9 @@ pub fn calibrate(
                 // No overrides — agent uses default firewall rules
                 continue;
             }
-            TrustTier::Elevated => {
-                generate_elevated_rules(&rating.agent, &role_map)
-            }
-            TrustTier::Restricted => {
-                generate_restricted_rules()
-            }
-            TrustTier::Probation => {
-                generate_probation_rules()
-            }
+            TrustTier::Elevated => generate_elevated_rules(&rating.agent, &role_map),
+            TrustTier::Restricted => generate_restricted_rules(),
+            TrustTier::Probation => generate_probation_rules(),
         };
 
         if !rules.is_empty() {
@@ -214,7 +200,8 @@ pub fn calibrate(
     }
 
     // Clean orphan overrides: remove agent_ids not present in role_map
-    let orphan_ids: Vec<String> = overrides.keys()
+    let orphan_ids: Vec<String> = overrides
+        .keys()
         .filter(|agent_id| !role_map.contains_key(agent_id.as_str()))
         .cloned()
         .collect();
@@ -229,19 +216,21 @@ pub fn calibrate(
     }
     overrides.retain(|agent_id, _| role_map.contains_key(agent_id.as_str()));
 
-    CalibratedOverrides { agent_overrides: overrides, changes }
+    CalibratedOverrides {
+        agent_overrides: overrides,
+        changes,
+    }
 }
 
 /// Generate auto-approve rules for an elevated agent based on their role.
-fn generate_elevated_rules(
-    agent_id: &str,
-    role_map: &HashMap<&str, &Role>,
-) -> Vec<Rule> {
+fn generate_elevated_rules(agent_id: &str, role_map: &HashMap<&str, &Role>) -> Vec<Rule> {
     let mut rules = Vec::new();
 
     if let Some(role) = role_map.get(agent_id) {
         // Separate Bash from other tools
-        let non_bash: Vec<String> = role.tools_allowed.iter()
+        let non_bash: Vec<String> = role
+            .tools_allowed
+            .iter()
             .filter(|t| *t != "Bash")
             .cloned()
             .collect();
@@ -281,7 +270,10 @@ fn generate_elevated_rules(
                         tools: vec!["Bash".to_string()],
                         conditions: None,
                         action: Action::Ask,
-                        reason: Some(format!("Elevated trust: Bash requires patterns for auto-approve (role '{}')", role.id)),
+                        reason: Some(format!(
+                            "Elevated trust: Bash requires patterns for auto-approve (role '{}')",
+                            role.id
+                        )),
                     });
                 }
             } else {
@@ -289,7 +281,10 @@ fn generate_elevated_rules(
                     tools: vec!["Bash".to_string()],
                     conditions: None,
                     action: Action::Ask,
-                    reason: Some(format!("Elevated trust: Bash requires patterns for auto-approve (role '{}')", role.id)),
+                    reason: Some(format!(
+                        "Elevated trust: Bash requires patterns for auto-approve (role '{}')",
+                        role.id
+                    )),
                 });
             }
         }
@@ -302,8 +297,12 @@ fn generate_elevated_rules(
 fn generate_restricted_rules() -> Vec<Rule> {
     vec![Rule {
         tools: vec![
-            "Bash".to_string(), "Write".to_string(), "Edit".to_string(),
-            "WebFetch".to_string(), "WebSearch".to_string(), "Agent".to_string(),
+            "Bash".to_string(),
+            "Write".to_string(),
+            "Edit".to_string(),
+            "WebFetch".to_string(),
+            "WebSearch".to_string(),
+            "Agent".to_string(),
         ],
         conditions: None,
         action: Action::Ask,
@@ -322,8 +321,10 @@ fn generate_probation_rules() -> Vec<Rule> {
         },
         Rule {
             tools: vec![
-                "Write".to_string(), "Edit".to_string(),
-                "WebSearch".to_string(), "Agent".to_string(),
+                "Write".to_string(),
+                "Edit".to_string(),
+                "WebSearch".to_string(),
+                "Agent".to_string(),
             ],
             conditions: None,
             action: Action::Ask,
@@ -412,21 +413,25 @@ impl From<&StoredRule> for Rule {
 /// Save calibrated overrides to a JSON file (atomic write).
 pub fn save_overrides(path: &Path, overrides: &CalibratedOverrides) -> Result<()> {
     let stored = StoredOverrides {
-        agent_overrides: overrides.agent_overrides.iter()
-            .map(|(agent, rules)| {
-                (agent.clone(), rules.iter().map(StoredRule::from).collect())
-            })
+        agent_overrides: overrides
+            .agent_overrides
+            .iter()
+            .map(|(agent, rules)| (agent.clone(), rules.iter().map(StoredRule::from).collect()))
             .collect(),
     };
 
-    let json = serde_json::to_string_pretty(&stored)
-        .context("Failed to serialize ELO overrides")?;
+    let json =
+        serde_json::to_string_pretty(&stored).context("Failed to serialize ELO overrides")?;
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp_path = dir.join(".elo-overrides.tmp");
 
-    std::fs::write(&tmp_path, &json)
-        .with_context(|| format!("Failed to write temp overrides file: {}", tmp_path.display()))?;
+    std::fs::write(&tmp_path, &json).with_context(|| {
+        format!(
+            "Failed to write temp overrides file: {}",
+            tmp_path.display()
+        )
+    })?;
 
     std::fs::rename(&tmp_path, path)
         .with_context(|| format!("Failed to rename temp overrides file to {}", path.display()))?;
@@ -447,10 +452,10 @@ pub fn load_overrides(path: &Path) -> HashMap<String, Vec<Rule>> {
         Err(_) => return HashMap::new(),
     };
 
-    stored.agent_overrides.iter()
-        .map(|(agent, rules)| {
-            (agent.clone(), rules.iter().map(Rule::from).collect())
-        })
+    stored
+        .agent_overrides
+        .iter()
+        .map(|(agent, rules)| (agent.clone(), rules.iter().map(Rule::from).collect()))
         .collect()
 }
 
@@ -487,8 +492,14 @@ mod tests {
                 path_not_match: vec![],
             }),
             role_type: None,
-            elo: EloConfig { initial: 1500, categories: Default::default() },
-            mentoring: MentoringConfig { can_mentor: vec![], mentored_by: vec![] },
+            elo: EloConfig {
+                initial: 1500,
+                categories: Default::default(),
+            },
+            mentoring: MentoringConfig {
+                can_mentor: vec![],
+                mentored_by: vec![],
+            },
         }
     }
 
@@ -496,7 +507,10 @@ mod tests {
     fn test_determine_tier_uncalibrated() {
         let rating = make_rating("newbie", 1500, 2); // only 2 reviews
         let thresholds = TrustThresholds::default();
-        assert_eq!(determine_tier(&rating, &thresholds), TrustTier::Uncalibrated);
+        assert_eq!(
+            determine_tier(&rating, &thresholds),
+            TrustTier::Uncalibrated
+        );
     }
 
     #[test]
@@ -558,7 +572,10 @@ mod tests {
         let rules = result.agent_overrides.get("auditor").unwrap();
         // Should have: 1 rule for Read (auto-approve) + 1 rule for Bash (ask, no patterns)
         assert_eq!(rules.len(), 2);
-        let bash_rule = rules.iter().find(|r| r.tools == vec!["Bash"] && r.conditions.is_none()).unwrap();
+        let bash_rule = rules
+            .iter()
+            .find(|r| r.tools == vec!["Bash"] && r.conditions.is_none())
+            .unwrap();
         // Without bash_patterns, Bash must NOT be auto-approved (security: DREAD 5.6)
         assert_eq!(bash_rule.action, Action::Ask);
     }
@@ -581,7 +598,9 @@ mod tests {
         let result = calibrate(&ratings, &roles, &thresholds, &HashMap::new());
 
         let rules = result.agent_overrides.get("bad").unwrap();
-        assert!(rules.iter().any(|r| r.tools.contains(&"Bash".to_string()) && r.action == Action::Block));
+        assert!(rules
+            .iter()
+            .any(|r| r.tools.contains(&"Bash".to_string()) && r.action == Action::Block));
     }
 
     #[test]
@@ -633,7 +652,7 @@ mod tests {
         // without checking role_map. Since "ghost" has no role in the library,
         // it should be cleaned out as an orphan override.
         let ratings = vec![
-            make_rating("ghost", 1050, 5),    // Probation, no role
+            make_rating("ghost", 1050, 5),     // Probation, no role
             make_rating("pentester", 1050, 5), // Probation, has role
         ];
         // Only "pentester" has a role; "ghost" does not.
@@ -654,7 +673,10 @@ mod tests {
         );
 
         // There should be a CalibrationChange for "ghost" with orphan reason
-        let orphan_change = result.changes.iter().find(|c| c.agent == "ghost" && c.reason.contains("Orphan"));
+        let orphan_change = result
+            .changes
+            .iter()
+            .find(|c| c.agent == "ghost" && c.reason.contains("Orphan"));
         assert!(
             orphan_change.is_some(),
             "should log a CalibrationChange for orphan removal"
@@ -687,7 +709,9 @@ mod tests {
         };
         let warnings = thresholds.validate_consistency();
         assert!(
-            warnings.iter().any(|w| w.contains("floor_elo") && w.contains("safe minimum")),
+            warnings
+                .iter()
+                .any(|w| w.contains("floor_elo") && w.contains("safe minimum")),
             "Should warn about floor_elo below safe minimum: {:?}",
             warnings,
         );
@@ -696,14 +720,16 @@ mod tests {
     #[test]
     fn test_threshold_validation_inverted_ordering() {
         let thresholds = TrustThresholds {
-            floor_elo: 1500,    // above restrict_elo!
+            floor_elo: 1500, // above restrict_elo!
             restrict_elo: 1300,
             elevate_elo: 1600,
             min_reviews_to_calibrate: 3,
         };
         let warnings = thresholds.validate_consistency();
         assert!(
-            warnings.iter().any(|w| w.contains("floor_elo") && w.contains("restrict_elo")),
+            warnings
+                .iter()
+                .any(|w| w.contains("floor_elo") && w.contains("restrict_elo")),
             "Should warn about inverted floor/restrict: {:?}",
             warnings,
         );
@@ -713,13 +739,15 @@ mod tests {
     fn test_threshold_validation_restrict_above_elevate() {
         let thresholds = TrustThresholds {
             floor_elo: 1100,
-            restrict_elo: 1700,  // above elevate_elo!
+            restrict_elo: 1700, // above elevate_elo!
             elevate_elo: 1600,
             min_reviews_to_calibrate: 3,
         };
         let warnings = thresholds.validate_consistency();
         assert!(
-            warnings.iter().any(|w| w.contains("restrict_elo") && w.contains("elevate_elo")),
+            warnings
+                .iter()
+                .any(|w| w.contains("restrict_elo") && w.contains("elevate_elo")),
             "Should warn about restrict >= elevate: {:?}",
             warnings,
         );
@@ -735,7 +763,9 @@ mod tests {
         };
         let warnings = thresholds.validate_consistency();
         assert!(
-            warnings.iter().any(|w| w.contains("min_reviews_to_calibrate is 0")),
+            warnings
+                .iter()
+                .any(|w| w.contains("min_reviews_to_calibrate is 0")),
             "Should warn about zero min_reviews: {:?}",
             warnings,
         );

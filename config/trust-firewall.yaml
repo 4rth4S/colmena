@@ -7,7 +7,7 @@ defaults:
 
 # Mission Gate: when true, Agent calls without a Colmena mission marker trigger "ask".
 # Off by default — opt-in. Human can always override.
-enforce_missions: false
+enforce_missions: false  # Opt-in; set true per-session when a mission requires strict gating.
 
 trust_circle:
   # Local read operations - always safe

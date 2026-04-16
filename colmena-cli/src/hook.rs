@@ -94,7 +94,10 @@ pub struct PostToolUseResponse {
 pub struct PostToolUseOutput {
     #[serde(rename = "hookEventName")]
     pub hook_event_name: String,
-    #[serde(rename = "updatedMCPToolOutput", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "updatedMCPToolOutput",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub updated_mcp_tool_output: Option<String>,
 }
 
@@ -183,6 +186,7 @@ impl PermissionRequestResponse {
     }
 
     /// Deny the tool call with a reason message.
+    #[allow(dead_code)]
     pub fn deny(message: impl Into<String>) -> Self {
         Self {
             hook_specific_output: PermissionRequestOutput {
@@ -285,18 +289,12 @@ mod tests {
         let resp = HookResponse::allow("Read-only operation");
         let json = serde_json::to_value(&resp).unwrap();
 
-        assert_eq!(
-            json["hookSpecificOutput"]["permissionDecision"],
-            "allow"
-        );
+        assert_eq!(json["hookSpecificOutput"]["permissionDecision"], "allow");
         assert_eq!(
             json["hookSpecificOutput"]["permissionDecisionReason"],
             "Read-only operation"
         );
-        assert_eq!(
-            json["hookSpecificOutput"]["hookEventName"],
-            "PreToolUse"
-        );
+        assert_eq!(json["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     }
 
     #[test]

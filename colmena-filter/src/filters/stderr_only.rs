@@ -34,7 +34,10 @@ impl OutputFilter for StderrOnlyFilter {
             stderr: stderr.to_string(),
             modified: !stdout.is_empty(),
             note: if !stdout.is_empty() {
-                Some(format!("discarded {} stdout chars on failure", stdout_chars))
+                Some(format!(
+                    "discarded {} stdout chars on failure",
+                    stdout_chars
+                ))
             } else {
                 None
             },

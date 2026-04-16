@@ -32,14 +32,10 @@ pub fn run_install() -> Result<()> {
         .entry("hooks")
         .or_insert_with(|| json!({}));
 
-    let hooks_obj = hooks
-        .as_object_mut()
-        .context("hooks must be an object")?;
+    let hooks_obj = hooks.as_object_mut().context("hooks must be an object")?;
 
     // Ensure PreToolUse array exists
-    let pre_tool_use = hooks_obj
-        .entry("PreToolUse")
-        .or_insert_with(|| json!([]));
+    let pre_tool_use = hooks_obj.entry("PreToolUse").or_insert_with(|| json!([]));
 
     let arr = pre_tool_use
         .as_array_mut()
@@ -77,9 +73,7 @@ pub fn run_install() -> Result<()> {
     }
 
     // Also register PostToolUse hook for output filtering
-    let post_tool_use = hooks_obj
-        .entry("PostToolUse")
-        .or_insert_with(|| json!([]));
+    let post_tool_use = hooks_obj.entry("PostToolUse").or_insert_with(|| json!([]));
 
     let post_arr = post_tool_use
         .as_array_mut()
@@ -149,9 +143,7 @@ pub fn run_install() -> Result<()> {
     }
 
     // Also register SubagentStop hook for enforced peer review
-    let subagent_stop = hooks_obj
-        .entry("SubagentStop")
-        .or_insert_with(|| json!([]));
+    let subagent_stop = hooks_obj.entry("SubagentStop").or_insert_with(|| json!([]));
 
     let subagent_arr = subagent_stop
         .as_array_mut()
@@ -184,14 +176,17 @@ pub fn run_install() -> Result<()> {
         }));
     }
 
-    if already_installed && already_installed_post && already_installed_perm && already_installed_subagent {
+    if already_installed
+        && already_installed_post
+        && already_installed_perm
+        && already_installed_subagent
+    {
         println!("Colmena hooks are already installed (PreToolUse + PostToolUse + PermissionRequest + SubagentStop).");
         return Ok(());
     }
 
     // Write back preserving formatting
-    let json = serde_json::to_string_pretty(&settings)
-        .context("Failed to serialize settings")?;
+    let json = serde_json::to_string_pretty(&settings).context("Failed to serialize settings")?;
 
     // Ensure parent directory exists
     if let Some(parent) = settings_path.parent() {
@@ -223,14 +218,22 @@ pub fn run_install() -> Result<()> {
             .spawn()
             .and_then(|mut child| {
                 use std::io::Write as _;
-                child.stdin.take().unwrap().write_all(test_payload.as_bytes()).unwrap();
+                child
+                    .stdin
+                    .take()
+                    .unwrap()
+                    .write_all(test_payload.as_bytes())
+                    .unwrap();
                 child.wait_with_output()
             }) {
             Ok(output) if output.status.success() => {
                 println!("  Verification: hook dry-run passed.");
             }
             Ok(output) => {
-                eprintln!("WARNING: Hook dry-run failed (exit {}).", output.status.code().unwrap_or(-1));
+                eprintln!(
+                    "WARNING: Hook dry-run failed (exit {}).",
+                    output.status.code().unwrap_or(-1)
+                );
             }
             Err(e) => {
                 eprintln!("WARNING: Could not run hook verification: {e}");

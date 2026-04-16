@@ -143,8 +143,12 @@ pub fn load_prompt(library_dir: &Path, prompt_ref: &str) -> Result<String> {
     if path.exists() {
         let canonical = std::fs::canonicalize(&path)
             .with_context(|| format!("Failed to canonicalize prompt path: {}", path.display()))?;
-        let library_canonical = std::fs::canonicalize(library_dir)
-            .with_context(|| format!("Failed to canonicalize library dir: {}", library_dir.display()))?;
+        let library_canonical = std::fs::canonicalize(library_dir).with_context(|| {
+            format!(
+                "Failed to canonicalize library dir: {}",
+                library_dir.display()
+            )
+        })?;
         if !canonical.starts_with(&library_canonical) {
             anyhow::bail!(
                 "Prompt symlink traversal detected: '{}' resolves outside library directory",
@@ -395,7 +399,11 @@ elo_lead_selection: true
         assert_eq!(oracle_slot.as_vec(), vec!["security_architect"]);
 
         // workers → Multiple slot
-        let workers_slot = pattern.roles_suggested.0.get("workers").expect("workers key");
+        let workers_slot = pattern
+            .roles_suggested
+            .0
+            .get("workers")
+            .expect("workers key");
         let workers = workers_slot.as_vec();
         assert!(workers.contains(&"pentester".to_string()));
         assert!(workers.contains(&"researcher".to_string()));
@@ -551,7 +559,10 @@ elo_lead_selection: true
         let result = load_prompt(&library_dir, "prompts/evil.md");
         assert!(result.is_err(), "symlink traversal should be blocked");
         assert!(
-            result.unwrap_err().to_string().contains("symlink traversal"),
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("symlink traversal"),
             "error should mention symlink traversal"
         );
     }
