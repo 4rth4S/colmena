@@ -734,6 +734,12 @@ fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> 
 
 /// Build PermissionUpdate rules from role's tools_allowed.
 /// Teaches CC to auto-approve ALL tools this role is allowed to use.
+/// STRIDE TM Finding #1 (DREAD 7.0): Bash and Agent MUST always go through
+/// PreToolUse firewall — never teach CC to auto-approve them via session rules.
+/// Once CC learns a session rule, it applies BEFORE the hook, bypassing chain guard,
+/// blocked rules, ELO restrictions, and mission revocation entirely.
+const NEVER_SESSION_RULE_TOOLS: &[&str] = &["Bash", "Agent"];
+
 fn build_permission_updates(
     role_data: &colmena_core::library::RoleToolsAllowed,
 ) -> Vec<hook::PermissionUpdate> {
@@ -741,6 +747,7 @@ fn build_permission_updates(
         .tools
         .iter()
         .chain(role_data.tool_patterns.iter())
+        .filter(|t| !NEVER_SESSION_RULE_TOOLS.iter().any(|blocked| t.eq_ignore_ascii_case(blocked)))
         .map(|t| hook::PermissionRule {
             tool_name: t.clone(),
         })
@@ -1845,10 +1852,23 @@ fn run_calibrate_reset() -> Result<()> {
 }
 
 /// Best-effort append to colmena error log. Never panics.
+/// STRIDE TM Finding #3 (DREAD 6.8): Error log with rotation.
+/// Max 5 MiB before rotating (colmena-errors.log.1). Single rotation is sufficient
+/// for error logs (much lower volume than audit.log).
 fn log_error(msg: &str) {
     let log_path = colmena_core::paths::colmena_home().join("colmena-errors.log");
     let timestamp = chrono::Utc::now().to_rfc3339();
     let line = format!("[{timestamp}] {msg}\n");
+
+    // Rotate if over 5 MiB
+    const MAX_ERROR_LOG_BYTES: u64 = 5 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata(&log_path) {
+        if meta.len() >= MAX_ERROR_LOG_BYTES {
+            let rotated = log_path.with_extension("log.1");
+            let _ = std::fs::rename(&log_path, rotated);
+        }
+    }
+
     let _ = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
