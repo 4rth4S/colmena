@@ -17,7 +17,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
-      - run: cargo clippy --workspace -- -W warnings
+      - run: cargo clippy --workspace -- -D warnings
 
   release:
     name: Create GitHub Release
@@ -50,10 +50,14 @@ jobs:
           # Write to file for multi-line support
           echo "$CHANGELOG" > /tmp/release-notes.md
 
-      - name: Build release binaries
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --release
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: cargo build --workspace --release
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
