@@ -18,13 +18,25 @@ enum Status {
 
 impl Check {
     fn ok(category: &'static str, name: &'static str, detail: impl Into<String>) -> Self {
-        Self { category, name, status: Status::Ok(detail.into()) }
+        Self {
+            category,
+            name,
+            status: Status::Ok(detail.into()),
+        }
     }
     fn warn(category: &'static str, name: &'static str, detail: impl Into<String>) -> Self {
-        Self { category, name, status: Status::Warn(detail.into()) }
+        Self {
+            category,
+            name,
+            status: Status::Warn(detail.into()),
+        }
     }
     fn err(category: &'static str, name: &'static str, detail: impl Into<String>) -> Self {
-        Self { category, name, status: Status::Err(detail.into()) }
+        Self {
+            category,
+            name,
+            status: Status::Err(detail.into()),
+        }
     }
 }
 
@@ -66,9 +78,18 @@ pub fn run_doctor() -> Result<()> {
     }
 
     // Summary
-    let ok_n = all.iter().filter(|c| matches!(c.status, Status::Ok(_))).count();
-    let warn_n = all.iter().filter(|c| matches!(c.status, Status::Warn(_))).count();
-    let err_n = all.iter().filter(|c| matches!(c.status, Status::Err(_))).count();
+    let ok_n = all
+        .iter()
+        .filter(|c| matches!(c.status, Status::Ok(_)))
+        .count();
+    let warn_n = all
+        .iter()
+        .filter(|c| matches!(c.status, Status::Warn(_)))
+        .count();
+    let err_n = all
+        .iter()
+        .filter(|c| matches!(c.status, Status::Err(_)))
+        .count();
 
     println!("\nSummary: {ok_n} ok, {warn_n} warnings, {err_n} errors");
 
@@ -92,7 +113,11 @@ fn check_environment(config_dir: &Path) -> Vec<Check> {
     // Colmena binary
     match std::env::current_exe() {
         Ok(exe) => checks.push(Check::ok(CAT, "Colmena binary", exe.display().to_string())),
-        Err(e) => checks.push(Check::warn(CAT, "Colmena binary", format!("could not resolve: {e}"))),
+        Err(e) => checks.push(Check::warn(
+            CAT,
+            "Colmena binary",
+            format!("could not resolve: {e}"),
+        )),
     }
 
     // Mode detection
@@ -101,9 +126,17 @@ fn check_environment(config_dir: &Path) -> Vec<Check> {
 
     // Config directory
     if config_dir.is_dir() {
-        checks.push(Check::ok(CAT, "Config directory", config_dir.display().to_string()));
+        checks.push(Check::ok(
+            CAT,
+            "Config directory",
+            config_dir.display().to_string(),
+        ));
     } else {
-        checks.push(Check::err(CAT, "Config directory", format!("not found: {}", config_dir.display())));
+        checks.push(Check::err(
+            CAT,
+            "Config directory",
+            format!("not found: {}", config_dir.display()),
+        ));
     }
 
     // COLMENA_HOME env
@@ -112,16 +145,28 @@ fn check_environment(config_dir: &Path) -> Vec<Check> {
             if Path::new(&val).is_dir() {
                 checks.push(Check::ok(CAT, "COLMENA_HOME", val));
             } else {
-                checks.push(Check::warn(CAT, "COLMENA_HOME", format!("set to '{val}' but directory does not exist")));
+                checks.push(Check::warn(
+                    CAT,
+                    "COLMENA_HOME",
+                    format!("set to '{val}' but directory does not exist"),
+                ));
             }
         }
-        Err(_) => checks.push(Check::ok(CAT, "COLMENA_HOME", "not set (using auto-detection)")),
+        Err(_) => checks.push(Check::ok(
+            CAT,
+            "COLMENA_HOME",
+            "not set (using auto-detection)",
+        )),
     }
 
     // MCP binary
     match find_mcp_binary() {
         Some(p) => checks.push(Check::ok(CAT, "MCP binary", p.display().to_string())),
-        None => checks.push(Check::warn(CAT, "MCP binary", "not found next to colmena binary")),
+        None => checks.push(Check::warn(
+            CAT,
+            "MCP binary",
+            "not found next to colmena binary",
+        )),
     }
 
     checks
@@ -194,7 +239,11 @@ fn check_config(config_dir: &Path) -> Vec<Check> {
                     }
                 }
                 Err(e) => {
-                    checks.push(Check::err(CAT, "trust-firewall.yaml", format!("regex compile failed: {e}")));
+                    checks.push(Check::err(
+                        CAT,
+                        "trust-firewall.yaml",
+                        format!("regex compile failed: {e}"),
+                    ));
                 }
             }
         }
@@ -217,7 +266,11 @@ fn check_config(config_dir: &Path) -> Vec<Check> {
             Err(e) => checks.push(Check::err(CAT, "filter-config.yaml", format!("{e}"))),
         }
     } else {
-        checks.push(Check::warn(CAT, "filter-config.yaml", "not found, using defaults"));
+        checks.push(Check::warn(
+            CAT,
+            "filter-config.yaml",
+            "not found, using defaults",
+        ));
     }
 
     // review-config.yaml (existence check — YAML validation done by core at runtime)
@@ -225,7 +278,11 @@ fn check_config(config_dir: &Path) -> Vec<Check> {
     if review_path.exists() {
         checks.push(Check::ok(CAT, "review-config.yaml", "present"));
     } else {
-        checks.push(Check::warn(CAT, "review-config.yaml", "not found, using defaults"));
+        checks.push(Check::warn(
+            CAT,
+            "review-config.yaml",
+            "not found, using defaults",
+        ));
     }
 
     checks
@@ -239,7 +296,11 @@ fn check_library(config_dir: &Path) -> Vec<Check> {
 
     let library_dir = config_dir.join("library");
     if !library_dir.is_dir() {
-        checks.push(Check::err(CAT, "Library directory", format!("not found: {}", library_dir.display())));
+        checks.push(Check::err(
+            CAT,
+            "Library directory",
+            format!("not found: {}", library_dir.display()),
+        ));
         return checks;
     }
 
@@ -286,7 +347,11 @@ fn check_hooks(config_dir: &Path) -> Vec<Check> {
     let settings_path = crate::install::settings_json_path();
 
     if !settings_path.exists() {
-        checks.push(Check::err(CAT, "settings.json", format!("not found: {}", settings_path.display())));
+        checks.push(Check::err(
+            CAT,
+            "settings.json",
+            format!("not found: {}", settings_path.display()),
+        ));
         return checks;
     }
 
@@ -299,7 +364,11 @@ fn check_hooks(config_dir: &Path) -> Vec<Check> {
             v
         }
         None => {
-            checks.push(Check::err(CAT, "settings.json", "invalid JSON or unreadable"));
+            checks.push(Check::err(
+                CAT,
+                "settings.json",
+                "invalid JSON or unreadable",
+            ));
             return checks;
         }
     };
@@ -356,11 +425,19 @@ fn check_hooks(config_dir: &Path) -> Vec<Check> {
                 ));
             }
             Err(e) => {
-                checks.push(Check::warn(CAT, "Hook dry-run", format!("could not run: {e}")));
+                checks.push(Check::warn(
+                    CAT,
+                    "Hook dry-run",
+                    format!("could not run: {e}"),
+                ));
             }
         }
     } else {
-        checks.push(Check::warn(CAT, "Hook dry-run", "binary not found, skipped"));
+        checks.push(Check::warn(
+            CAT,
+            "Hook dry-run",
+            "binary not found, skipped",
+        ));
     }
 
     checks
@@ -430,27 +507,34 @@ fn check_mcp() -> Vec<Check> {
     };
 
     // Check colmena server registration
-    match mcp_config
-        .get("mcpServers")
-        .and_then(|s| s.get("colmena"))
-    {
-        Some(entry) => {
-            match entry.get("command").and_then(|c| c.as_str()) {
-                Some(cmd) => {
-                    if Path::new(cmd).exists() {
-                        checks.push(Check::ok(CAT, "colmena server", format!("registered, binary exists ({cmd})")));
-                    } else {
-                        checks.push(Check::err(
-                            CAT,
-                            "colmena server",
-                            format!("registered but binary not found: {cmd}"),
-                        ));
-                    }
+    match mcp_config.get("mcpServers").and_then(|s| s.get("colmena")) {
+        Some(entry) => match entry.get("command").and_then(|c| c.as_str()) {
+            Some(cmd) => {
+                if Path::new(cmd).exists() {
+                    checks.push(Check::ok(
+                        CAT,
+                        "colmena server",
+                        format!("registered, binary exists ({cmd})"),
+                    ));
+                } else {
+                    checks.push(Check::err(
+                        CAT,
+                        "colmena server",
+                        format!("registered but binary not found: {cmd}"),
+                    ));
                 }
-                None => checks.push(Check::err(CAT, "colmena server", "registered but missing 'command' field")),
             }
-        }
-        None => checks.push(Check::err(CAT, "colmena server", "not registered in mcpServers")),
+            None => checks.push(Check::err(
+                CAT,
+                "colmena server",
+                "registered but missing 'command' field",
+            )),
+        },
+        None => checks.push(Check::err(
+            CAT,
+            "colmena server",
+            "not registered in mcpServers",
+        )),
     }
 
     checks
@@ -501,7 +585,11 @@ fn check_runtime(config_dir: &Path) -> Vec<Check> {
     let elo_path = config_dir.join("elo-events.jsonl");
     if elo_path.exists() {
         match colmena_core::elo::read_elo_log(&elo_path) {
-            Ok(events) => checks.push(Check::ok(CAT, "ELO events", format!("{} events", events.len()))),
+            Ok(events) => checks.push(Check::ok(
+                CAT,
+                "ELO events",
+                format!("{} events", events.len()),
+            )),
             Err(e) => checks.push(Check::warn(CAT, "ELO events", format!("parse error: {e}"))),
         }
     } else {
@@ -512,14 +600,22 @@ fn check_runtime(config_dir: &Path) -> Vec<Check> {
     let overrides_path = config_dir.join("elo-overrides.json");
     if overrides_path.exists() {
         let overrides = colmena_core::calibrate::load_overrides(&overrides_path);
-        checks.push(Check::ok(CAT, "ELO overrides", format!("{} agents", overrides.len())));
+        checks.push(Check::ok(
+            CAT,
+            "ELO overrides",
+            format!("{} agents", overrides.len()),
+        ));
     } else {
         checks.push(Check::ok(CAT, "ELO overrides", "no file (0 overrides)"));
     }
 
     // Queue pending
     match colmena_core::queue::list_pending(config_dir) {
-        Ok(pending) => checks.push(Check::ok(CAT, "Queue", format!("{} pending", pending.len()))),
+        Ok(pending) => checks.push(Check::ok(
+            CAT,
+            "Queue",
+            format!("{} pending", pending.len()),
+        )),
         Err(_) => checks.push(Check::ok(CAT, "Queue", "0 pending")),
     }
 
@@ -531,7 +627,11 @@ fn check_runtime(config_dir: &Path) -> Vec<Check> {
                 let size_kb = meta.len() / 1024;
                 checks.push(Check::ok(CAT, "Filter stats", format!("{} KB", size_kb)));
             }
-            Err(e) => checks.push(Check::warn(CAT, "Filter stats", format!("cannot stat: {e}"))),
+            Err(e) => checks.push(Check::warn(
+                CAT,
+                "Filter stats",
+                format!("cannot stat: {e}"),
+            )),
         }
     } else {
         checks.push(Check::ok(CAT, "Filter stats", "not yet created"));
@@ -578,7 +678,10 @@ mod tests {
         std::fs::copy(&src, config_dir.join("trust-firewall.yaml")).unwrap();
 
         let checks = check_config(config_dir);
-        let firewall_check = checks.iter().find(|c| c.name == "trust-firewall.yaml").unwrap();
+        let firewall_check = checks
+            .iter()
+            .find(|c| c.name == "trust-firewall.yaml")
+            .unwrap();
         assert!(
             matches!(firewall_check.status, Status::Ok(_)),
             "expected OK for valid firewall config"
@@ -589,7 +692,10 @@ mod tests {
     fn test_check_config_missing() {
         let tmp = TempDir::new().unwrap();
         let checks = check_config(tmp.path());
-        let firewall_check = checks.iter().find(|c| c.name == "trust-firewall.yaml").unwrap();
+        let firewall_check = checks
+            .iter()
+            .find(|c| c.name == "trust-firewall.yaml")
+            .unwrap();
         assert!(
             matches!(firewall_check.status, Status::Err(_)),
             "expected ERR for missing firewall config"
@@ -601,7 +707,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join("trust-firewall.yaml"), "{{{{not yaml").unwrap();
         let checks = check_config(tmp.path());
-        let firewall_check = checks.iter().find(|c| c.name == "trust-firewall.yaml").unwrap();
+        let firewall_check = checks
+            .iter()
+            .find(|c| c.name == "trust-firewall.yaml")
+            .unwrap();
         assert!(
             matches!(firewall_check.status, Status::Err(_)),
             "expected ERR for invalid YAML"
@@ -616,7 +725,10 @@ mod tests {
         std::fs::create_dir_all(lib_dir.join("patterns")).unwrap();
 
         let checks = check_library(tmp.path());
-        let lib_check = checks.iter().find(|c| c.name == "Roles & patterns").unwrap();
+        let lib_check = checks
+            .iter()
+            .find(|c| c.name == "Roles & patterns")
+            .unwrap();
         assert!(
             matches!(lib_check.status, Status::Ok(_)),
             "expected OK for empty but valid library"
@@ -627,7 +739,10 @@ mod tests {
     fn test_check_library_missing() {
         let tmp = TempDir::new().unwrap();
         let checks = check_library(tmp.path());
-        let lib_check = checks.iter().find(|c| c.name == "Library directory").unwrap();
+        let lib_check = checks
+            .iter()
+            .find(|c| c.name == "Library directory")
+            .unwrap();
         assert!(
             matches!(lib_check.status, Status::Err(_)),
             "expected ERR for missing library dir"

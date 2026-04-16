@@ -56,7 +56,9 @@ pub fn load_delegations(path: &Path) -> Vec<RuntimeDelegation> {
 }
 
 /// Load delegations, returning (active, expired) for audit logging of expirations.
-pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Vec<RuntimeDelegation>) {
+pub fn load_delegations_with_expired(
+    path: &Path,
+) -> (Vec<RuntimeDelegation>, Vec<RuntimeDelegation>) {
     let contents = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return (Vec::new(), Vec::new()),
@@ -130,8 +132,8 @@ pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Resul
         validate_bash_delegation(d)?;
     }
 
-    let json = serde_json::to_string_pretty(delegations)
-        .context("Failed to serialize delegations")?;
+    let json =
+        serde_json::to_string_pretty(delegations).context("Failed to serialize delegations")?;
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let lock_path = dir.join(".runtime-delegations.lock");
@@ -141,11 +143,19 @@ pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Resul
 
     let tmp_path = dir.join(".runtime-delegations.tmp");
 
-    std::fs::write(&tmp_path, &json)
-        .with_context(|| format!("Failed to write temp delegations file: {}", tmp_path.display()))?;
+    std::fs::write(&tmp_path, &json).with_context(|| {
+        format!(
+            "Failed to write temp delegations file: {}",
+            tmp_path.display()
+        )
+    })?;
 
-    std::fs::rename(&tmp_path, path)
-        .with_context(|| format!("Failed to rename temp delegations file to {}", path.display()))?;
+    std::fs::rename(&tmp_path, path).with_context(|| {
+        format!(
+            "Failed to rename temp delegations file to {}",
+            path.display()
+        )
+    })?;
 
     // Lock released on drop
     Ok(())
@@ -181,7 +191,10 @@ fn acquire_file_lock(lock_path: &Path) -> Result<FileLock> {
         let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
         if ret != 0 {
             // Best-effort: log but continue without lock
-            eprintln!("[colmena] WARNING: failed to acquire file lock (flock returned {})", ret);
+            eprintln!(
+                "[colmena] WARNING: failed to acquire file lock (flock returned {})",
+                ret
+            );
         }
     }
 
@@ -229,7 +242,8 @@ pub fn validate_ttl(hours: i64) -> Result<Duration> {
     if !(1..=MAX_TTL_HOURS).contains(&hours) {
         anyhow::bail!(
             "TTL must be between 1 and {} hours, got {}",
-            MAX_TTL_HOURS, hours
+            MAX_TTL_HOURS,
+            hours
         );
     }
     Ok(Duration::hours(hours))
@@ -237,11 +251,7 @@ pub fn validate_ttl(hours: i64) -> Result<Duration> {
 
 /// Revoke delegations matching tool and optional agent.
 /// Returns the number of delegations revoked.
-pub fn revoke_delegations(
-    path: &Path,
-    tool: &str,
-    agent: Option<&str>,
-) -> Result<usize> {
+pub fn revoke_delegations(path: &Path, tool: &str, agent: Option<&str>) -> Result<usize> {
     let delegations = load_delegations(path);
     let before = delegations.len();
 
@@ -253,7 +263,7 @@ pub fn revoke_delegations(
             }
             match agent {
                 Some(a) => d.agent_id.as_deref() != Some(a), // keep if agent doesn't match
-                None => false, // revoke all for this tool
+                None => false,                               // revoke all for this tool
             }
         })
         .collect();
@@ -316,23 +326,28 @@ pub fn agents_for_mission(delegations: &[RuntimeDelegation], mission_id: &str) -
 /// Fix Finding #7 (DREAD 5.2): Uses atomic write (tmp+rename) to prevent
 /// corrupted JSON on crash, which would cause load_revoked_missions to return
 /// an empty set (revoked agents recovering permissions).
-pub fn mark_mission_agents_revoked(
-    config_dir: &Path,
-    agent_ids: &[String],
-) -> Result<()> {
+pub fn mark_mission_agents_revoked(config_dir: &Path, agent_ids: &[String]) -> Result<()> {
     let path = config_dir.join("revoked-missions.json");
     let mut revoked = load_revoked_missions(config_dir);
     for agent_id in agent_ids {
         revoked.insert(agent_id.clone());
     }
-    let json = serde_json::to_string_pretty(&revoked)
-        .context("Failed to serialize revoked missions")?;
+    let json =
+        serde_json::to_string_pretty(&revoked).context("Failed to serialize revoked missions")?;
 
     let tmp_path = config_dir.join(".revoked-missions.tmp");
-    std::fs::write(&tmp_path, &json)
-        .with_context(|| format!("Failed to write temp revoked missions file: {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, &path)
-        .with_context(|| format!("Failed to rename temp revoked missions file to {}", path.display()))?;
+    std::fs::write(&tmp_path, &json).with_context(|| {
+        format!(
+            "Failed to write temp revoked missions file: {}",
+            tmp_path.display()
+        )
+    })?;
+    std::fs::rename(&tmp_path, &path).with_context(|| {
+        format!(
+            "Failed to rename temp revoked missions file to {}",
+            path.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -385,7 +400,7 @@ mod tests {
     fn test_load_delegations_prunes_expired() {
         let delegations = json!([
             make_delegation("WebFetch", Some(-1)), // expired 1 hour ago
-            make_delegation("Bash", Some(4)),       // still valid
+            make_delegation("Bash", Some(4)),      // still valid
         ]);
 
         let mut tmp = NamedTempFile::new().unwrap();
@@ -488,7 +503,9 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None, conditions: None,
+                source: None,
+                mission_id: None,
+                conditions: None,
             },
             RuntimeDelegation {
                 tool: "WebFetch".to_string(),
@@ -497,7 +514,9 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None, conditions: None,
+                source: None,
+                mission_id: None,
+                conditions: None,
             },
         ];
 
@@ -525,7 +544,8 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None,
+                source: None,
+                mission_id: None,
                 conditions: Some(DelegationConditions {
                     bash_pattern: Some("^cargo".to_string()),
                     path_within: None,
@@ -539,7 +559,8 @@ mod tests {
                 created_at: Utc::now(),
                 expires_at: Some(Utc::now() + Duration::hours(4)),
                 session_id: None,
-                source: None, mission_id: None,
+                source: None,
+                mission_id: None,
                 conditions: Some(DelegationConditions {
                     bash_pattern: Some("^cargo".to_string()),
                     path_within: None,
@@ -625,7 +646,10 @@ mod tests {
         };
         let result = validate_bash_delegation(&d);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid bash_pattern regex"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid bash_pattern regex"));
     }
 
     #[test]
@@ -716,7 +740,11 @@ mod tests {
     #[test]
     fn test_mark_and_load_revoked_missions() {
         let tmp = tempfile::TempDir::new().unwrap();
-        mark_mission_agents_revoked(tmp.path(), &["pentester".to_string(), "researcher".to_string()]).unwrap();
+        mark_mission_agents_revoked(
+            tmp.path(),
+            &["pentester".to_string(), "researcher".to_string()],
+        )
+        .unwrap();
 
         let revoked = load_revoked_missions(tmp.path());
         assert_eq!(revoked.len(), 2);
@@ -836,7 +864,10 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
 
         let result = load_delegations(&path);
-        assert!(result.is_empty(), "Delegation with nonexistent mission directory should be rejected");
+        assert!(
+            result.is_empty(),
+            "Delegation with nonexistent mission directory should be rejected"
+        );
     }
 
     #[test]
@@ -864,7 +895,11 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
 
         let result = load_delegations(&path);
-        assert_eq!(result.len(), 1, "Valid role delegation with real mission dir should be kept");
+        assert_eq!(
+            result.len(),
+            1,
+            "Valid role delegation with real mission dir should be kept"
+        );
         assert_eq!(result[0].tool, "Read");
     }
 
@@ -887,7 +922,11 @@ mod tests {
         std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
 
         let result = load_delegations(&path);
-        assert_eq!(result.len(), 1, "Human delegations should not require mission_id");
+        assert_eq!(
+            result.len(),
+            1,
+            "Human delegations should not require mission_id"
+        );
     }
 
     // ── Finding #7 (DREAD 5.2): Atomic write for revoked-missions ──────────
@@ -903,7 +942,10 @@ mod tests {
         assert!(path.exists(), "revoked-missions.json should exist");
 
         let tmp_path = tmp.path().join(".revoked-missions.tmp");
-        assert!(!tmp_path.exists(), "temp file should be cleaned up after rename");
+        assert!(
+            !tmp_path.exists(),
+            "temp file should be cleaned up after rename"
+        );
 
         // Verify the JSON is valid
         let contents = std::fs::read_to_string(&path).unwrap();

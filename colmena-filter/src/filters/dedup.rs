@@ -64,10 +64,7 @@ fn dedup_lines(input: &str, threshold: usize) -> String {
 
         if run_len >= threshold {
             result.push(current.to_string());
-            result.push(format!(
-                "... ({} identical lines omitted)",
-                run_len - 2
-            ));
+            result.push(format!("... ({} identical lines omitted)", run_len - 2));
             result.push(current.to_string());
             i += run_len;
         } else {

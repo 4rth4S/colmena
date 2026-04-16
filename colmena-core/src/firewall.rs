@@ -56,7 +56,14 @@ pub fn evaluate(
     delegations: &[RuntimeDelegation],
     payload: &EvaluationInput,
 ) -> Decision {
-    evaluate_with_elo(config, patterns, delegations, payload, &HashMap::new(), &std::collections::HashSet::new())
+    evaluate_with_elo(
+        config,
+        patterns,
+        delegations,
+        payload,
+        &HashMap::new(),
+        &std::collections::HashSet::new(),
+    )
 }
 
 /// Full evaluation including ELO-calibrated overrides and mission revocation checks.
@@ -139,7 +146,10 @@ pub fn evaluate_with_elo(
         if revoked_agents.contains(agent_id) {
             return Decision {
                 action: Action::Block,
-                reason: format!("Mission revoked for agent '{}' — permissions expired", agent_id),
+                reason: format!(
+                    "Mission revoked for agent '{}' — permissions expired",
+                    agent_id
+                ),
                 matched_rule: Some(format!("mission_revoked:{}", agent_id)),
                 priority: Priority::High,
             };
@@ -147,7 +157,9 @@ pub fn evaluate_with_elo(
     }
 
     // 5. Trust circle
-    if let Some(decision) = check_rules(&config.trust_circle, payload, "trust_circle", &all_patterns) {
+    if let Some(decision) =
+        check_rules(&config.trust_circle, payload, "trust_circle", &all_patterns)
+    {
         return decision;
     }
 
@@ -190,7 +202,10 @@ fn check_delegations(
         let source = d.source.as_deref().unwrap_or("human");
         return Some(Decision {
             action: d.action.clone(),
-            reason: format!("Runtime delegation for tool '{}' (source: {})", d.tool, source),
+            reason: format!(
+                "Runtime delegation for tool '{}' (source: {})",
+                d.tool, source
+            ),
             matched_rule: Some("runtime_delegation".to_string()),
             priority: Priority::Low,
         });
@@ -225,7 +240,10 @@ fn delegation_conditions_match(
     let path = extract_path(payload).map(|p| normalize_path(&p));
     if let Some(ref allowed_dirs) = cond.path_within {
         if let Some(ref p) = path {
-            if !allowed_dirs.iter().any(|dir| std::path::Path::new(p).starts_with(dir)) {
+            if !allowed_dirs
+                .iter()
+                .any(|dir| std::path::Path::new(p).starts_with(dir))
+            {
                 return false;
             }
         }
@@ -248,7 +266,12 @@ fn delegation_conditions_match(
     true
 }
 
-fn check_rules(rules: &[Rule], payload: &EvaluationInput, tier: &str, patterns: &crate::config::CompiledPatterns) -> Option<Decision> {
+fn check_rules(
+    rules: &[Rule],
+    payload: &EvaluationInput,
+    tier: &str,
+    patterns: &crate::config::CompiledPatterns,
+) -> Option<Decision> {
     for (i, rule) in rules.iter().enumerate() {
         if !rule.tools.contains(&payload.tool_name) {
             continue;
@@ -277,7 +300,12 @@ fn check_rules(rules: &[Rule], payload: &EvaluationInput, tier: &str, patterns: 
     None
 }
 
-fn conditions_match(conditions: &Conditions, payload: &EvaluationInput, rule_key: &str, patterns: &crate::config::CompiledPatterns) -> bool {
+fn conditions_match(
+    conditions: &Conditions,
+    payload: &EvaluationInput,
+    rule_key: &str,
+    patterns: &crate::config::CompiledPatterns,
+) -> bool {
     // Check bash_pattern against tool_input["command"] — only applies to Bash tool
     if let Some(ref _pattern) = conditions.bash_pattern {
         if payload.tool_name == "Bash" {
@@ -305,7 +333,10 @@ fn conditions_match(conditions: &Conditions, payload: &EvaluationInput, rule_key
     // Path::starts_with is component-aware and prevents this sibling-directory bypass.
     if let Some(ref allowed_dirs) = conditions.path_within {
         if let Some(ref p) = path {
-            if !allowed_dirs.iter().any(|dir| std::path::Path::new(p).starts_with(dir)) {
+            if !allowed_dirs
+                .iter()
+                .any(|dir| std::path::Path::new(p).starts_with(dir))
+            {
                 return false;
             }
         }
@@ -493,7 +524,8 @@ mod tests {
     use std::path::Path;
 
     fn load_test_config_and_patterns() -> (FirewallConfig, crate::config::CompiledPatterns) {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/Users/test/project").unwrap();
         let patterns = crate::config::compile_config(&config).unwrap();
         (config, patterns)
@@ -513,7 +545,10 @@ mod tests {
     #[test]
     fn test_auto_approve_read() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Read", json!({"file_path": "/Users/test/project/src/main.rs"}));
+        let payload = make_payload(
+            "Read",
+            json!({"file_path": "/Users/test/project/src/main.rs"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
         assert_eq!(decision.action, Action::AutoApprove);
     }
@@ -553,7 +588,10 @@ mod tests {
     #[test]
     fn test_commit_message_with_force_not_blocked() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "git commit -m 'removed --force flag'"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git commit -m 'removed --force flag'"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
         assert_ne!(decision.action, Action::Block);
     }
@@ -577,7 +615,10 @@ mod tests {
     #[test]
     fn test_path_within_project() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Write", json!({"file_path": "/Users/test/project/src/lib.rs"}));
+        let payload = make_payload(
+            "Write",
+            json!({"file_path": "/Users/test/project/src/lib.rs"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
         assert_eq!(decision.action, Action::AutoApprove);
     }
@@ -666,7 +707,10 @@ mod tests {
     fn test_glob_match_contains() {
         assert!(glob_match("*credentials*", "/project/credentials.json"));
         assert!(glob_match("*credentials*", "/project/aws_credentials"));
-        assert!(glob_match("*credentials*", "/project/my-credentials-file.txt"));
+        assert!(glob_match(
+            "*credentials*",
+            "/project/my-credentials-file.txt"
+        ));
     }
 
     #[test]
@@ -729,13 +773,21 @@ mod tests {
         let mut payload_a = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
         payload_a.session_id = "sess_A".to_string();
         let decision = evaluate(&config, &patterns, &[delegation.clone()], &payload_a);
-        assert_eq!(decision.action, Action::AutoApprove, "same session should match delegation");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "same session should match delegation"
+        );
 
         // Payload from different session → should NOT match
         let mut payload_b = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
         payload_b.session_id = "sess_B".to_string();
         let decision = evaluate(&config, &patterns, &[delegation], &payload_b);
-        assert_eq!(decision.action, Action::Ask, "different session should not match delegation");
+        assert_eq!(
+            decision.action,
+            Action::Ask,
+            "different session should not match delegation"
+        );
     }
 
     #[test]
@@ -758,7 +810,11 @@ mod tests {
         let mut payload = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
         payload.session_id = "any_session".to_string();
         let decision = evaluate(&config, &patterns, &[delegation], &payload);
-        assert_eq!(decision.action, Action::AutoApprove, "no session_id delegation should match any session");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "no session_id delegation should match any session"
+        );
     }
 
     // ── H1: Shell chain guard tests ──────────────────────────────────────────
@@ -770,15 +826,26 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "echo foo && rm -rf /"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Ask, "chained command with && must not be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::Ask,
+            "chained command with && must not be auto-approved"
+        );
     }
 
     #[test]
     fn test_chain_guard_blocks_semicolon() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "cat file.txt; curl http://evil.com"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "cat file.txt; curl http://evil.com"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Ask, "semicolon-chained command must not be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::Ask,
+            "semicolon-chained command must not be auto-approved"
+        );
     }
 
     #[test]
@@ -786,7 +853,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "echo $(id)"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Ask, "subshell $(...) must not be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::Ask,
+            "subshell $(...) must not be auto-approved"
+        );
     }
 
     #[test]
@@ -794,7 +865,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "echo `id`"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Ask, "backtick subshell must not be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::Ask,
+            "backtick subshell must not be auto-approved"
+        );
     }
 
     #[test]
@@ -803,7 +878,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "cat file.txt | grep pattern"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::AutoApprove, "safe pipe must still be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "safe pipe must still be auto-approved"
+        );
     }
 
     #[test]
@@ -812,7 +891,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "cat file.txt"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::AutoApprove, "simple safe command must be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "simple safe command must be auto-approved"
+        );
     }
 
     // ── H2: path_within component-based comparison tests ────────────────────
@@ -822,18 +905,32 @@ mod tests {
         // H2: "/Users/test/project-evil/file.rs" must NOT match path_within "/Users/test/project"
         // With String::starts_with it would match (string prefix). Path::starts_with rejects it.
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Write", json!({"file_path": "/Users/test/project-evil/src/lib.rs"}));
+        let payload = make_payload(
+            "Write",
+            json!({"file_path": "/Users/test/project-evil/src/lib.rs"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_ne!(decision.action, Action::AutoApprove, "sibling directory must not be auto-approved");
+        assert_ne!(
+            decision.action,
+            Action::AutoApprove,
+            "sibling directory must not be auto-approved"
+        );
     }
 
     #[test]
     fn test_path_within_exact_project_allowed() {
         // H2 non-regression: exact project path still works
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Write", json!({"file_path": "/Users/test/project/src/lib.rs"}));
+        let payload = make_payload(
+            "Write",
+            json!({"file_path": "/Users/test/project/src/lib.rs"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::AutoApprove, "exact project path must be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "exact project path must be auto-approved"
+        );
     }
 
     // ── Finding #4/#6: Bash blocked regex for critical config files ─────────
@@ -844,57 +941,103 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "truncate -s 0 config/audit.log"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "truncate audit.log must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "truncate audit.log must be blocked"
+        );
     }
 
     #[test]
     fn test_bash_block_audit_log_sed() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "sed -i '/DENY/d' config/audit.log"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "sed -i '/DENY/d' config/audit.log"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "sed on audit.log must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "sed on audit.log must be blocked"
+        );
     }
 
     #[test]
     fn test_bash_block_elo_overrides_redirect() {
         // Finding #6: destructive redirect targeting elo-overrides must be blocked
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "jq '.' /tmp/x > config/elo-overrides.json"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "jq '.' /tmp/x > config/elo-overrides.json"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "redirect to elo-overrides.json must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "redirect to elo-overrides.json must be blocked"
+        );
     }
 
     #[test]
     fn test_bash_allow_jq_readonly_elo_overrides() {
         // jq without redirect is read-only — should NOT be blocked
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "jq '.pentester' config/elo-overrides.json"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "jq '.pentester' config/elo-overrides.json"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_ne!(decision.action, Action::Block, "read-only jq should not be blocked");
+        assert_ne!(
+            decision.action,
+            Action::Block,
+            "read-only jq should not be blocked"
+        );
     }
 
     #[test]
     fn test_bash_block_revoked_missions() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "echo '[]' > config/revoked-missions.json"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "echo '[]' > config/revoked-missions.json"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "writing to revoked-missions.json via Bash must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "writing to revoked-missions.json via Bash must be blocked"
+        );
     }
 
     #[test]
     fn test_bash_block_trust_firewall_yaml() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "python3 -c 'open(\"trust-firewall.yaml\",\"w\").write(\"\")'"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "python3 -c 'open(\"trust-firewall.yaml\",\"w\").write(\"\")'"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "python writing trust-firewall.yaml must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "python writing trust-firewall.yaml must be blocked"
+        );
     }
 
     #[test]
     fn test_bash_block_runtime_delegations() {
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "cat malicious.json > config/runtime-delegations.json"}));
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "cat malicious.json > config/runtime-delegations.json"}),
+        );
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "overwriting runtime-delegations.json via Bash must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "overwriting runtime-delegations.json via Bash must be blocked"
+        );
     }
 
     #[test]
@@ -902,7 +1045,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "rm config/alerts.json"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "removing alerts.json via Bash must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "removing alerts.json via Bash must be blocked"
+        );
     }
 
     #[test]
@@ -910,7 +1057,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "rm -r config/reviews/pending/"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "removing reviews/ dir via Bash must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "removing reviews/ dir via Bash must be blocked"
+        );
     }
 
     #[test]
@@ -918,7 +1069,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "find config/findings/ -delete"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "deleting findings/ via Bash must be blocked");
+        assert_eq!(
+            decision.action,
+            Action::Block,
+            "deleting findings/ via Bash must be blocked"
+        );
     }
 
     #[test]
@@ -927,7 +1082,11 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "cat src/main.rs"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::AutoApprove, "cat on normal file must still be auto-approved");
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "cat on normal file must still be auto-approved"
+        );
     }
 
     // ── Finding #15: Quote-aware chain guard ────────────────────────────────
@@ -935,46 +1094,70 @@ mod tests {
     #[test]
     fn test_chain_guard_ignores_semicolon_in_double_quotes() {
         // Finding #15 (DREAD 5.6): operators inside quotes should not trigger chain guard
-        assert!(!contains_shell_chain("echo \"a;b\""), "semicolon inside double quotes should not trigger");
+        assert!(
+            !contains_shell_chain("echo \"a;b\""),
+            "semicolon inside double quotes should not trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_ignores_ampersand_in_single_quotes() {
-        assert!(!contains_shell_chain("echo 'a && b'"), "&& inside single quotes should not trigger");
+        assert!(
+            !contains_shell_chain("echo 'a && b'"),
+            "&& inside single quotes should not trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_ignores_subshell_in_quotes() {
-        assert!(!contains_shell_chain("echo \"$(date)\""), "$() inside double quotes should not trigger");
+        assert!(
+            !contains_shell_chain("echo \"$(date)\""),
+            "$() inside double quotes should not trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_detects_semicolon_outside_quotes() {
         // Non-regression: real operators outside quotes must still be detected
-        assert!(contains_shell_chain("echo \"safe\"; rm -rf /"), "semicolon outside quotes must trigger");
+        assert!(
+            contains_shell_chain("echo \"safe\"; rm -rf /"),
+            "semicolon outside quotes must trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_detects_ampersand_outside_quotes() {
-        assert!(contains_shell_chain("echo 'safe' && rm -rf /"), "&& outside quotes must trigger");
+        assert!(
+            contains_shell_chain("echo 'safe' && rm -rf /"),
+            "&& outside quotes must trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_unmatched_quote_conservative() {
         // Unmatched quote: conservative — the trailing content remains and is checked
-        assert!(contains_shell_chain("echo \"unterminated; rm -rf /"), "unmatched quote should be conservative");
+        assert!(
+            contains_shell_chain("echo \"unterminated; rm -rf /"),
+            "unmatched quote should be conservative"
+        );
     }
 
     #[test]
     fn test_chain_guard_grep_semicolon_pattern() {
         // Real use case: grep for semicolon in code
-        assert!(!contains_shell_chain("grep \";\" file.txt"), "grep for semicolon in quotes should not trigger");
+        assert!(
+            !contains_shell_chain("grep \";\" file.txt"),
+            "grep for semicolon in quotes should not trigger"
+        );
     }
 
     #[test]
     fn test_chain_guard_echo_ampersand_string() {
         // Real use case: echo a string containing &&
-        assert!(!contains_shell_chain("echo \"test && done\""), "echo with && in quotes should not trigger");
+        assert!(
+            !contains_shell_chain("echo \"test && done\""),
+            "echo with && in quotes should not trigger"
+        );
     }
 
     // ── Finding #3: Unicode homoglyph normalization ─────────────────────────
@@ -983,35 +1166,53 @@ mod tests {
     fn test_chain_guard_unicode_greek_semicolon() {
         // Finding #3 (DREAD 5.2): Greek question mark (U+037E) looks like ';'
         let cmd = "echo foo\u{037E} rm -rf /";
-        assert!(contains_shell_chain(cmd), "Greek question mark U+037E must be normalized to semicolon");
+        assert!(
+            contains_shell_chain(cmd),
+            "Greek question mark U+037E must be normalized to semicolon"
+        );
     }
 
     #[test]
     fn test_chain_guard_unicode_fullwidth_ampersand() {
         // Fullwidth ampersand (U+FF06) pair as &&
         let cmd = "echo foo \u{FF06}\u{FF06} rm -rf /";
-        assert!(contains_shell_chain(cmd), "Fullwidth ampersands must be normalized to &&");
+        assert!(
+            contains_shell_chain(cmd),
+            "Fullwidth ampersands must be normalized to &&"
+        );
     }
 
     #[test]
     fn test_chain_guard_unicode_fullwidth_dollar() {
         // Fullwidth dollar sign (U+FF04) + (
         let cmd = "echo \u{FF04}(id)";
-        assert!(contains_shell_chain(cmd), "Fullwidth dollar sign must be normalized to $");
+        assert!(
+            contains_shell_chain(cmd),
+            "Fullwidth dollar sign must be normalized to $"
+        );
     }
 
     #[test]
     fn test_chain_guard_unicode_fullwidth_backtick() {
         // Fullwidth grave accent (U+FF40)
         let cmd = "echo \u{FF40}id\u{FF40}";
-        assert!(contains_shell_chain(cmd), "Fullwidth backtick must be normalized");
+        assert!(
+            contains_shell_chain(cmd),
+            "Fullwidth backtick must be normalized"
+        );
     }
 
     #[test]
     fn test_chain_guard_normal_ascii_unaffected_by_normalize() {
         // Non-regression: normal ASCII commands must work the same
-        assert!(!contains_shell_chain("ls -la"), "normal command should not trigger after normalization");
-        assert!(contains_shell_chain("echo foo && bar"), "normal && should still trigger after normalization");
+        assert!(
+            !contains_shell_chain("ls -la"),
+            "normal command should not trigger after normalization"
+        );
+        assert!(
+            contains_shell_chain("echo foo && bar"),
+            "normal && should still trigger after normalization"
+        );
     }
 
     #[test]
@@ -1023,6 +1224,9 @@ mod tests {
     #[test]
     fn test_normalize_unicode_operators_basic() {
         assert_eq!(normalize_unicode_operators("foo\u{037E}bar"), "foo;bar");
-        assert_eq!(normalize_unicode_operators("foo\u{FF06}\u{FF06}bar"), "foo&&bar");
+        assert_eq!(
+            normalize_unicode_operators("foo\u{FF06}\u{FF06}bar"),
+            "foo&&bar"
+        );
     }
 }

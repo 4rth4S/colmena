@@ -131,8 +131,7 @@ pub fn log_elo_event(log_path: &Path, event: &EloEvent) -> Result<()> {
         review_id: event.review_id.clone(),
     };
 
-    let line = serde_json::to_string(&stored)
-        .context("serializing ELO event")?;
+    let line = serde_json::to_string(&stored).context("serializing ELO event")?;
 
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -190,10 +189,7 @@ const REHABILITATION_ACTIVITY_WINDOW_DAYS: i64 = 30;
 /// negative events to decay.
 pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -> AgentRating {
     let now = Utc::now();
-    let agent_events: Vec<&StoredEloEvent> = events
-        .iter()
-        .filter(|e| e.agent == agent)
-        .collect();
+    let agent_events: Vec<&StoredEloEvent> = events.iter().filter(|e| e.agent == agent).collect();
 
     let mut elo = baseline as i32;
     let mut trend_7d: i32 = 0;
@@ -201,9 +197,9 @@ pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -
     let mut last_active: Option<DateTime<Utc>> = None;
 
     // Track whether agent has recent positive activity
-    let has_recent_positive = agent_events.iter().any(|e| {
-        e.delta > 0 && (now - e.ts) < Duration::days(REHABILITATION_ACTIVITY_WINDOW_DAYS)
-    });
+    let has_recent_positive = agent_events
+        .iter()
+        .any(|e| e.delta > 0 && (now - e.ts) < Duration::days(REHABILITATION_ACTIVITY_WINDOW_DAYS));
 
     // Calculate ELO without decay to get the "undecayed floor"
     let mut elo_no_decay = baseline as i32;
@@ -258,10 +254,8 @@ pub fn leaderboard(events: &[StoredEloEvent], baselines: &[(String, u32)]) -> Ve
         .collect();
 
     // Collect all unique agents from both baselines and events
-    let mut agents: std::collections::HashSet<String> = baselines
-        .iter()
-        .map(|(name, _)| name.clone())
-        .collect();
+    let mut agents: std::collections::HashSet<String> =
+        baselines.iter().map(|(name, _)| name.clone()).collect();
     for event in events {
         agents.insert(event.agent.clone());
     }
@@ -342,8 +336,18 @@ mod tests {
     fn test_calculate_rating_with_events() {
         let now = Utc::now();
         let events = vec![
-            make_stored_event("coder", EloEventType::Reviewed, 10, now - Duration::hours(1)),
-            make_stored_event("coder", EloEventType::FindingAgainst, -5, now - Duration::hours(2)),
+            make_stored_event(
+                "coder",
+                EloEventType::Reviewed,
+                10,
+                now - Duration::hours(1),
+            ),
+            make_stored_event(
+                "coder",
+                EloEventType::FindingAgainst,
+                -5,
+                now - Duration::hours(2),
+            ),
         ];
 
         let rating = calculate_rating("coder", &events, 1000);
@@ -381,7 +385,12 @@ mod tests {
         let now = Utc::now();
         let events = vec![
             // 60-day-old event → decay 0.4 → 10 * 0.4 = 4
-            make_stored_event("coder", EloEventType::Reviewed, 10, now - Duration::days(60)),
+            make_stored_event(
+                "coder",
+                EloEventType::Reviewed,
+                10,
+                now - Duration::days(60),
+            ),
         ];
 
         let rating = calculate_rating("coder", &events, 1000);
@@ -397,9 +406,19 @@ mod tests {
     fn test_leaderboard() {
         let now = Utc::now();
         let events = vec![
-            make_stored_event("alice", EloEventType::Reviewed, 20, now - Duration::hours(1)),
+            make_stored_event(
+                "alice",
+                EloEventType::Reviewed,
+                20,
+                now - Duration::hours(1),
+            ),
             make_stored_event("bob", EloEventType::Reviewed, -10, now - Duration::hours(1)),
-            make_stored_event("charlie", EloEventType::Reviewed, 5, now - Duration::hours(1)),
+            make_stored_event(
+                "charlie",
+                EloEventType::Reviewed,
+                5,
+                now - Duration::hours(1),
+            ),
         ];
 
         let baselines = vec![
@@ -411,9 +430,9 @@ mod tests {
         let board = leaderboard(&events, &baselines);
 
         assert_eq!(board.len(), 3);
-        assert_eq!(board[0].agent, "alice");  // 1020
+        assert_eq!(board[0].agent, "alice"); // 1020
         assert_eq!(board[1].agent, "charlie"); // 1005
-        assert_eq!(board[2].agent, "bob");     // 990
+        assert_eq!(board[2].agent, "bob"); // 990
         assert_eq!(board[0].elo, 1020);
         assert_eq!(board[1].elo, 1005);
         assert_eq!(board[2].elo, 990);
@@ -422,8 +441,8 @@ mod tests {
     #[test]
     fn test_author_delta_high_score() {
         // score >= 8 → +(score - 7) * 3
-        assert_eq!(author_delta(8.0), 3);  // (8-7)*3 = 3
-        assert_eq!(author_delta(9.0), 6);  // (9-7)*3 = 6
+        assert_eq!(author_delta(8.0), 3); // (8-7)*3 = 3
+        assert_eq!(author_delta(9.0), 6); // (9-7)*3 = 6
         assert_eq!(author_delta(10.0), 9); // (10-7)*3 = 9
     }
 
@@ -439,7 +458,7 @@ mod tests {
     #[test]
     fn test_author_delta_low_score() {
         // score < 5 → -(6 - score) * 4
-        assert_eq!(author_delta(4.0), -8);  // -(6-4)*4 = -8
+        assert_eq!(author_delta(4.0), -8); // -(6-4)*4 = -8
         assert_eq!(author_delta(2.0), -16); // -(6-2)*4 = -16
         assert_eq!(author_delta(1.0), -20); // -(6-1)*4 = -20
     }
@@ -464,7 +483,12 @@ mod tests {
             // 100-day-old negative event: -50 * 0.1 = -5 (decayed)
             // Without cap: 1000 - 5 = 995
             // With cap (undecayed): 1000 - 50 = 950
-            make_stored_event("bad-agent", EloEventType::FindingAgainst, -50, now - Duration::days(100)),
+            make_stored_event(
+                "bad-agent",
+                EloEventType::FindingAgainst,
+                -50,
+                now - Duration::days(100),
+            ),
         ];
 
         let rating = calculate_rating("bad-agent", &events, 1000);
@@ -485,9 +509,19 @@ mod tests {
         let now = Utc::now();
         let events = vec![
             // Old negative: -50 * 0.1 = -5 (decayed)
-            make_stored_event("improving-agent", EloEventType::FindingAgainst, -50, now - Duration::days(100)),
+            make_stored_event(
+                "improving-agent",
+                EloEventType::FindingAgainst,
+                -50,
+                now - Duration::days(100),
+            ),
             // Recent positive: +10 * 1.0 = +10 (no decay, within 7 days)
-            make_stored_event("improving-agent", EloEventType::Reviewed, 10, now - Duration::days(1)),
+            make_stored_event(
+                "improving-agent",
+                EloEventType::Reviewed,
+                10,
+                now - Duration::days(1),
+            ),
         ];
 
         let rating = calculate_rating("improving-agent", &events, 1000);
@@ -506,7 +540,10 @@ mod tests {
         // Agent with no events — baseline unchanged, no cap needed
         let events: Vec<StoredEloEvent> = vec![];
         let rating = calculate_rating("new-agent", &events, 1000);
-        assert_eq!(rating.elo, 1000, "Agent with no events should stay at baseline");
+        assert_eq!(
+            rating.elo, 1000,
+            "Agent with no events should stay at baseline"
+        );
     }
 
     #[test]
@@ -514,9 +551,24 @@ mod tests {
         // Agent with multiple old negative events, no positive activity at all
         let now = Utc::now();
         let events = vec![
-            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -30, now - Duration::days(95)),
-            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -20, now - Duration::days(100)),
-            make_stored_event("repeat-offender", EloEventType::FindingAgainst, -10, now - Duration::days(120)),
+            make_stored_event(
+                "repeat-offender",
+                EloEventType::FindingAgainst,
+                -30,
+                now - Duration::days(95),
+            ),
+            make_stored_event(
+                "repeat-offender",
+                EloEventType::FindingAgainst,
+                -20,
+                now - Duration::days(100),
+            ),
+            make_stored_event(
+                "repeat-offender",
+                EloEventType::FindingAgainst,
+                -10,
+                now - Duration::days(120),
+            ),
         ];
 
         let rating = calculate_rating("repeat-offender", &events, 1000);

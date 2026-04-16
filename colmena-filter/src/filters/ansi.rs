@@ -34,8 +34,7 @@ impl OutputFilter for AnsiStripFilter {
         let stderr_changed = new_stderr.len() != stderr.len();
         let modified = stdout_changed || stderr_changed;
 
-        let chars_removed =
-            (stdout.len() - new_stdout.len()) + (stderr.len() - new_stderr.len());
+        let chars_removed = (stdout.len() - new_stdout.len()) + (stderr.len() - new_stderr.len());
 
         FilterResult {
             stdout: new_stdout.into_owned(),

@@ -1,15 +1,18 @@
-use crate::calibrate::{TrustThresholds, determine_tier};
+use crate::calibrate::{determine_tier, TrustThresholds};
 use crate::config::Action;
 use crate::delegate::{DelegationConditions, RuntimeDelegation};
 use crate::elo::AgentRating;
-use crate::findings::{FindingsFilter, load_findings};
-use crate::library::{Role, Pattern};
-pub use crate::pattern_scaffold::{scaffold_pattern, PatternTopology, suggest_pattern_for_mission, PatternSuggestion, map_topology_roles, SlotRoleType, SlotDesc};
-use crate::templates::{RoleCategory, detect_category, generate_role_yaml, generate_role_prompt};
+use crate::findings::{load_findings, FindingsFilter};
+use crate::library::{Pattern, Role};
+pub use crate::pattern_scaffold::{
+    map_topology_roles, scaffold_pattern, suggest_pattern_for_mission, PatternSuggestion,
+    PatternTopology, SlotDesc, SlotRoleType,
+};
+use crate::templates::{detect_category, generate_role_prompt, generate_role_yaml, RoleCategory};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -101,10 +104,9 @@ pub struct ReviewerLead {
 
 /// Stop words to filter from mission text
 const STOP_WORDS: &[&str] = &[
-    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for",
-    "of", "with", "by", "from", "is", "are", "was", "were", "be", "been",
-    "being", "have", "has", "had", "do", "does", "did", "will", "would",
-    "could", "should", "may", "might", "can", "this", "that", "these",
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+    "from", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does",
+    "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these",
     "those", "it", "its",
 ];
 
@@ -125,11 +127,7 @@ fn keyword_overlap(tokens_a: &[String], tokens_b: &[String]) -> usize {
 // ── Pattern Scoring ───────────────────────────────────────────────────────────
 
 /// Select and rank patterns for a mission
-pub fn select_patterns(
-    mission: &str,
-    patterns: &[Pattern],
-    roles: &[Role],
-) -> Vec<Recommendation> {
+pub fn select_patterns(mission: &str, patterns: &[Pattern], roles: &[Role]) -> Vec<Recommendation> {
     let mission_tokens = tokenize(mission);
     if mission_tokens.is_empty() {
         return Vec::new();
@@ -164,15 +162,16 @@ pub fn select_patterns(
             let mut spec_hits = 0usize;
             for role_id in pattern.roles_suggested.all_role_ids() {
                 if let Some(role) = role_map.get(role_id.as_str()) {
-                    let spec_tokens: Vec<String> = role.specializations.iter()
+                    let spec_tokens: Vec<String> = role
+                        .specializations
+                        .iter()
                         .flat_map(|s| tokenize(s))
                         .collect();
                     spec_hits += keyword_overlap(&mission_tokens, &spec_tokens);
                 }
             }
 
-            let score = (when_hits.len() as f64) * 2.0
-                + (spec_hits as f64) * 1.5
+            let score = (when_hits.len() as f64) * 2.0 + (spec_hits as f64) * 1.5
                 - (anti_hits.len() as f64) * 3.0;
 
             if score <= 0.0 {
@@ -193,7 +192,11 @@ pub fn select_patterns(
         })
         .collect();
 
-    recommendations.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    recommendations.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     recommendations.truncate(3);
     recommendations
 }
@@ -225,25 +228,44 @@ fn build_role_assignments(
 /// Detect mission keywords that don't match any role specialization
 pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
     let mission_tokens = tokenize(mission);
-    let all_specs: Vec<String> = roles.iter()
+    let all_specs: Vec<String> = roles
+        .iter()
         .flat_map(|r| r.specializations.iter())
         .flat_map(|s| tokenize(s))
         .collect();
 
     // Common security keywords that might indicate a missing role
     let domain_keywords = [
-        "cloud", "aws", "gcp", "azure", "kubernetes", "k8s", "docker",
-        "mobile", "ios", "android", "flutter", "react", "frontend",
-        "blockchain", "smart_contract", "defi", "infrastructure",
-        "network", "wireless", "iot", "firmware", "hardware",
-        "social_engineering", "phishing", "red_team",
+        "cloud",
+        "aws",
+        "gcp",
+        "azure",
+        "kubernetes",
+        "k8s",
+        "docker",
+        "mobile",
+        "ios",
+        "android",
+        "flutter",
+        "react",
+        "frontend",
+        "blockchain",
+        "smart_contract",
+        "defi",
+        "infrastructure",
+        "network",
+        "wireless",
+        "iot",
+        "firmware",
+        "hardware",
+        "social_engineering",
+        "phishing",
+        "red_team",
     ];
 
     mission_tokens
         .iter()
-        .filter(|t| {
-            domain_keywords.contains(&t.as_str()) && !all_specs.contains(t)
-        })
+        .filter(|t| domain_keywords.contains(&t.as_str()) && !all_specs.contains(t))
         .cloned()
         .collect::<Vec<_>>()
         .into_iter()
@@ -314,7 +336,9 @@ pub fn generate_mission(
         recommendation.pattern_id,
         recommendation.pattern_name,
         Utc::now().to_rfc3339(),
-        recommendation.role_assignments.iter()
+        recommendation
+            .role_assignments
+            .iter()
             .map(|a| format!("  - role: {}\n    slot: {}", a.role_id, a.slot))
             .collect::<Vec<_>>()
             .join("\n")
@@ -338,14 +362,8 @@ pub fn generate_mission(
             ))?;
 
         // Generate delegations from role's tools_allowed + permissions
-        let role_delegations = generate_role_delegations(
-            role,
-            &mission_name,
-            &mission_dir,
-            session_id,
-            now,
-            ttl,
-        );
+        let role_delegations =
+            generate_role_delegations(role, &mission_name, &mission_dir, session_id, now, ttl);
         delegations.extend(role_delegations);
 
         // Load the system prompt
@@ -387,7 +405,9 @@ pub fn generate_mission(
                 assignment.icon,
                 recommendation.pattern_name,
                 assignment.slot,
-                recommendation.role_assignments.iter()
+                recommendation
+                    .role_assignments
+                    .iter()
                     .map(|a| format!("- {} {} ({})", a.icon, a.role_name, a.slot))
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -408,7 +428,9 @@ pub fn generate_mission(
                 assignment.icon,
                 recommendation.pattern_name,
                 assignment.slot,
-                recommendation.role_assignments.iter()
+                recommendation
+                    .role_assignments
+                    .iter()
                     .map(|a| format!("- {} {} ({})", a.icon, a.role_name, a.slot))
                     .collect::<Vec<_>>()
                     .join("\n"),
@@ -501,9 +523,13 @@ fn generate_role_delegations(
                         let path_within = if perms.path_within.is_empty() {
                             None
                         } else {
-                            Some(perms.path_within.iter()
-                                .map(|p| p.replace("${MISSION_DIR}", &mission_dir_str))
-                                .collect())
+                            Some(
+                                perms
+                                    .path_within
+                                    .iter()
+                                    .map(|p| p.replace("${MISSION_DIR}", &mission_dir_str))
+                                    .collect(),
+                            )
                         };
                         Some(DelegationConditions {
                             bash_pattern: None,
@@ -541,23 +567,32 @@ fn generate_role_delegations(
 fn format_pre_approved_ops(role: &Role) -> String {
     let mut lines = vec!["## Pre-Approved Operations".to_string()];
     lines.push(String::new());
-    lines.push("The following operations are pre-approved for your role in this mission:".to_string());
+    lines.push(
+        "The following operations are pre-approved for your role in this mission:".to_string(),
+    );
 
     for tool in &role.tools_allowed {
         if tool == "Bash" {
             if let Some(ref perms) = role.permissions {
                 if !perms.bash_patterns.is_empty() {
-                    let patterns: Vec<String> = perms.bash_patterns.iter()
+                    let patterns: Vec<String> = perms
+                        .bash_patterns
+                        .iter()
                         .map(|p| format!("`{}`", p))
                         .collect();
-                    lines.push(format!("- **Bash**: commands matching {}", patterns.join(", ")));
+                    lines.push(format!(
+                        "- **Bash**: commands matching {}",
+                        patterns.join(", ")
+                    ));
                     continue;
                 }
             }
             lines.push("- **Bash**: all commands".to_string());
         } else {
             let scope = if let Some(ref perms) = role.permissions {
-                if !perms.path_within.is_empty() && ["Read", "Write", "Edit", "Glob", "Grep"].contains(&tool.as_str()) {
+                if !perms.path_within.is_empty()
+                    && ["Read", "Write", "Edit", "Glob", "Grep"].contains(&tool.as_str())
+                {
                     format!(" (within: {})", perms.path_within.join(", "))
                 } else {
                     String::new()
@@ -590,10 +625,8 @@ fn assign_reviewer_lead(
         return None; // Single-agent mission: no review needed
     }
 
-    let rating_map: HashMap<&str, &AgentRating> = elo_ratings
-        .iter()
-        .map(|r| (r.agent.as_str(), r))
-        .collect();
+    let rating_map: HashMap<&str, &AgentRating> =
+        elo_ratings.iter().map(|r| (r.agent.as_str(), r)).collect();
 
     // Find highest ELO among mission roles
     let mut best: Option<(&RoleAssignment, i32, u32)> = None;
@@ -615,7 +648,10 @@ fn assign_reviewer_lead(
 
     // If all agents have the same ELO (uncalibrated), pick the one with highest trust level
     let all_same_elo = recommendation.role_assignments.iter().all(|a| {
-        let elo = rating_map.get(a.role_id.as_str()).map(|r| r.elo).unwrap_or(1500);
+        let elo = rating_map
+            .get(a.role_id.as_str())
+            .map(|r| r.elo)
+            .unwrap_or(1500);
         let best_elo = best.as_ref().map(|(_, e, _)| *e).unwrap_or(1500);
         elo == best_elo
     });
@@ -736,9 +772,15 @@ pub fn detect_prompt_review_target(mission: &str, roles: &[Role]) -> Option<Stri
     // Patterns: "{keyword} {role} {suffix}" or "{prefix} {role} {suffix}"
     let patterns: &[(&[&str], &[&str])] = &[
         // "review {role} prompt"
-        (&["review"], &["prompt", "instructions", "approach", "system"]),
+        (
+            &["review"],
+            &["prompt", "instructions", "approach", "system"],
+        ),
         // "improve {role} instructions"
-        (&["improve", "refine", "enhance", "fix", "update"], &["prompt", "instructions", "approach"]),
+        (
+            &["improve", "refine", "enhance", "fix", "update"],
+            &["prompt", "instructions", "approach"],
+        ),
         // "why is {role} scoring low"
         (&["why"], &["scoring", "low", "underperforming", "failing"]),
     ];
@@ -779,10 +821,10 @@ pub fn generate_prompt_review_context(
     elo_ratings: &[AgentRating],
 ) -> Result<String> {
     // Find the target role
-    let role = roles.iter().find(|r| r.id == target_role_id)
-        .ok_or_else(|| anyhow::anyhow!(
-            "Target role '{}' not found in library", target_role_id
-        ))?;
+    let role = roles
+        .iter()
+        .find(|r| r.id == target_role_id)
+        .ok_or_else(|| anyhow::anyhow!("Target role '{}' not found in library", target_role_id))?;
 
     // Load the target role's current system prompt
     let current_prompt = crate::library::load_prompt(library_dir, &role.system_prompt_ref)
@@ -817,9 +859,7 @@ pub fn generate_prompt_review_context(
         ..Default::default()
     };
     let findings_section = match load_findings(&findings_dir, &filter) {
-        Ok(records) if records.is_empty() => {
-            "No findings yet for this agent.".to_string()
-        }
+        Ok(records) if records.is_empty() => "No findings yet for this agent.".to_string(),
         Ok(records) => {
             let mut lines = Vec::new();
             for record in &records {
@@ -890,7 +930,10 @@ pub fn scaffold_role(
     if id.is_empty() || id.len() > 64 {
         anyhow::bail!("Role ID must be 1-64 characters, got {}", id.len());
     }
-    if !id.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !id
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         anyhow::bail!(
             "Role ID '{}' contains invalid characters — only alphanumeric, dash, underscore allowed",
             id
@@ -927,10 +970,10 @@ pub fn scaffold_role(
 /// Complexity level for a mission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Complexity {
-    Trivial,  // 1 agent — don't use Colmena
-    Small,    // 2 agents — marginal benefit
-    Medium,   // 3-4 agents — sweet spot for Colmena
-    Large,    // 5-6 agents — full orchestration
+    Trivial, // 1 agent — don't use Colmena
+    Small,   // 2 agents — marginal benefit
+    Medium,  // 3-4 agents — sweet spot for Colmena
+    Large,   // 5-6 agents — full orchestration
 }
 
 impl Complexity {
@@ -959,19 +1002,119 @@ pub struct MissionSuggestion {
 
 /// Domain keywords for mission sizing.
 const DOMAIN_KEYWORDS: &[(&str, &[&str])] = &[
-    ("code", &["implement", "develop", "build", "feature", "code", "refactor", "migrate", "write", "function", "module", "class", "method"]),
-    ("testing", &["test", "coverage", "validate", "edge", "regression", "spec", "assertion", "mock", "fixture"]),
-    ("security", &["vulnerability", "pentest", "audit", "owasp", "cve", "exploit", "injection", "xss", "csrf", "authentication"]),
-    ("documentation", &["docs", "document", "readme", "guide", "changelog", "api_docs", "tutorial", "comment"]),
-    ("architecture", &["design", "architecture", "tradeoff", "adr", "interface", "api_design", "schema", "diagram"]),
-    ("review", &["review", "quality", "standards", "best_practices", "lint", "style", "convention"]),
-    ("operations", &["deploy", "cicd", "pipeline", "monitor", "infrastructure", "docker", "kubernetes", "terraform"]),
+    (
+        "code",
+        &[
+            "implement",
+            "develop",
+            "build",
+            "feature",
+            "code",
+            "refactor",
+            "migrate",
+            "write",
+            "function",
+            "module",
+            "class",
+            "method",
+        ],
+    ),
+    (
+        "testing",
+        &[
+            "test",
+            "coverage",
+            "validate",
+            "edge",
+            "regression",
+            "spec",
+            "assertion",
+            "mock",
+            "fixture",
+        ],
+    ),
+    (
+        "security",
+        &[
+            "vulnerability",
+            "pentest",
+            "audit",
+            "owasp",
+            "cve",
+            "exploit",
+            "injection",
+            "xss",
+            "csrf",
+            "authentication",
+        ],
+    ),
+    (
+        "documentation",
+        &[
+            "docs",
+            "document",
+            "readme",
+            "guide",
+            "changelog",
+            "api_docs",
+            "tutorial",
+            "comment",
+        ],
+    ),
+    (
+        "architecture",
+        &[
+            "design",
+            "architecture",
+            "tradeoff",
+            "adr",
+            "interface",
+            "api_design",
+            "schema",
+            "diagram",
+        ],
+    ),
+    (
+        "review",
+        &[
+            "review",
+            "quality",
+            "standards",
+            "best_practices",
+            "lint",
+            "style",
+            "convention",
+        ],
+    ),
+    (
+        "operations",
+        &[
+            "deploy",
+            "cicd",
+            "pipeline",
+            "monitor",
+            "infrastructure",
+            "docker",
+            "kubernetes",
+            "terraform",
+        ],
+    ),
 ];
 
 /// Keywords that bump complexity (risk/scope indicators).
 const COMPLEXITY_BUMPERS: &[&str] = &[
-    "production", "migration", "security", "compliance", "critical", "sensitive",
-    "full", "comprehensive", "end-to-end", "complete", "entire", "all",
+    "production",
+    "migration",
+    "security",
+    "compliance",
+    "critical",
+    "sensitive",
+    "full",
+    "comprehensive",
+    "end-to-end",
+    "complete",
+    "entire",
+    "all",
 ];
 
 /// Keywords that reduce complexity (simplicity indicators).
@@ -1010,15 +1153,21 @@ pub fn suggest_mission_size(
     let mut total_keywords = 0usize;
 
     for (domain, keywords) in DOMAIN_KEYWORDS {
-        let hits: usize = keywords.iter().filter(|kw| {
-            let kw_lower = kw.to_lowercase();
-            let variants = vec![
-                kw_lower.clone(),
-                kw_lower.replace('_', " "),
-                kw_lower.replace('_', "-"),
-            ];
-            variants.iter().any(|v| desc_words.iter().any(|w| w.contains(v.as_str())) || desc_lower.contains(v.as_str()))
-        }).count();
+        let hits: usize = keywords
+            .iter()
+            .filter(|kw| {
+                let kw_lower = kw.to_lowercase();
+                let variants = [
+                    kw_lower.clone(),
+                    kw_lower.replace('_', " "),
+                    kw_lower.replace('_', "-"),
+                ];
+                variants.iter().any(|v| {
+                    desc_words.iter().any(|w| w.contains(v.as_str()))
+                        || desc_lower.contains(v.as_str())
+                })
+            })
+            .count();
         total_keywords += keywords.len();
         if hits > 0 {
             domains_detected.push(domain.to_string());
@@ -1030,8 +1179,14 @@ pub fn suggest_mission_size(
     let mut complexity_score: i32 = domains_detected.len() as i32;
 
     // 3. Apply bumpers and reducers
-    let bumps: usize = COMPLEXITY_BUMPERS.iter().filter(|kw| desc_lower.contains(**kw)).count();
-    let reduces: usize = COMPLEXITY_REDUCERS.iter().filter(|kw| desc_lower.contains(**kw)).count();
+    let bumps: usize = COMPLEXITY_BUMPERS
+        .iter()
+        .filter(|kw| desc_lower.contains(**kw))
+        .count();
+    let reduces: usize = COMPLEXITY_REDUCERS
+        .iter()
+        .filter(|kw| desc_lower.contains(**kw))
+        .count();
     complexity_score += bumps as i32;
     complexity_score -= reduces as i32;
 
@@ -1057,7 +1212,9 @@ pub fn suggest_mission_size(
     let (suggested_pattern, suggested_roles) = if needs_colmena {
         let recs = select_patterns(description, patterns, roles);
         if let Some(top) = recs.first() {
-            let roles_list: Vec<String> = top.role_assignments.iter()
+            let roles_list: Vec<String> = top
+                .role_assignments
+                .iter()
                 .map(|a| a.role_id.clone())
                 .collect();
             (Some(top.pattern_id.clone()), roles_list)
@@ -1143,34 +1300,50 @@ pub fn spawn_mission(
         pattern_auto_created = true;
 
         // Load the newly created pattern
-        let content = std::fs::read_to_string(&pattern_path)
-            .with_context(|| format!("Failed to read auto-created pattern: {}", pattern_path.display()))?;
-        let pattern: crate::library::Pattern = serde_yml::from_str(&content)
-            .with_context(|| format!("Failed to parse auto-created pattern: {}", pattern_path.display()))?;
+        let content = std::fs::read_to_string(&pattern_path).with_context(|| {
+            format!(
+                "Failed to read auto-created pattern: {}",
+                pattern_path.display()
+            )
+        })?;
+        let pattern: crate::library::Pattern =
+            serde_yml::from_str(&content).with_context(|| {
+                format!(
+                    "Failed to parse auto-created pattern: {}",
+                    pattern_path.display()
+                )
+            })?;
 
         // Use map_topology_roles to assign real roles to auto-created pattern slots
         // (scaffold generates generic IDs like "agent_lead" — we need real library roles)
         let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
         let role_ids: Vec<String> = roles.iter().map(|r| r.id.clone()).collect();
-        let role_specs: HashMap<String, Vec<String>> = roles.iter()
+        let role_specs: HashMap<String, Vec<String>> = roles
+            .iter()
             .map(|r| (r.id.clone(), r.specializations.clone()))
             .collect();
 
-        let topology = pattern.topology.parse::<PatternTopology>()
+        let topology = pattern
+            .topology
+            .parse::<PatternTopology>()
             .unwrap_or(PatternTopology::Hierarchical);
         let slot_assignments = map_topology_roles(topology, mission, &role_ids, &role_specs);
 
-        let role_assignments: Vec<RoleAssignment> = slot_assignments.iter().map(|(slot, rid)| {
-            let (name, icon) = role_map.get(rid.as_str())
-                .map(|r| (r.name.clone(), r.icon.clone()))
-                .unwrap_or_else(|| (rid.clone(), "?".to_string()));
-            RoleAssignment {
-                slot: slot.clone(),
-                role_id: rid.clone(),
-                role_name: name,
-                icon,
-            }
-        }).collect();
+        let role_assignments: Vec<RoleAssignment> = slot_assignments
+            .iter()
+            .map(|(slot, rid)| {
+                let (name, icon) = role_map
+                    .get(rid.as_str())
+                    .map(|r| (r.name.clone(), r.icon.clone()))
+                    .unwrap_or_else(|| (rid.clone(), "?".to_string()));
+                RoleAssignment {
+                    slot: slot.clone(),
+                    role_id: rid.clone(),
+                    role_name: name,
+                    icon,
+                }
+            })
+            .collect();
 
         auto_created_pattern = Some(pattern.clone());
         Recommendation {
@@ -1201,7 +1374,8 @@ pub fn spawn_mission(
         config_dir,
     )?;
 
-    let mission_name = mission_config.mission_dir
+    let mission_name = mission_config
+        .mission_dir
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
@@ -1226,22 +1400,29 @@ pub fn spawn_mission(
     }
 
     // 5. Format delegation CLI commands
-    let delegation_commands: Vec<String> = mission_config.delegations.iter().map(|d| {
-        let mut cmd = format!("colmena delegate add --tool {}", d.tool);
-        if let Some(ref agent) = d.agent_id {
-            cmd.push_str(&format!(" --agent {}", agent));
-        }
-        if let Some(ref conds) = d.conditions {
-            if let Some(ref bp) = conds.bash_pattern {
-                cmd.push_str(&format!(" --bash-pattern '{}'", bp));
+    let delegation_commands: Vec<String> = mission_config
+        .delegations
+        .iter()
+        .map(|d| {
+            let mut cmd = format!("colmena delegate add --tool {}", d.tool);
+            if let Some(ref agent) = d.agent_id {
+                cmd.push_str(&format!(" --agent {}", agent));
             }
-        }
-        cmd.push_str(" --ttl 8");
-        if let Some(ref sid) = session_id.map(|s| s.to_string()).or_else(|| d.session_id.clone()) {
-            cmd.push_str(&format!(" --session {}", sid));
-        }
-        cmd
-    }).collect();
+            if let Some(ref conds) = d.conditions {
+                if let Some(ref bp) = conds.bash_pattern {
+                    cmd.push_str(&format!(" --bash-pattern '{}'", bp));
+                }
+            }
+            cmd.push_str(" --ttl 8");
+            if let Some(ref sid) = session_id
+                .map(|s| s.to_string())
+                .or_else(|| d.session_id.clone())
+            {
+                cmd.push_str(&format!(" --session {}", sid));
+            }
+            cmd
+        })
+        .collect();
 
     // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
     let _ = &auto_created_pattern; // suppress unused warning
@@ -1340,7 +1521,7 @@ mod tests {
         when_not_to_use: Vec<&str>,
         roles: Vec<(&str, &str)>,
     ) -> Pattern {
-        use crate::library::{RolesSuggested, RoleSlot};
+        use crate::library::{RoleSlot, RolesSuggested};
         let mut slots = std::collections::HashMap::new();
         for (slot, role_id) in roles {
             slots.insert(slot.to_string(), RoleSlot::Single(role_id.to_string()));
@@ -1368,8 +1549,16 @@ mod tests {
     #[test]
     fn test_select_patterns_audit_mission() {
         let roles = vec![
-            make_role("security_architect", "Security Architect", vec!["audit", "compliance", "pci"]),
-            make_role("auditor", "Auditor", vec!["audit", "compliance", "pci_dss", "payments"]),
+            make_role(
+                "security_architect",
+                "Security Architect",
+                vec!["audit", "compliance", "pci"],
+            ),
+            make_role(
+                "auditor",
+                "Auditor",
+                vec!["audit", "compliance", "pci_dss", "payments"],
+            ),
             make_role("researcher", "Researcher", vec!["research", "analysis"]),
         ];
 
@@ -1382,10 +1571,7 @@ mod tests {
                     "Compliance checks with multiple specialists",
                 ],
                 vec!["Simple single-step tasks"],
-                vec![
-                    ("oracle", "security_architect"),
-                    ("worker1", "auditor"),
-                ],
+                vec![("oracle", "security_architect"), ("worker1", "auditor")],
             ),
             make_pattern(
                 "plan_then_execute",
@@ -1395,10 +1581,7 @@ mod tests {
                     "Compliance and audit workflows",
                 ],
                 vec![],
-                vec![
-                    ("planner", "security_architect"),
-                    ("executor", "auditor"),
-                ],
+                vec![("planner", "security_architect"), ("executor", "auditor")],
             ),
             make_pattern(
                 "single_agent",
@@ -1447,7 +1630,11 @@ mod tests {
     fn test_detect_role_gaps() {
         // Roles have no cloud/aws specializations
         let roles = vec![
-            make_role("security_architect", "Security Architect", vec!["threat_modeling", "code_review"]),
+            make_role(
+                "security_architect",
+                "Security Architect",
+                vec!["threat_modeling", "code_review"],
+            ),
             make_role("auditor", "Auditor", vec!["compliance", "pci_dss"]),
         ];
 
@@ -1456,8 +1643,16 @@ mod tests {
         gaps.sort();
 
         // "cloud" and "aws" should be detected as gaps
-        assert!(gaps.contains(&"cloud".to_string()), "expected 'cloud' in gaps, got: {:?}", gaps);
-        assert!(gaps.contains(&"aws".to_string()), "expected 'aws' in gaps, got: {:?}", gaps);
+        assert!(
+            gaps.contains(&"cloud".to_string()),
+            "expected 'cloud' in gaps, got: {:?}",
+            gaps
+        );
+        assert!(
+            gaps.contains(&"aws".to_string()),
+            "expected 'aws' in gaps, got: {:?}",
+            gaps
+        );
     }
 
     // ── 4. scaffold_role ─────────────────────────────────────────────────────
@@ -1476,8 +1671,16 @@ mod tests {
         .expect("scaffold_role should succeed");
 
         // Files should exist
-        assert!(role_path.exists(), "role yaml should exist at {:?}", role_path);
-        assert!(prompt_path.exists(), "prompt md should exist at {:?}", prompt_path);
+        assert!(
+            role_path.exists(),
+            "role yaml should exist at {:?}",
+            role_path
+        );
+        assert!(
+            prompt_path.exists(),
+            "prompt md should exist at {:?}",
+            prompt_path
+        );
 
         // role yaml should be valid YAML that deserializes as a Role
         let yaml_contents = std::fs::read_to_string(&role_path).unwrap();
@@ -1545,7 +1748,7 @@ mod tests {
             &library_dir,
             &missions_dir,
             None,
-            &[], // no ELO ratings — uncalibrated
+            &[],  // no ELO ratings — uncalibrated
             None, // no config_dir — no prompt review detection
         )
         .expect("generate_mission should succeed");
@@ -1563,7 +1766,11 @@ mod tests {
         assert!(yaml_contents.contains("oracle_workers"));
 
         // Agent CLAUDE.md files should be created
-        assert_eq!(mission_config.agent_configs.len(), 2, "should have 2 agent configs");
+        assert_eq!(
+            mission_config.agent_configs.len(),
+            2,
+            "should have 2 agent configs"
+        );
         for agent in &mission_config.agent_configs {
             assert!(
                 agent.claude_md_path.exists(),
@@ -1632,7 +1839,11 @@ mod tests {
 
         // First create succeeds
         let result = scaffold_role("test-role", "Test", None, tmp.path());
-        assert!(result.is_ok(), "first scaffold should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "first scaffold should succeed: {:?}",
+            result
+        );
 
         // Second create fails (already exists)
         let result = scaffold_role("test-role", "Test", None, tmp.path());
@@ -1673,11 +1884,23 @@ mod tests {
 
         let output = format_recommendations(&recs);
 
-        assert!(output.contains("Oracle + Workers"), "should contain first pattern name");
-        assert!(output.contains("Plan Then Execute"), "should contain second pattern name");
-        assert!(output.contains("[RECOMMENDED]"), "first result should be labeled RECOMMENDED");
+        assert!(
+            output.contains("Oracle + Workers"),
+            "should contain first pattern name"
+        );
+        assert!(
+            output.contains("Plan Then Execute"),
+            "should contain second pattern name"
+        );
+        assert!(
+            output.contains("[RECOMMENDED]"),
+            "first result should be labeled RECOMMENDED"
+        );
         assert!(output.contains("Score: 6.0"), "should show score");
-        assert!(!output.contains("No matching patterns"), "should not show empty message");
+        assert!(
+            !output.contains("No matching patterns"),
+            "should not show empty message"
+        );
 
         // Empty case
         let empty_output = format_recommendations(&[]);
@@ -1753,10 +1976,7 @@ mod tests {
         );
 
         // Empty mission
-        assert_eq!(
-            detect_prompt_review_target("", &roles),
-            None,
-        );
+        assert_eq!(detect_prompt_review_target("", &roles), None,);
     }
 
     // ── 11. generate_prompt_review_context ───────────────────────────────────
@@ -1772,11 +1992,10 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/pentester.md"),
             "# Pentester\n\nYou find vulnerabilities.",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let roles = vec![
-            make_role("pentester", "Pentester", vec!["pentesting"]),
-        ];
+        let roles = vec![make_role("pentester", "Pentester", vec!["pentesting"])];
 
         let context = generate_prompt_review_context(
             "pentester",
@@ -1784,15 +2003,37 @@ mod tests {
             &library_dir,
             config_dir,
             &[], // no ELO ratings
-        ).expect("should succeed");
+        )
+        .expect("should succeed");
 
-        assert!(context.contains("Prompt Review Context"), "should contain header");
-        assert!(context.contains("**Pentester** (pentester)"), "should contain role name and id");
-        assert!(context.contains("You find vulnerabilities"), "should contain prompt text");
-        assert!(context.contains("Current ELO: 1500"), "should show default ELO");
-        assert!(context.contains("UNCALIBRATED"), "should show uncalibrated tier");
-        assert!(context.contains("No findings yet"), "should show no findings");
-        assert!(context.contains("prompt_improvement"), "should mention finding category");
+        assert!(
+            context.contains("Prompt Review Context"),
+            "should contain header"
+        );
+        assert!(
+            context.contains("**Pentester** (pentester)"),
+            "should contain role name and id"
+        );
+        assert!(
+            context.contains("You find vulnerabilities"),
+            "should contain prompt text"
+        );
+        assert!(
+            context.contains("Current ELO: 1500"),
+            "should show default ELO"
+        );
+        assert!(
+            context.contains("UNCALIBRATED"),
+            "should show uncalibrated tier"
+        );
+        assert!(
+            context.contains("No findings yet"),
+            "should show no findings"
+        );
+        assert!(
+            context.contains("prompt_improvement"),
+            "should mention finding category"
+        );
     }
 
     #[test]
@@ -1805,24 +2046,22 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/auditor.md"),
             "# Auditor\n\nYou audit code.",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let roles = vec![
-            make_role("auditor", "Auditor", vec!["compliance"]),
-        ];
+        let roles = vec![make_role("auditor", "Auditor", vec!["compliance"])];
 
         // Create empty findings dir
         std::fs::create_dir_all(config_dir.join("findings")).unwrap();
 
-        let context = generate_prompt_review_context(
-            "auditor",
-            &roles,
-            &library_dir,
-            config_dir,
-            &[],
-        ).expect("should succeed");
+        let context =
+            generate_prompt_review_context("auditor", &roles, &library_dir, config_dir, &[])
+                .expect("should succeed");
 
-        assert!(context.contains("No findings yet"), "should show no findings for empty store");
+        assert!(
+            context.contains("No findings yet"),
+            "should show no findings for empty store"
+        );
     }
 
     #[test]
@@ -1835,23 +2074,24 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/pentester.md"),
             "# Pentester\n\nPrompt content.",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let roles = vec![
-            make_role("pentester", "Pentester", vec!["pentesting"]),
-        ];
+        let roles = vec![make_role("pentester", "Pentester", vec!["pentesting"])];
 
         // No ELO ratings = uncalibrated
-        let context = generate_prompt_review_context(
-            "pentester",
-            &roles,
-            &library_dir,
-            config_dir,
-            &[],
-        ).expect("should succeed");
+        let context =
+            generate_prompt_review_context("pentester", &roles, &library_dir, config_dir, &[])
+                .expect("should succeed");
 
-        assert!(context.contains("ELO: 1500"), "uncalibrated should show 1500");
-        assert!(context.contains("UNCALIBRATED"), "should show UNCALIBRATED tier");
+        assert!(
+            context.contains("ELO: 1500"),
+            "uncalibrated should show 1500"
+        );
+        assert!(
+            context.contains("UNCALIBRATED"),
+            "should show UNCALIBRATED tier"
+        );
         assert!(context.contains("Review count: 0"), "should show 0 reviews");
     }
 
@@ -1865,21 +2105,18 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/pentester.md"),
             "# Pentester\n\nPrompt content.",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let roles = vec![
-            make_role("pentester", "Pentester", vec!["pentesting"]),
-        ];
+        let roles = vec![make_role("pentester", "Pentester", vec!["pentesting"])];
 
-        let elo_ratings = vec![
-            AgentRating {
-                agent: "pentester".to_string(),
-                elo: 1650,
-                trend_7d: 15,
-                review_count: 5,
-                last_active: Some(Utc::now()),
-            },
-        ];
+        let elo_ratings = vec![AgentRating {
+            agent: "pentester".to_string(),
+            elo: 1650,
+            trend_7d: 15,
+            review_count: 5,
+            last_active: Some(Utc::now()),
+        }];
 
         let context = generate_prompt_review_context(
             "pentester",
@@ -1887,11 +2124,15 @@ mod tests {
             &library_dir,
             config_dir,
             &elo_ratings,
-        ).expect("should succeed");
+        )
+        .expect("should succeed");
 
         assert!(context.contains("ELO: 1650"), "should show actual ELO");
         assert!(context.contains("+15"), "should show positive trend");
-        assert!(context.contains("Review count: 5"), "should show review count");
+        assert!(
+            context.contains("Review count: 5"),
+            "should show review count"
+        );
         assert!(context.contains("elevated"), "1650 should be elevated tier");
     }
 
@@ -1902,20 +2143,16 @@ mod tests {
         let config_dir = tmp.path();
         std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
 
-        let roles = vec![
-            make_role("pentester", "Pentester", vec!["pentesting"]),
-        ];
+        let roles = vec![make_role("pentester", "Pentester", vec!["pentesting"])];
 
-        let result = generate_prompt_review_context(
-            "ghost_agent",
-            &roles,
-            &library_dir,
-            config_dir,
-            &[],
-        );
+        let result =
+            generate_prompt_review_context("ghost_agent", &roles, &library_dir, config_dir, &[]);
 
         assert!(result.is_err(), "unknown role should return error");
-        assert!(result.unwrap_err().to_string().contains("not found"), "error should mention not found");
+        assert!(
+            result.unwrap_err().to_string().contains("not found"),
+            "error should mention not found"
+        );
     }
 
     // ── 12. generate_mission with prompt review context ─────────────────────
@@ -1933,11 +2170,13 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/security_architect.md"),
             "# Security Architect\n\nSystem prompt.",
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             library_dir.join("prompts/pentester.md"),
             "# Pentester\n\nYou find vulnerabilities.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let roles = vec![
             make_role("security_architect", "Security Architect", vec!["audit"]),
@@ -1976,7 +2215,8 @@ mod tests {
             None,
             &[],
             Some(config_dir),
-        ).expect("generate_mission should succeed");
+        )
+        .expect("generate_mission should succeed");
 
         // All agents should have prompt review context
         for agent in &mission_config.agent_configs {
@@ -2006,11 +2246,13 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/security_architect.md"),
             "# Security Architect\n\nSystem prompt.",
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             library_dir.join("prompts/auditor.md"),
             "# Auditor\n\nAudit prompt.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let roles = vec![
             make_role("security_architect", "Security Architect", vec!["audit"]),
@@ -2049,7 +2291,8 @@ mod tests {
             None,
             &[],
             Some(config_dir),
-        ).expect("generate_mission should succeed");
+        )
+        .expect("generate_mission should succeed");
 
         for agent in &mission_config.agent_configs {
             let contents = std::fs::read_to_string(&agent.claude_md_path).unwrap();
@@ -2065,10 +2308,17 @@ mod tests {
 
     #[test]
     fn test_new_roles_load_valid() {
-        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let library_dir = workspace_root.join("config/library");
 
-        for role_file in &["developer.yaml", "code-reviewer.yaml", "tester.yaml", "architect.yaml"] {
+        for role_file in &[
+            "developer.yaml",
+            "code-reviewer.yaml",
+            "tester.yaml",
+            "architect.yaml",
+        ] {
             let role_path = library_dir.join("roles").join(role_file);
             assert!(role_path.exists(), "Role file should exist: {}", role_file);
 
@@ -2077,10 +2327,26 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {}", role_file, e));
 
             assert!(!role.id.is_empty(), "{}: id should not be empty", role_file);
-            assert!(!role.tools_allowed.is_empty(), "{}: tools_allowed should not be empty", role_file);
-            assert!(!role.specializations.is_empty(), "{}: specializations should not be empty", role_file);
-            assert_eq!(role.default_trust_level, "ask", "{}: new roles should start at ask", role_file);
-            assert!(role.permissions.is_some(), "{}: should have permissions block", role_file);
+            assert!(
+                !role.tools_allowed.is_empty(),
+                "{}: tools_allowed should not be empty",
+                role_file
+            );
+            assert!(
+                !role.specializations.is_empty(),
+                "{}: specializations should not be empty",
+                role_file
+            );
+            assert_eq!(
+                role.default_trust_level, "ask",
+                "{}: new roles should start at ask",
+                role_file
+            );
+            assert!(
+                role.permissions.is_some(),
+                "{}: should have permissions block",
+                role_file
+            );
         }
     }
 
@@ -2088,20 +2354,43 @@ mod tests {
 
     #[test]
     fn test_new_patterns_load_valid() {
-        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
         let library_dir = workspace_root.join("config/library");
 
-        for pattern_file in &["code-review-cycle.yaml", "docs-from-code.yaml", "refactor-safe.yaml"] {
+        for pattern_file in &[
+            "code-review-cycle.yaml",
+            "docs-from-code.yaml",
+            "refactor-safe.yaml",
+        ] {
             let pattern_path = library_dir.join("patterns").join(pattern_file);
-            assert!(pattern_path.exists(), "Pattern file should exist: {}", pattern_file);
+            assert!(
+                pattern_path.exists(),
+                "Pattern file should exist: {}",
+                pattern_file
+            );
 
             let content = std::fs::read_to_string(&pattern_path).unwrap();
             let pattern: crate::library::Pattern = serde_yml::from_str(&content)
                 .unwrap_or_else(|e| panic!("Failed to parse {}: {}", pattern_file, e));
 
-            assert!(!pattern.id.is_empty(), "{}: id should not be empty", pattern_file);
-            assert!(!pattern.when_to_use.is_empty(), "{}: when_to_use should not be empty", pattern_file);
-            assert_eq!(pattern.source.as_deref(), Some("builtin"), "{}: dev patterns should be builtin", pattern_file);
+            assert!(
+                !pattern.id.is_empty(),
+                "{}: id should not be empty",
+                pattern_file
+            );
+            assert!(
+                !pattern.when_to_use.is_empty(),
+                "{}: when_to_use should not be empty",
+                pattern_file
+            );
+            assert_eq!(
+                pattern.source.as_deref(),
+                Some("builtin"),
+                "{}: dev patterns should be builtin",
+                pattern_file
+            );
         }
     }
 
@@ -2110,8 +2399,16 @@ mod tests {
     #[test]
     fn test_select_patterns_matches_dev_mission() {
         let roles = vec![
-            make_role("developer", "Developer", vec!["feature_implementation", "refactoring", "code_writing"]),
-            make_role("tester", "Tester", vec!["test_writing", "coverage_analysis", "regression_detection"]),
+            make_role(
+                "developer",
+                "Developer",
+                vec!["feature_implementation", "refactoring", "code_writing"],
+            ),
+            make_role(
+                "tester",
+                "Tester",
+                vec!["test_writing", "coverage_analysis", "regression_detection"],
+            ),
             make_role("auditor", "Auditor", vec!["compliance", "audit"]),
         ];
 
@@ -2136,7 +2433,11 @@ mod tests {
                     "Technical debt cleanup requiring test validation",
                 ],
                 vec!["Simple rename or cosmetic changes"],
-                vec![("stage_1", "developer"), ("stage_2", "tester"), ("stage_3", "auditor")],
+                vec![
+                    ("stage_1", "developer"),
+                    ("stage_2", "tester"),
+                    ("stage_3", "auditor"),
+                ],
             ),
         ];
 
@@ -2163,11 +2464,13 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/developer.md"),
             "# Developer\n\nYou write code.",
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             library_dir.join("prompts/auditor.md"),
             "# Auditor\n\nYou review.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let roles = vec![
             make_role("developer", "Developer", vec!["code_writing"]),
@@ -2205,7 +2508,8 @@ mod tests {
             None,
             &[],
             None,
-        ).expect("generate_mission should succeed");
+        )
+        .expect("generate_mission should succeed");
 
         // Both agents should have the inter-agent directive (2 agents = multi-agent)
         for agent in &mission_config.agent_configs {
@@ -2236,11 +2540,10 @@ mod tests {
         std::fs::write(
             library_dir.join("prompts/researcher.md"),
             "# Researcher\n\nYou research.",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let roles = vec![
-            make_role("researcher", "Researcher", vec!["research"]),
-        ];
+        let roles = vec![make_role("researcher", "Researcher", vec!["research"])];
 
         let rec = Recommendation {
             pattern_id: "single-agent".to_string(),
@@ -2248,14 +2551,12 @@ mod tests {
             score: 2.0,
             matched_criteria: vec![],
             anti_matched: vec![],
-            role_assignments: vec![
-                RoleAssignment {
-                    slot: "agent".to_string(),
-                    role_id: "researcher".to_string(),
-                    role_name: "Researcher".to_string(),
-                    icon: "🔬".to_string(),
-                },
-            ],
+            role_assignments: vec![RoleAssignment {
+                slot: "agent".to_string(),
+                role_id: "researcher".to_string(),
+                role_name: "Researcher".to_string(),
+                icon: "🔬".to_string(),
+            }],
         };
 
         let mission_config = generate_mission(
@@ -2267,7 +2568,8 @@ mod tests {
             None,
             &[],
             None,
-        ).expect("generate_mission should succeed");
+        )
+        .expect("generate_mission should succeed");
 
         // Single agent should NOT have inter-agent directive
         for agent in &mission_config.agent_configs {
@@ -2291,27 +2593,46 @@ mod tests {
         std::fs::create_dir_all(&missions_dir).unwrap();
 
         // Write prompt files
-        std::fs::write(library_dir.join("prompts/developer.md"), "# Developer\nYou write code.").unwrap();
-        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nYou review.").unwrap();
+        std::fs::write(
+            library_dir.join("prompts/developer.md"),
+            "# Developer\nYou write code.",
+        )
+        .unwrap();
+        std::fs::write(
+            library_dir.join("prompts/auditor.md"),
+            "# Auditor\nYou review.",
+        )
+        .unwrap();
 
         let roles = vec![
-            make_role("developer", "Developer", vec!["feature_implementation", "code_writing"]),
+            make_role(
+                "developer",
+                "Developer",
+                vec!["feature_implementation", "code_writing"],
+            ),
             make_role("auditor", "Auditor", vec!["audit", "compliance"]),
         ];
 
-        let patterns = vec![
-            make_pattern(
-                "code-review-cycle",
-                "Code Review Cycle",
-                vec!["Feature implementation with quality review", "Code writing followed by structured review"],
-                vec![],
-                vec![("agent", "developer"), ("critic", "auditor")],
-            ),
-        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec![
+                "Feature implementation with quality review",
+                "Code writing followed by structured review",
+            ],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
 
         let result = spawn_mission(
             "implement feature with code review",
-            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -2343,18 +2664,26 @@ mod tests {
 
         std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
 
-        let roles = vec![
-            make_role("developer", "Developer", vec!["code_writing"]),
-        ];
+        let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
 
         // Empty patterns — will auto-create
         let patterns: Vec<Pattern> = vec![];
 
         let result = spawn_mission(
             "do something completely unique",
-            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
         );
-        assert!(result.is_ok(), "spawn_mission should auto-create: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "spawn_mission should auto-create: {:?}",
+            result.err()
+        );
 
         let spawn = result.unwrap();
         assert!(spawn.pattern_auto_created, "pattern should be auto-created");
@@ -2373,9 +2702,18 @@ mod tests {
 
         let result = spawn_mission(
             "some mission",
-            &[], &[], &library_dir, &missions_dir, None, &[], None,
+            &[],
+            &[],
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
         );
-        assert!(result.is_err(), "spawn_mission with empty library should fail");
+        assert!(
+            result.is_err(),
+            "spawn_mission with empty library should fail"
+        );
         assert!(result.unwrap_err().to_string().contains("No roles"));
     }
 
@@ -2405,24 +2743,37 @@ mod tests {
         dev.tools_allowed = vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()];
         let roles = vec![dev, make_role("auditor", "Auditor", vec!["audit"])];
 
-        let patterns = vec![
-            make_pattern(
-                "code-review-cycle", "Code Review Cycle",
-                vec!["Feature implementation with quality review"],
-                vec![],
-                vec![("agent", "developer"), ("critic", "auditor")],
-            ),
-        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
 
         let result = spawn_mission(
             "implement feature with code review",
-            &roles, &patterns, &library_dir, &missions_dir, None, &[], None,
-        ).unwrap();
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            None,
+            &[],
+            None,
+        )
+        .unwrap();
 
-        assert!(!result.delegation_commands.is_empty(), "should have delegation commands");
+        assert!(
+            !result.delegation_commands.is_empty(),
+            "should have delegation commands"
+        );
         // Commands should reference `colmena delegate add`
         for cmd in &result.delegation_commands {
-            assert!(cmd.starts_with("colmena delegate add"), "cmd should start with delegate add: {}", cmd);
+            assert!(
+                cmd.starts_with("colmena delegate add"),
+                "cmd should start with delegate add: {}",
+                cmd
+            );
         }
     }
 
@@ -2444,7 +2795,11 @@ mod tests {
     fn test_suggest_small_two_domains() {
         let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
         let patterns: Vec<Pattern> = vec![];
-        let s = suggest_mission_size("implement feature and write tests for it", &roles, &patterns);
+        let s = suggest_mission_size(
+            "implement feature and write tests for it",
+            &roles,
+            &patterns,
+        );
         assert_eq!(s.complexity, Complexity::Small);
         assert!(!s.needs_colmena);
         assert_eq!(s.recommended_agents, 2);
@@ -2462,7 +2817,8 @@ mod tests {
         let patterns: Vec<Pattern> = vec![];
         let s = suggest_mission_size(
             "implement authentication feature with test coverage and security review",
-            &roles, &patterns,
+            &roles,
+            &patterns,
         );
         assert!(s.complexity == Complexity::Medium || s.complexity == Complexity::Large);
         assert!(s.needs_colmena);
@@ -2491,9 +2847,16 @@ mod tests {
         let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
         let patterns: Vec<Pattern> = vec![];
         // "production" and "security" are bumpers
-        let s = suggest_mission_size("deploy to production with security constraints", &roles, &patterns);
+        let s = suggest_mission_size(
+            "deploy to production with security constraints",
+            &roles,
+            &patterns,
+        );
         // Should be higher than base domain count alone
-        assert!(s.recommended_agents >= 2, "risk keywords should bump complexity");
+        assert!(
+            s.recommended_agents >= 2,
+            "risk keywords should bump complexity"
+        );
     }
 
     // ── 29. simplicity keywords reduce complexity ───────────────────────────
@@ -2514,10 +2877,17 @@ mod tests {
         let roles = vec![make_role("developer", "Developer", vec!["code_writing"])];
         let patterns: Vec<Pattern> = vec![];
         // Exactly at threshold
-        let s = suggest_mission_size("implement code, write tests, and review security", &roles, &patterns);
-        assert!(s.needs_colmena == (s.recommended_agents >= 3),
+        let s = suggest_mission_size(
+            "implement code, write tests, and review security",
+            &roles,
+            &patterns,
+        );
+        assert!(
+            s.needs_colmena == (s.recommended_agents >= 3),
             "needs_colmena should be true iff agents >= 3, got agents={} needs={}",
-            s.recommended_agents, s.needs_colmena);
+            s.recommended_agents,
+            s.needs_colmena
+        );
     }
 
     // ── 31. empty description ───────────────────────────────────────────────

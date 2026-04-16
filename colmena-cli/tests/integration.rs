@@ -180,7 +180,10 @@ fn test_hook_block_reset_hard() {
 
 #[test]
 fn test_hook_commit_message_with_force_not_blocked() {
-    let payload = make_payload("Bash", json!({"command": "git commit -m 'removed --force flag'"}));
+    let payload = make_payload(
+        "Bash",
+        json!({"command": "git commit -m 'removed --force flag'"}),
+    );
     let (stdout, code) = colmena_hook(&payload, &config_path());
 
     assert_eq!(code, 0);
@@ -312,7 +315,9 @@ fn test_hook_allows_env_production_write() {
 fn test_config_check_invalid_regex() {
     let tmp = tempfile::TempDir::new().unwrap();
     let bad_config = tmp.path().join("bad.yaml");
-    std::fs::write(&bad_config, r#"
+    std::fs::write(
+        &bad_config,
+        r#"
 version: 1
 defaults:
   action: ask
@@ -324,7 +329,9 @@ blocked:
       bash_pattern: '(?P<broken>'
     action: block
 agent_overrides: {}
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
         .args(["config", "check", "--config", bad_config.to_str().unwrap()])
@@ -342,10 +349,7 @@ fn test_hook_respects_colmena_home() {
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
 
-    std::fs::copy(
-        &config_path(),
-        config_dir.join("trust-firewall.yaml"),
-    ).unwrap();
+    std::fs::copy(&config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
 
     let payload = make_payload("Read", json!({"file_path": "/tmp/foo.txt"}));
     let input = serde_json::to_string(&payload).unwrap();
@@ -360,7 +364,12 @@ fn test_hook_respects_colmena_home() {
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
             child.wait_with_output()
         })
         .unwrap();
@@ -420,8 +429,14 @@ fn test_library_list() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("pentester"), "should list pentester role");
-    assert!(stdout.contains("security_architect"), "should list security_architect role");
-    assert!(stdout.contains("oracle-workers"), "should list oracle-workers pattern");
+    assert!(
+        stdout.contains("security_architect"),
+        "should list security_architect role"
+    );
+    assert!(
+        stdout.contains("oracle-workers"),
+        "should list oracle-workers pattern"
+    );
     assert!(stdout.contains("pipeline"), "should list pipeline pattern");
 }
 
@@ -441,10 +456,21 @@ fn test_library_show_role() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Pentester"), "should show role name Pentester");
-    assert!(stdout.contains("web_vulnerabilities"), "should show web_vulnerabilities specialization");
-    assert!(stdout.contains("offensive") || stdout.contains("exploitation") || stdout.contains("Offensive"),
-        "should contain offensive-related content; got: {}", stdout);
+    assert!(
+        stdout.contains("Pentester"),
+        "should show role name Pentester"
+    );
+    assert!(
+        stdout.contains("web_vulnerabilities"),
+        "should show web_vulnerabilities specialization"
+    );
+    assert!(
+        stdout.contains("offensive")
+            || stdout.contains("exploitation")
+            || stdout.contains("Offensive"),
+        "should contain offensive-related content; got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -463,9 +489,18 @@ fn test_library_show_pattern() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Oracle"), "should contain Oracle in pattern name");
-    assert!(stdout.contains("hierarchical"), "should show hierarchical topology");
-    assert!(stdout.contains("hub-and-spoke"), "should show hub-and-spoke communication");
+    assert!(
+        stdout.contains("Oracle"),
+        "should contain Oracle in pattern name"
+    );
+    assert!(
+        stdout.contains("hierarchical"),
+        "should show hierarchical topology"
+    );
+    assert!(
+        stdout.contains("hub-and-spoke"),
+        "should show hub-and-spoke communication"
+    );
 }
 
 #[test]
@@ -513,9 +548,7 @@ fn test_library_create_role() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let role_yaml = tmp
-        .path()
-        .join("config/library/roles/test-role.yaml");
+    let role_yaml = tmp.path().join("config/library/roles/test-role.yaml");
     assert!(
         role_yaml.exists(),
         "role yaml file should be created at {:?}",
@@ -528,7 +561,12 @@ fn test_library_select() {
     let tmp = make_colmena_home();
 
     let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
-        .args(["library", "select", "--mission", "security audit of payments API"])
+        .args([
+            "library",
+            "select",
+            "--mission",
+            "security audit of payments API",
+        ])
         .env("COLMENA_HOME", tmp.path())
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -536,12 +574,7 @@ fn test_library_select() {
         .spawn()
         .and_then(|mut child| {
             use std::io::Write;
-            child
-                .stdin
-                .take()
-                .unwrap()
-                .write_all(b"1\n")
-                .unwrap();
+            child.stdin.take().unwrap().write_all(b"1\n").unwrap();
             child.wait_with_output()
         })
         .unwrap();
@@ -569,19 +602,29 @@ fn test_hook_permission_request_with_active_mission() {
     let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
 
     assert_eq!(code, 0, "Exit code should be 0");
-    assert!(!stdout.is_empty(), "Should return JSON response, got empty stdout");
+    assert!(
+        !stdout.is_empty(),
+        "Should return JSON response, got empty stdout"
+    );
 
     let resp: Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("Should return valid JSON: {e}, got: {stdout}"));
 
     // Check the PermissionRequest response format
     let decision = &resp["hookSpecificOutput"]["decision"];
-    assert_eq!(decision["behavior"], "allow", "Should allow tool in role's tools_allowed");
+    assert_eq!(
+        decision["behavior"], "allow",
+        "Should allow tool in role's tools_allowed"
+    );
 
     // Should include updatedPermissions that teach CC session rules
-    let perms = decision["updatedPermissions"].as_array()
+    let perms = decision["updatedPermissions"]
+        .as_array()
         .expect("updatedPermissions should be an array");
-    assert!(!perms.is_empty(), "Should have at least one permission update");
+    assert!(
+        !perms.is_empty(),
+        "Should have at least one permission update"
+    );
     assert_eq!(perms[0]["type"], "addRules");
     assert_eq!(perms[0]["behavior"], "allow");
     assert_eq!(perms[0]["destination"], "session");
@@ -699,7 +742,10 @@ fn test_hook_subagent_stop_worker_without_review() {
     let parsed: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(parsed["decision"], "block");
     assert!(
-        parsed["systemMessage"].as_str().unwrap().contains("review_submit"),
+        parsed["systemMessage"]
+            .as_str()
+            .unwrap()
+            .contains("review_submit"),
         "Block message should tell agent to call review_submit"
     );
 }
@@ -937,7 +983,8 @@ fn make_colmena_home_with_revoked_agent(agent_id: &str) -> tempfile::TempDir {
     let config_dir = tmp.path().join("config");
 
     // Add agent to revoked-missions.json
-    let revoked: std::collections::HashSet<String> = vec![agent_id.to_string()].into_iter().collect();
+    let revoked: std::collections::HashSet<String> =
+        vec![agent_id.to_string()].into_iter().collect();
     std::fs::write(
         config_dir.join("revoked-missions.json"),
         serde_json::to_string(&revoked).unwrap(),

@@ -250,7 +250,12 @@ fn main() {
             QueueAction::Prune { older_than } => run_queue_prune(older_than),
         },
         Commands::Delegate { action } => match action {
-            DelegateAction::Add { tool, agent, ttl, session } => run_delegate(tool, agent, ttl, session),
+            DelegateAction::Add {
+                tool,
+                agent,
+                ttl,
+                session,
+            } => run_delegate(tool, agent, ttl, session),
             DelegateAction::List => run_delegate_list(),
             DelegateAction::Revoke { tool, agent } => run_delegate_revoke(tool, agent),
         },
@@ -262,8 +267,16 @@ fn main() {
             LibraryAction::List => run_library_list(),
             LibraryAction::Show { id } => run_library_show(id),
             LibraryAction::Select { mission } => run_library_select(mission),
-            LibraryAction::CreateRole { id, description, category } => run_library_create_role(id, description, category),
-            LibraryAction::CreatePattern { id, description, topology } => run_library_create_pattern(id, description, topology),
+            LibraryAction::CreateRole {
+                id,
+                description,
+                category,
+            } => run_library_create_role(id, description, category),
+            LibraryAction::CreatePattern {
+                id,
+                description,
+                topology,
+            } => run_library_create_pattern(id, description, topology),
         },
         Commands::Review { action } => match action {
             ReviewAction::List { state } => run_review_list(state),
@@ -318,9 +331,12 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
                 // Best-effort audit log for timeout event
                 let config_dir = colmena_core::paths::default_config_dir();
                 let audit_path = config_dir.join("audit.log");
-                let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::Timeout {
-                    reason: "Hook stdin timeout (5s)",
-                });
+                let _ = colmena_core::audit::log_event(
+                    &audit_path,
+                    &colmena_core::audit::AuditEvent::Timeout {
+                        reason: "Hook stdin timeout (5s)",
+                    },
+                );
                 std::process::exit(0);
             }
         });
@@ -358,23 +374,23 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
     // Dispatch by hook event
     match event_name {
         "PreToolUse" => {
-            let payload: hook::HookPayload = serde_json::from_value(raw)
-                .context("Failed to parse PreToolUse payload")?;
+            let payload: hook::HookPayload =
+                serde_json::from_value(raw).context("Failed to parse PreToolUse payload")?;
             run_pre_tool_use_hook(payload, config_path)
         }
         "PostToolUse" => {
-            let payload: hook::HookPayload = serde_json::from_value(raw)
-                .context("Failed to parse PostToolUse payload")?;
+            let payload: hook::HookPayload =
+                serde_json::from_value(raw).context("Failed to parse PostToolUse payload")?;
             run_post_tool_use_hook(payload)
         }
         "PermissionRequest" => {
-            let payload: hook::HookPayload = serde_json::from_value(raw)
-                .context("Failed to parse PermissionRequest payload")?;
+            let payload: hook::HookPayload =
+                serde_json::from_value(raw).context("Failed to parse PermissionRequest payload")?;
             run_permission_request_hook(payload)
         }
         "SubagentStop" => {
-            let payload: hook::SubagentStopPayload = serde_json::from_value(raw)
-                .context("Failed to parse SubagentStop payload")?;
+            let payload: hook::SubagentStopPayload =
+                serde_json::from_value(raw).context("Failed to parse SubagentStop payload")?;
             run_subagent_stop_hook(payload)
         }
         other => {
@@ -390,10 +406,9 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
 /// PreToolUse: evaluate tool call against trust firewall rules.
 fn run_suggest(mission: &str) -> Result<()> {
     let library_dir = colmena_core::library::default_library_dir();
-    let roles = colmena_core::library::load_roles(&library_dir)
-        .context("Failed to load roles")?;
-    let patterns = colmena_core::library::load_patterns(&library_dir)
-        .context("Failed to load patterns")?;
+    let roles = colmena_core::library::load_roles(&library_dir).context("Failed to load roles")?;
+    let patterns =
+        colmena_core::library::load_patterns(&library_dir).context("Failed to load patterns")?;
 
     let suggestion = colmena_core::selector::suggest_mission_size(mission, &roles, &patterns);
 
@@ -451,14 +466,18 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         .unwrap_or_else(|| std::path::Path::new("."));
     let audit_path = config_dir.join("audit.log");
     let delegations_path = config_dir.join("runtime-delegations.json");
-    let (delegations, expired) = colmena_core::delegate::load_delegations_with_expired(&delegations_path);
+    let (delegations, expired) =
+        colmena_core::delegate::load_delegations_with_expired(&delegations_path);
     // Log expired delegations for audit trail
     for exp in &expired {
-        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateExpire {
-            tool: &exp.tool,
-            agent: exp.agent_id.as_deref(),
-            source: exp.source.as_deref().unwrap_or("unknown"),
-        });
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::DelegateExpire {
+                tool: &exp.tool,
+                agent: exp.agent_id.as_deref(),
+                source: exp.source.as_deref().unwrap_or("unknown"),
+            },
+        );
     }
 
     // 3b. Load ELO-calibrated overrides (safe fallback: empty if missing)
@@ -471,7 +490,12 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     // 4. Map HookPayload to EvaluationInput and evaluate
     let eval_input = payload.to_evaluation_input();
     let decision = colmena_core::firewall::evaluate_with_elo(
-        &cfg, &patterns, &delegations, &eval_input, &elo_overrides, &revoked_agents,
+        &cfg,
+        &patterns,
+        &delegations,
+        &eval_input,
+        &elo_overrides,
+        &revoked_agents,
     );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
@@ -480,15 +504,19 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         Action::Ask => "ASK",
         Action::Block => "DENY",
     };
-    let key_field = colmena_core::audit::extract_key_field(&eval_input.tool_name, &eval_input.tool_input);
-    let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::Decision {
-        action: action_str,
-        session_id: &eval_input.session_id,
-        agent_id: eval_input.agent_id.as_deref(),
-        tool: &eval_input.tool_name,
-        key_field: &key_field,
-        rule: decision.matched_rule.as_deref().unwrap_or("none"),
-    });
+    let key_field =
+        colmena_core::audit::extract_key_field(&eval_input.tool_name, &eval_input.tool_input);
+    let _ = colmena_core::audit::log_event(
+        &audit_path,
+        &colmena_core::audit::AuditEvent::Decision {
+            action: action_str,
+            session_id: &eval_input.session_id,
+            agent_id: eval_input.agent_id.as_deref(),
+            tool: &eval_input.tool_name,
+            key_field: &key_field,
+            rule: decision.matched_rule.as_deref().unwrap_or("none"),
+        },
+    );
 
     // 4c. Mission Gate: if enforce_missions and tool is Agent, check for mission marker
     let decision = if cfg.enforce_missions
@@ -496,22 +524,27 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         && decision.action != Action::Block
     {
         // Check if the Agent prompt contains a mission marker
-        let prompt = eval_input.tool_input
+        let prompt = eval_input
+            .tool_input
             .get("prompt")
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
             // Log Mission Gate event
-            let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::MissionGate {
-                session_id: &eval_input.session_id,
-                agent_id: eval_input.agent_id.as_deref(),
-            });
+            let _ = colmena_core::audit::log_event(
+                &audit_path,
+                &colmena_core::audit::AuditEvent::MissionGate {
+                    session_id: &eval_input.session_id,
+                    agent_id: eval_input.agent_id.as_deref(),
+                },
+            );
             colmena_core::firewall::Decision {
                 action: Action::Ask,
                 reason: "Mission gate: this Agent call has no Colmena mission binding. \
                          Use mcp__colmena__mission_suggest to check if you need a mission, \
                          or mcp__colmena__mission_spawn to create one directly. \
-                         Approve manually to proceed without mission binding.".to_string(),
+                         Approve manually to proceed without mission binding."
+                    .to_string(),
                 matched_rule: Some("mission_gate".to_string()),
                 priority: colmena_core::firewall::Priority::Medium,
             }
@@ -545,8 +578,7 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         Action::Ask => hook::HookResponse::ask(&decision.reason),
     };
 
-    serde_json::to_writer(std::io::stdout(), &response)
-        .context("Failed to write hook response")?;
+    serde_json::to_writer(std::io::stdout(), &response).context("Failed to write hook response")?;
 
     Ok(())
 }
@@ -584,20 +616,35 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
         }
     };
 
-    let stdout = tool_response.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-    let stderr = tool_response.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+    let stdout = tool_response
+        .get("stdout")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let stderr = tool_response
+        .get("stderr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     // CC sends "interrupted" (bool), not "exitCode" (int). Treat interrupted=true as exit code 1.
-    let exit_code = tool_response.get("exitCode").and_then(|v| v.as_i64()).map(|v| v as i32)
+    let exit_code = tool_response
+        .get("exitCode")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32)
         .or_else(|| {
-            tool_response.get("interrupted").and_then(|v| v.as_bool())
+            tool_response
+                .get("interrupted")
+                .and_then(|v| v.as_bool())
                 .map(|interrupted| if interrupted { 1 } else { 0 })
         });
-    let command = payload.tool_input.get("command").and_then(|v| v.as_str()).unwrap_or("");
+    let command = payload
+        .tool_input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     // Load filter config (or use defaults)
     let filter_config_path = colmena_core::paths::default_config_dir().join("filter-config.yaml");
-    let filter_config = colmena_filter::config::load_filter_config(&filter_config_path)
-        .unwrap_or_default();
+    let filter_config =
+        colmena_filter::config::load_filter_config(&filter_config_path).unwrap_or_default();
 
     if !filter_config.enabled {
         let response = hook::PostToolUseResponse::passthrough();
@@ -689,8 +736,7 @@ fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> 
     let delegations = colmena_core::delegate::load_delegations(&delegations_path);
 
     let has_role_delegation = delegations.iter().any(|d| {
-        d.agent_id.as_deref() == Some(agent_id.as_str())
-            && d.source.as_deref() == Some("role")
+        d.agent_id.as_deref() == Some(agent_id.as_str()) && d.source.as_deref() == Some("role")
     });
 
     if !has_role_delegation {
@@ -747,7 +793,11 @@ fn build_permission_updates(
         .tools
         .iter()
         .chain(role_data.tool_patterns.iter())
-        .filter(|t| !NEVER_SESSION_RULE_TOOLS.iter().any(|blocked| t.eq_ignore_ascii_case(blocked)))
+        .filter(|t| {
+            !NEVER_SESSION_RULE_TOOLS
+                .iter()
+                .any(|blocked| t.eq_ignore_ascii_case(blocked))
+        })
         .map(|t| hook::PermissionRule {
             tool_name: t.clone(),
         })
@@ -804,9 +854,7 @@ fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
     Ok(())
 }
 
-fn subagent_stop_inner(
-    payload: &hook::SubagentStopPayload,
-) -> Result<hook::SubagentStopResponse> {
+fn subagent_stop_inner(payload: &hook::SubagentStopPayload) -> Result<hook::SubagentStopResponse> {
     // 1. No agent_id → approve (main agent, not a subagent)
     let agent_id = match &payload.agent_id {
         Some(id) => id,
@@ -819,8 +867,7 @@ fn subagent_stop_inner(
     let delegations = colmena_core::delegate::load_delegations(&delegations_path);
 
     let mission_delegation = delegations.iter().find(|d| {
-        d.agent_id.as_deref() == Some(agent_id.as_str())
-            && d.source.as_deref() == Some("role")
+        d.agent_id.as_deref() == Some(agent_id.as_str()) && d.source.as_deref() == Some("role")
     });
 
     // 3. No mission delegation → approve (not a mission worker)
@@ -894,10 +941,7 @@ fn run_queue_list() -> Result<()> {
 
     println!("{} pending approval(s):\n", entries.len());
     for entry in &entries {
-        let agent = entry
-            .agent_id
-            .as_deref()
-            .unwrap_or("unknown");
+        let agent = entry.agent_id.as_deref().unwrap_or("unknown");
         println!(
             "  [{priority}] {tool} — {agent}",
             priority = entry.priority,
@@ -925,7 +969,12 @@ fn run_queue_prune(older_than_days: i64) -> Result<()> {
     Ok(())
 }
 
-fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64, session: Option<String>) -> Result<()> {
+fn run_delegate(
+    tool: String,
+    agent: Option<String>,
+    ttl_hours: i64,
+    session: Option<String>,
+) -> Result<()> {
     for w in colmena_core::config::validate_tool_name_single(&tool) {
         eprintln!("WARNING: {w}");
     }
@@ -972,20 +1021,28 @@ fn run_delegate(tool: String, agent: Option<String>, ttl_hours: i64, session: Op
 
     // Warn about global scope only when no --session specified
     if session.is_none() {
-        eprintln!("WARNING: This delegation applies to ALL active CC sessions (no --session specified).");
-        eprintln!("         Use 'colmena delegate add --tool {} --session <id>' to limit scope.", tool);
+        eprintln!(
+            "WARNING: This delegation applies to ALL active CC sessions (no --session specified)."
+        );
+        eprintln!(
+            "         Use 'colmena delegate add --tool {} --session <id>' to limit scope.",
+            tool
+        );
     }
 
     colmena_core::delegate::save_delegations(&delegations_path, &delegations)?;
 
     // Audit log
     let audit_path = config_dir.join("audit.log");
-    let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateCreate {
-        tool: &tool,
-        agent: agent.as_deref(),
-        ttl: &format!("{ttl_hours}h"),
-        source: "cli",
-    });
+    let _ = colmena_core::audit::log_event(
+        &audit_path,
+        &colmena_core::audit::AuditEvent::DelegateCreate {
+            tool: &tool,
+            agent: agent.as_deref(),
+            ttl: &format!("{ttl_hours}h"),
+            source: "cli",
+        },
+    );
 
     let scope = match &agent {
         Some(a) => format!("agent '{a}'"),
@@ -1030,11 +1087,8 @@ fn run_delegate_revoke(tool: String, agent: Option<String>) -> Result<()> {
     let config_dir = colmena_core::paths::default_config_dir();
     let delegations_path = config_dir.join("runtime-delegations.json");
 
-    let revoked = colmena_core::delegate::revoke_delegations(
-        &delegations_path,
-        &tool,
-        agent.as_deref(),
-    )?;
+    let revoked =
+        colmena_core::delegate::revoke_delegations(&delegations_path, &tool, agent.as_deref())?;
 
     if revoked == 0 {
         println!("No matching delegations found for '{tool}'.");
@@ -1043,10 +1097,13 @@ fn run_delegate_revoke(tool: String, agent: Option<String>) -> Result<()> {
 
         // Audit log
         let audit_path = config_dir.join("audit.log");
-        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::DelegateRevoke {
-            tool: &tool,
-            agent: agent.as_deref(),
-        });
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::DelegateRevoke {
+                tool: &tool,
+                agent: agent.as_deref(),
+            },
+        );
     }
 
     Ok(())
@@ -1114,10 +1171,7 @@ fn run_library_list() -> Result<()> {
 
     // Print patterns table
     println!("Patterns ({}):", patterns.len());
-    println!(
-        "  {:<30} {:<12} ESTIMATED AGENTS",
-        "ID", "TOPOLOGY"
-    );
+    println!("  {:<30} {:<12} ESTIMATED AGENTS", "ID", "TOPOLOGY");
     println!("  {:-<30} {:-<12} {:-<16}", "", "", "");
     for pattern in &patterns {
         println!(
@@ -1142,10 +1196,7 @@ fn run_library_list() -> Result<()> {
 fn run_library_show(id: String) -> Result<()> {
     let library_dir = default_library_dir();
     if !library_dir.exists() {
-        eprintln!(
-            "Library directory not found: {}",
-            library_dir.display()
-        );
+        eprintln!("Library directory not found: {}", library_dir.display());
         std::process::exit(1);
     }
 
@@ -1163,17 +1214,25 @@ fn run_library_show(id: String) -> Result<()> {
         println!("  Specializations:   {}", role.specializations.join(", "));
         println!("  ELO initial:       {}", role.elo.initial);
         if !role.elo.categories.is_empty() {
-            let cats: Vec<String> = role.elo.categories
+            let cats: Vec<String> = role
+                .elo
+                .categories
                 .iter()
                 .map(|(k, v)| format!("{k}={v}"))
                 .collect();
             println!("  ELO categories:    {}", cats.join(", "));
         }
         if !role.mentoring.can_mentor.is_empty() {
-            println!("  Can mentor:        {}", role.mentoring.can_mentor.join(", "));
+            println!(
+                "  Can mentor:        {}",
+                role.mentoring.can_mentor.join(", ")
+            );
         }
         if !role.mentoring.mentored_by.is_empty() {
-            println!("  Mentored by:       {}", role.mentoring.mentored_by.join(", "));
+            println!(
+                "  Mentored by:       {}",
+                role.mentoring.mentored_by.join(", ")
+            );
         }
         return Ok(());
     }
@@ -1223,10 +1282,7 @@ fn run_library_show(id: String) -> Result<()> {
 fn run_library_select(mission: String) -> Result<()> {
     let library_dir = default_library_dir();
     if !library_dir.exists() {
-        eprintln!(
-            "Library directory not found: {}",
-            library_dir.display()
-        );
+        eprintln!("Library directory not found: {}", library_dir.display());
         std::process::exit(1);
     }
 
@@ -1280,7 +1336,8 @@ fn run_library_select(mission: String) -> Result<()> {
     // Query ELO ratings for reviewer lead assignment
     let elo_log_path = default_config_dir().join("elo/elo-log.jsonl");
     let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
-    let baselines: Vec<(String, u32)> = roles.iter()
+    let baselines: Vec<(String, u32)> = roles
+        .iter()
         .map(|r| (r.id.clone(), r.elo.initial))
         .collect();
     let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
@@ -1313,11 +1370,7 @@ fn run_library_select(mission: String) -> Result<()> {
     println!("Mission created: {}", mission_config.mission_dir.display());
     println!("Agent configs:");
     for agent in &mission_config.agent_configs {
-        println!(
-            "  {} — {}",
-            agent.role_id,
-            agent.claude_md_path.display()
-        );
+        println!("  {} — {}", agent.role_id, agent.claude_md_path.display());
     }
     println!();
     println!(
@@ -1327,7 +1380,11 @@ fn run_library_select(mission: String) -> Result<()> {
     Ok(())
 }
 
-fn run_library_create_role(id: String, description: String, category: Option<String>) -> Result<()> {
+fn run_library_create_role(
+    id: String,
+    description: String,
+    category: Option<String>,
+) -> Result<()> {
     let library_dir = default_library_dir();
 
     let category = category
@@ -1337,7 +1394,8 @@ fn run_library_create_role(id: String, description: String, category: Option<Str
 
     let (role_path, prompt_path) = scaffold_role(&id, &description, category, &library_dir)?;
 
-    let resolved = category.unwrap_or_else(|| colmena_core::templates::detect_category(&description));
+    let resolved =
+        category.unwrap_or_else(|| colmena_core::templates::detect_category(&description));
     println!("Created role '{id}' (category: {resolved}):");
     println!("  Role YAML:   {}", role_path.display());
     println!("  Prompt file: {}", prompt_path.display());
@@ -1345,7 +1403,11 @@ fn run_library_create_role(id: String, description: String, category: Option<Str
     Ok(())
 }
 
-fn run_library_create_pattern(id: String, description: String, topology: Option<String>) -> Result<()> {
+fn run_library_create_pattern(
+    id: String,
+    description: String,
+    topology: Option<String>,
+) -> Result<()> {
     let library_dir = default_library_dir();
 
     let topology = topology
@@ -1353,9 +1415,15 @@ fn run_library_create_pattern(id: String, description: String, topology: Option<
         .map(|t| t.parse::<colmena_core::pattern_scaffold::PatternTopology>())
         .transpose()?;
 
-    let pattern_path = colmena_core::pattern_scaffold::scaffold_pattern(&id, &description, topology, &library_dir)?;
+    let pattern_path = colmena_core::pattern_scaffold::scaffold_pattern(
+        &id,
+        &description,
+        topology,
+        &library_dir,
+    )?;
 
-    let resolved = topology.unwrap_or_else(|| colmena_core::pattern_scaffold::detect_topology(&description));
+    let resolved =
+        topology.unwrap_or_else(|| colmena_core::pattern_scaffold::detect_topology(&description));
     println!("Created pattern '{id}' (topology: {resolved}):");
     println!("  Pattern YAML: {}", pattern_path.display());
 
@@ -1486,7 +1554,10 @@ fn run_elo_show() -> Result<()> {
     let library_dir = default_library_dir();
     let baselines: Vec<(String, u32)> = if library_dir.exists() {
         match load_roles(&library_dir) {
-            Ok(roles) => roles.iter().map(|r| (r.id.clone(), r.elo.initial)).collect(),
+            Ok(roles) => roles
+                .iter()
+                .map(|r| (r.id.clone(), r.elo.initial))
+                .collect(),
             Err(_) => Vec::new(),
         }
     } else {
@@ -1585,7 +1656,10 @@ fn print_combined_stats(
 
         println!("  Firewall Decisions");
         println!("  ──────────────────");
-        println!("  Auto-approved:      {} ({:.0}%)", audit.allow_count, auto_pct);
+        println!(
+            "  Auto-approved:      {} ({:.0}%)",
+            audit.allow_count, auto_pct
+        );
         println!("  Asked human:        {}", audit.ask_count);
         println!("  Blocked:            {}", audit.deny_count);
         println!("  Total:              {}", audit.total_decisions);
@@ -1593,7 +1667,10 @@ fn print_combined_stats(
         println!("  Unique agents:      {}", audit.unique_agents);
         println!("  Unique tools:       {}", audit.unique_tools);
         println!();
-        println!("  → {} prompts saved (auto-approved without asking)", audit.allow_count);
+        println!(
+            "  → {} prompts saved (auto-approved without asking)",
+            audit.allow_count
+        );
     } else {
         println!("  No firewall decisions recorded.");
     }
@@ -1605,7 +1682,10 @@ fn print_combined_stats(
         println!("  Output Filtering");
         println!("  ────────────────");
         println!("  Outputs filtered:   {}", filter.total_events);
-        println!("  Chars saved:        {}", format_chars(filter.total_chars_saved));
+        println!(
+            "  Chars saved:        {}",
+            format_chars(filter.total_chars_saved)
+        );
         println!("  Est. tokens saved:  ~{}", filter.total_chars_saved / 4);
         println!("  Avg reduction:      {:.1}%", filter.avg_reduction_pct);
     } else {
@@ -1614,7 +1694,8 @@ fn print_combined_stats(
 
     println!();
     println!("  ════════════════════════════════════");
-    println!("  Total value: {} prompts saved + ~{} tokens saved",
+    println!(
+        "  Total value: {} prompts saved + ~{} tokens saved",
         audit.allow_count,
         filter.total_chars_saved / 4,
     );
@@ -1643,7 +1724,6 @@ fn format_review_state(state: &ReviewState) -> &'static str {
     }
 }
 
-
 /// Check that the hook registered in settings.json matches the running binary (Fix 12, DREAD 7.8).
 /// Best-effort: logs warning if mismatch, never fails the hook.
 fn check_hook_integrity() {
@@ -1669,7 +1749,11 @@ fn check_hook_integrity() {
 
     // Walk PreToolUse and PostToolUse hooks to find our command
     for event_name in &["PreToolUse", "PostToolUse"] {
-        if let Some(hooks) = settings.get("hooks").and_then(|h| h.get(*event_name)).and_then(|p| p.as_array()) {
+        if let Some(hooks) = settings
+            .get("hooks")
+            .and_then(|h| h.get(*event_name))
+            .and_then(|p| p.as_array())
+        {
             for entry in hooks {
                 if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
                     for h in inner_hooks {
@@ -1711,17 +1795,20 @@ fn run_mission_list() -> Result<()> {
 
     println!("Active missions:\n");
     for (mission_id, mission_delegations) in &missions {
-        let agents: std::collections::HashSet<&str> = mission_delegations.iter()
+        let agents: std::collections::HashSet<&str> = mission_delegations
+            .iter()
             .filter_map(|d| d.agent_id.as_deref())
             .collect();
-        let earliest_expiry = mission_delegations.iter()
+        let earliest_expiry = mission_delegations
+            .iter()
             .filter_map(|d| d.expires_at)
             .min();
         let expiry_str = earliest_expiry
             .map(|e| e.format("%Y-%m-%d %H:%M UTC").to_string())
             .unwrap_or_else(|| "no expiry".to_string());
 
-        println!("  {} — {} delegations, {} agents, expires ~{}",
+        println!(
+            "  {} — {} delegations, {} agents, expires ~{}",
             mission_id,
             mission_delegations.len(),
             agents.len(),
@@ -1740,7 +1827,10 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
     if revoked == 0 {
         println!("No delegations found for mission '{}'.", mission_id);
     } else {
-        println!("Revoked {} delegations for mission '{}'.", revoked, mission_id);
+        println!(
+            "Revoked {} delegations for mission '{}'.",
+            revoked, mission_id
+        );
 
         // Audit log
         let audit_path = config_dir.join("audit.log");
@@ -1765,7 +1855,8 @@ fn run_calibrate() -> Result<()> {
 
     let roles = load_roles(&library_dir)?;
     let events = elo::read_elo_log(&elo_log_path)?;
-    let baselines: Vec<(String, u32)> = roles.iter()
+    let baselines: Vec<(String, u32)> = roles
+        .iter()
         .map(|r| (r.id.clone(), r.elo.initial))
         .collect();
     let ratings = elo::leaderboard(&events, &baselines);
@@ -1782,7 +1873,8 @@ fn run_calibrate() -> Result<()> {
         println!("Trust tier changes:\n");
         let audit_path = config_dir.join("audit.log");
         for change in &result.changes {
-            println!("  {} — {} → {} (ELO: {})",
+            println!(
+                "  {} — {} → {} (ELO: {})",
                 change.agent,
                 change.old_tier.as_str(),
                 change.new_tier.as_str(),
@@ -1811,7 +1903,8 @@ fn run_calibrate_show() -> Result<()> {
 
     let roles = load_roles(&library_dir)?;
     let events = elo::read_elo_log(&elo_log_path)?;
-    let baselines: Vec<(String, u32)> = roles.iter()
+    let baselines: Vec<(String, u32)> = roles
+        .iter()
         .map(|r| (r.id.clone(), r.elo.initial))
         .collect();
     let ratings = elo::leaderboard(&events, &baselines);
@@ -1823,7 +1916,8 @@ fn run_calibrate_show() -> Result<()> {
 
     for rating in &ratings {
         let tier = colmena_core::calibrate::determine_tier(rating, &thresholds);
-        println!("  {:<25} ELO:{:<6} reviews:{:<3} tier:{}",
+        println!(
+            "  {:<25} ELO:{:<6} reviews:{:<3} tier:{}",
             rating.agent,
             rating.elo,
             rating.review_count,
@@ -1842,8 +1936,7 @@ fn run_calibrate_reset() -> Result<()> {
     let overrides_path = config_dir.join("elo-overrides.json");
 
     if overrides_path.exists() {
-        std::fs::remove_file(&overrides_path)
-            .context("Failed to remove ELO overrides file")?;
+        std::fs::remove_file(&overrides_path).context("Failed to remove ELO overrides file")?;
         println!("ELO overrides cleared. All agents return to default trust rules.");
     } else {
         println!("No ELO overrides file found — already at defaults.");
