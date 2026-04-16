@@ -128,6 +128,14 @@ blocked:
     action: block
     reason: 'Destructive operation requires explicit human confirmation'
 
+  # Critical config files protected against Bash manipulation (Finding #4/#6, DREAD 7.6/6.8)
+  # Blocks any Bash command referencing protected config files — prevents truncate, sed, python, jq etc.
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '(audit\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
+    action: block
+    reason: 'Bash commands referencing critical config files are blocked — use dedicated Colmena tools'
+
   # PR merges are human-only — Claude creates PRs, Coco merges
   - tools: [Bash]
     conditions:
