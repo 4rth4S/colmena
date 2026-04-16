@@ -14,7 +14,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Lint:** `cargo clippy --workspace -- -W warnings`
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.11.0 (semver, single workspace version)
+- **Version:** 0.11.1 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
@@ -72,7 +72,8 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Watchdog timeout (5s) logged as TIMEOUT event in audit.log before exit
 - CC PostToolUse sends `tool_response` (not `tool_output`) and `interrupted` (not `exitCode`)
 - SubagentStop safe fallback: any error → approve (never trap an agent)
-- SubagentStop checks: delegation with `source: "role"` → role_type != "auditor" → has_submitted_review() → approve/block
+- SubagentStop checks: delegation with `source: "role"` → role_type != "auditor" → has_pending_evaluations() → has_submitted_review() → approve/block
+- SubagentStop reviewer gate: agents with pending reviews as reviewer_role are blocked until they call review_evaluate (checked before review_submit gate)
 - SubagentStop uses separate `SubagentStopPayload` (lifecycle event, no tool_name/tool_input)
 - Auditor role exempt from review check via `role_type: auditor` in YAML (human-controlled)
 
@@ -106,10 +107,13 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Elevated trust without bash_patterns generates "ask" (not auto-approve) for Bash — forces pattern definition
 - Reviewer selection randomized via rand::seq::SliceRandom — prevents deterministic assignment and collusion
 - Review invariants are hardcoded in review.rs: author!=reviewer, no reciprocal, min 2 scores, hash verification
+- Stale review auto-invalidation: `review_submit` invalidates prior pending reviews for same artifact+mission+author with hash mismatch (state → `Invalidated`, moved to `completed/`)
+- Cross-agent invalidation blocked: only the original author can trigger invalidation of their own reviews (STRIDE TM P0)
+- `ReviewState::Invalidated` reviews are excluded from anti-reciprocal pairing so freed reviewer slots can be reused
 - Trust gate floor (5.0) is hardcoded — config can raise threshold but never below floor
 - YAML agent_overrides take precedence over ELO overrides (human always wins)
 - Config file permissions checked on load: warns if critical files are world-writable (Unix only)
-- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json, alerts.json)
+- Config files protected in trust_circle Write rule via path_not_match (trust-firewall.yaml, runtime-delegations.json, audit.log, elo-overrides.json, filter-config/stats, settings.json, revoked-missions.json, alerts.json, reviews/, findings/)
 - Alerts are append-only — agents can't acknowledge or delete alerts
 - `alerts_ack` and `calibrate_auditor_feedback` in restricted (ELO/alert modification needs human oversight)
 
@@ -287,10 +291,10 @@ Operations:
 - **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (done)
 - **M7.2** Mission Sizing / colmena suggest — complexity analysis, recommends Colmena vs vanilla CC, min 3-agent enforcement (done)
 
-## Current State (2026-04-14)
+## Current State (2026-04-15)
 
-**Branch:** `main` (v0.11.0)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping), M7.1 (mission spawn + mission gate), M7.2 (mission sizing + colmena suggest)
+**Branch:** `main` (v0.11.1)
+**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping), M7.1 (mission spawn + mission gate), M7.2 (mission sizing + colmena suggest), v0.11.1 (review cycle hardening — reviewer evaluation enforcement, stale review auto-invalidation)
 **Next:** Post-launch hardening, real-world testing
 
 ## Key Docs
