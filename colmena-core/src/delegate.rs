@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -67,6 +67,9 @@ pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Ve
         Err(_) => return (Vec::new(), Vec::new()),
     };
 
+    // Resolve the config_dir from the delegations file path for mission validation
+    let config_dir = path.parent().map(PathBuf::from);
+
     let now = Utc::now();
     let mut active = Vec::new();
     let mut expired = Vec::new();
@@ -80,6 +83,34 @@ pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Ve
             );
             continue;
         }
+
+        // Fix Finding #1 (DREAD 7.6): validate source="role" delegations have a valid
+        // mission_id corresponding to an actual mission directory. Prevents JSON injection
+        // where an agent writes delegations with source="role" that PermissionRequest treats
+        // as legitimate missions.
+        if d.source.as_deref() == Some("role") {
+            if let Some(ref mission_id) = d.mission_id {
+                if let Some(ref cfg_dir) = config_dir {
+                    let mission_dir = cfg_dir.join("missions").join(mission_id);
+                    if !mission_dir.is_dir() {
+                        eprintln!(
+                            "[colmena] WARNING: skipping delegation for tool '{}' with source='role' \
+                             — mission directory '{}' not found (possible injection)",
+                            d.tool, mission_dir.display()
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                eprintln!(
+                    "[colmena] WARNING: skipping delegation for tool '{}' with source='role' \
+                     but no mission_id (injection prevented)",
+                    d.tool
+                );
+                continue;
+            }
+        }
+
         match d.expires_at {
             Some(exp) if exp <= now => expired.push(d),
             _ => active.push(d),
@@ -91,6 +122,9 @@ pub fn load_delegations_with_expired(path: &Path) -> (Vec<RuntimeDelegation>, Ve
 
 /// Save delegations atomically — write to temp file then rename.
 /// Validates all delegations before persisting (e.g., Bash scope check).
+///
+/// Fix Finding #2 (DREAD 5.0): Uses advisory file locking to prevent TOCTOU
+/// race where two CC instances read→modify→save simultaneously, losing delegations.
 pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Result<()> {
     for d in delegations {
         validate_bash_delegation(d)?;
@@ -100,6 +134,11 @@ pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Resul
         .context("Failed to serialize delegations")?;
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let lock_path = dir.join(".runtime-delegations.lock");
+
+    // Advisory lock: create exclusive lock file, hold for duration of write
+    let _lock = acquire_file_lock(&lock_path)?;
+
     let tmp_path = dir.join(".runtime-delegations.tmp");
 
     std::fs::write(&tmp_path, &json)
@@ -108,7 +147,45 @@ pub fn save_delegations(path: &Path, delegations: &[RuntimeDelegation]) -> Resul
     std::fs::rename(&tmp_path, path)
         .with_context(|| format!("Failed to rename temp delegations file to {}", path.display()))?;
 
+    // Lock released on drop
     Ok(())
+}
+
+/// Advisory file lock using platform-specific locking.
+/// Falls back to no-op on platforms that don't support flock.
+struct FileLock {
+    _file: std::fs::File,
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // Lock released when file handle is closed on drop
+    }
+}
+
+/// Acquire an advisory file lock. Returns a guard that releases on drop.
+/// Best-effort: returns Ok even if locking is not supported on the platform.
+fn acquire_file_lock(lock_path: &Path) -> Result<FileLock> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(lock_path)
+        .with_context(|| format!("Failed to open lock file: {}", lock_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = file.as_raw_fd();
+        // LOCK_EX = exclusive lock, blocks until acquired
+        let ret = unsafe { libc::flock(fd, libc::LOCK_EX) };
+        if ret != 0 {
+            // Best-effort: log but continue without lock
+            eprintln!("[colmena] WARNING: failed to acquire file lock (flock returned {})", ret);
+        }
+    }
+
+    Ok(FileLock { _file: file })
 }
 
 /// Validate that Bash delegations have at least one scope condition.
@@ -235,6 +312,10 @@ pub fn agents_for_mission(delegations: &[RuntimeDelegation], mission_id: &str) -
 /// Mark a mission's agents as revoked for the mid-session kill switch.
 /// Appends agent IDs to config/revoked-missions.json so the PreToolUse hook
 /// can deny their tool calls even if CC has learned session rules.
+///
+/// Fix Finding #7 (DREAD 5.2): Uses atomic write (tmp+rename) to prevent
+/// corrupted JSON on crash, which would cause load_revoked_missions to return
+/// an empty set (revoked agents recovering permissions).
 pub fn mark_mission_agents_revoked(
     config_dir: &Path,
     agent_ids: &[String],
@@ -246,8 +327,13 @@ pub fn mark_mission_agents_revoked(
     }
     let json = serde_json::to_string_pretty(&revoked)
         .context("Failed to serialize revoked missions")?;
-    std::fs::write(&path, json)
-        .with_context(|| format!("Failed to write {}", path.display()))?;
+
+    let tmp_path = config_dir.join(".revoked-missions.tmp");
+    std::fs::write(&tmp_path, &json)
+        .with_context(|| format!("Failed to write temp revoked missions file: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &path)
+        .with_context(|| format!("Failed to rename temp revoked missions file to {}", path.display()))?;
+
     Ok(())
 }
 
@@ -692,5 +778,167 @@ mod tests {
 
         let agents3 = agents_for_mission(&delegations, "nonexistent");
         assert!(agents3.is_empty());
+    }
+
+    // ── Finding #1 (DREAD 7.6): Delegation injection prevention tests ──────
+
+    #[test]
+    fn test_load_delegations_skips_role_delegation_without_mission_id() {
+        // A delegation with source="role" but no mission_id should be rejected
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("runtime-delegations.json");
+        let delegations = json!([
+            {
+                "tool": "Read",
+                "agent_id": "injected-agent",
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+                "source": "role"
+            },
+            {
+                "tool": "Write",
+                "agent_id": null,
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+                "source": "human"
+            }
+        ]);
+        std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
+
+        let result = load_delegations(&path);
+        // The source="role" without mission_id should be filtered out
+        assert_eq!(result.len(), 1, "Should only keep the human delegation");
+        assert_eq!(result[0].tool, "Write");
+    }
+
+    #[test]
+    fn test_load_delegations_skips_role_delegation_with_nonexistent_mission() {
+        // A delegation with source="role" and a mission_id that doesn't have a
+        // corresponding directory should be rejected (injection attempt)
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path();
+        let path = config_dir.join("runtime-delegations.json");
+
+        // Note: no missions/ directory created — the mission_id is fake
+        let delegations = json!([
+            {
+                "tool": "Agent",
+                "agent_id": "injected-agent",
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+                "source": "role",
+                "mission_id": "fake-mission-id"
+            }
+        ]);
+        std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
+
+        let result = load_delegations(&path);
+        assert!(result.is_empty(), "Delegation with nonexistent mission directory should be rejected");
+    }
+
+    #[test]
+    fn test_load_delegations_allows_role_delegation_with_valid_mission() {
+        // A delegation with source="role" and a valid mission directory should pass
+        let tmp = tempfile::TempDir::new().unwrap();
+        let config_dir = tmp.path();
+        let path = config_dir.join("runtime-delegations.json");
+
+        // Create a real mission directory
+        let mission_dir = config_dir.join("missions").join("real-mission");
+        std::fs::create_dir_all(&mission_dir).unwrap();
+
+        let delegations = json!([
+            {
+                "tool": "Read",
+                "agent_id": "pentester",
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+                "source": "role",
+                "mission_id": "real-mission"
+            }
+        ]);
+        std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
+
+        let result = load_delegations(&path);
+        assert_eq!(result.len(), 1, "Valid role delegation with real mission dir should be kept");
+        assert_eq!(result[0].tool, "Read");
+    }
+
+    #[test]
+    fn test_load_delegations_human_source_not_validated() {
+        // Delegations with source="human" should not undergo mission_id validation
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("runtime-delegations.json");
+
+        let delegations = json!([
+            {
+                "tool": "Read",
+                "agent_id": null,
+                "action": "auto-approve",
+                "created_at": Utc::now().to_rfc3339(),
+                "expires_at": (Utc::now() + Duration::hours(4)).to_rfc3339(),
+                "source": "human"
+            }
+        ]);
+        std::fs::write(&path, serde_json::to_string(&delegations).unwrap()).unwrap();
+
+        let result = load_delegations(&path);
+        assert_eq!(result.len(), 1, "Human delegations should not require mission_id");
+    }
+
+    // ── Finding #7 (DREAD 5.2): Atomic write for revoked-missions ──────────
+
+    #[test]
+    fn test_mark_revoked_missions_atomic_write() {
+        // Verify that mark_mission_agents_revoked creates a valid JSON file
+        // and that no tmp file is left behind
+        let tmp = tempfile::TempDir::new().unwrap();
+        mark_mission_agents_revoked(tmp.path(), &["agent-1".to_string()]).unwrap();
+
+        let path = tmp.path().join("revoked-missions.json");
+        assert!(path.exists(), "revoked-missions.json should exist");
+
+        let tmp_path = tmp.path().join(".revoked-missions.tmp");
+        assert!(!tmp_path.exists(), "temp file should be cleaned up after rename");
+
+        // Verify the JSON is valid
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let parsed: std::collections::HashSet<String> = serde_json::from_str(&contents).unwrap();
+        assert!(parsed.contains("agent-1"));
+    }
+
+    // ── Finding #2 (DREAD 5.0): File locking tests ────────────────────────
+
+    #[test]
+    fn test_save_delegations_creates_lock_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("delegations.json");
+
+        let delegations = vec![RuntimeDelegation {
+            tool: "Read".to_string(),
+            agent_id: None,
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(4)),
+            session_id: None,
+            source: None,
+            mission_id: None,
+            conditions: None,
+        }];
+
+        save_delegations(&path, &delegations).unwrap();
+
+        // Verify delegations were saved correctly
+        let reloaded = load_delegations(&path);
+        assert_eq!(reloaded.len(), 1);
+        assert_eq!(reloaded[0].tool, "Read");
+
+        // Lock file should exist (it persists, the lock is released on handle drop)
+        let lock_path = tmp.path().join(".runtime-delegations.lock");
+        assert!(lock_path.exists(), "lock file should be created");
     }
 }

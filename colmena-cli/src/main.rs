@@ -663,6 +663,28 @@ fn run_permission_request_hook_inner(payload: &hook::HookPayload) -> Result<()> 
         None => return Ok(()), // No agent_id → not a mission agent, pass through
     };
 
+    // Fix Finding #8 (DREAD 5.6): Check revoked-missions BEFORE checking role delegation.
+    // Without this, a revoked agent's PermissionRequest fires before PreToolUse processes
+    // the revocation, teaching CC session rules that persist beyond the revocation.
+    let revoked_agents = colmena_core::delegate::load_revoked_missions(&config_dir);
+    if revoked_agents.contains(agent_id.as_str()) {
+        // Agent is revoked — do NOT teach session rules. Return no output so CC prompts user.
+        // The PreToolUse mission_revocation check will deny the actual tool call.
+        let audit_path = config_dir.join("audit.log");
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::Decision {
+                action: "PERM_REQ_REVOKED",
+                session_id: &payload.session_id,
+                agent_id: Some(agent_id),
+                tool: &payload.tool_name,
+                key_field: "mission_revoked",
+                rule: "revoked_missions_check",
+            },
+        );
+        return Ok(()); // No output = CC prompts user (revoked agent gets no session rules)
+    }
+
     let delegations_path = config_dir.join("runtime-delegations.json");
     let delegations = colmena_core::delegate::load_delegations(&delegations_path);
 
@@ -734,6 +756,9 @@ fn build_permission_updates(
 
 /// SubagentStop: enforce peer review before mission workers can stop.
 /// Safe fallback: any error → approve (never trap an agent).
+///
+/// Fix Finding #19 (DREAD 5.4): When safe fallback triggers, create a warning-level
+/// alert so the human has visibility that the review gate was bypassed.
 fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
     let result = subagent_stop_inner(&payload);
 
@@ -741,6 +766,28 @@ fn run_subagent_stop_hook(payload: hook::SubagentStopPayload) -> Result<()> {
         Ok(resp) => resp,
         Err(e) => {
             log_error(&format!("SubagentStop error (safe fallback approve): {e}"));
+
+            // Create a warning alert for the safe fallback (best-effort)
+            let config_dir = colmena_core::paths::default_config_dir();
+            let alerts_path = config_dir.join("alerts.json");
+            let agent_id_str = payload.agent_id.as_deref().unwrap_or("unknown");
+            let alert = colmena_core::alerts::Alert {
+                alert_id: colmena_core::alerts::generate_alert_id(),
+                timestamp: chrono::Utc::now(),
+                severity: "warning".to_string(),
+                mission_id: "unknown".to_string(),
+                agent_id: agent_id_str.to_string(),
+                review_id: "n/a".to_string(),
+                score_average: 0.0,
+                critical_findings: 0,
+                message: format!(
+                    "SubagentStop safe fallback activated for agent '{}': review gate bypassed due to error: {}",
+                    agent_id_str, e
+                ),
+                acknowledged: false,
+            };
+            let _ = colmena_core::alerts::create_alert(&alerts_path, alert);
+
             hook::SubagentStopResponse::approve()
         }
     };
