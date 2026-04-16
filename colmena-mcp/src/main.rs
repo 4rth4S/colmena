@@ -265,6 +265,68 @@ struct CalibrateAuditorFeedbackInput {
 }
 
 // ---------------------------------------------------------------------------
+// Security analysis helpers (STRIDE TM Findings #21, #18)
+// ---------------------------------------------------------------------------
+
+/// STRIDE TM Finding #18 (DREAD 5.4): patterns that effectively match ALL commands.
+const DANGEROUS_BASH_PATTERNS: &[&str] = &[
+    r"^.*$",
+    r"^.+$",
+    r".*",
+    r".+",
+    r"^[\s\S]*$",
+    r"^[\s\S]+$",
+    r"[\s\S]*",
+    r"[\s\S]+",
+];
+
+/// Audit a generated role YAML for risky tools_allowed combinations.
+///
+/// STRIDE TM Finding #21 (DREAD 6.2): warns about Agent (sub-agent spawning),
+/// Bash without scoped patterns, and overly permissive bash_patterns.
+/// Returns human-readable warning strings.
+fn audit_role_tools_allowed(role_yaml: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let lower = role_yaml.to_lowercase();
+
+    // Check tools_allowed for Agent
+    if lower.contains("- agent") || lower.contains("agent,") || lower.contains(", agent") {
+        warnings.push(
+            "Role includes 'Agent' in tools_allowed. This enables sub-agent spawning, \
+             which can create autonomous agent chains. Ensure this is intentional."
+                .to_string(),
+        );
+    }
+
+    // Check if Bash is in tools_allowed but no bash_patterns in permissions
+    let has_bash = lower.contains("- bash") || lower.contains("bash,") || lower.contains(", bash");
+    if has_bash {
+        let has_bash_patterns = lower.contains("bash_patterns:");
+        if !has_bash_patterns {
+            warnings.push(
+                "Role includes 'Bash' in tools_allowed but has no bash_patterns in permissions. \
+                 Without scoped patterns, elevated trust would require human review for every Bash command. \
+                 Consider adding specific bash_patterns to scope allowed commands."
+                    .to_string(),
+            );
+        }
+    }
+
+    // Check for dangerous bash_patterns (Finding #18)
+    for dangerous in DANGEROUS_BASH_PATTERNS {
+        if role_yaml.contains(dangerous) {
+            warnings.push(format!(
+                "Permissive bash_pattern detected: '{}'. This pattern matches ALL Bash commands, \
+                 effectively bypassing command-level review. Use specific patterns instead.",
+                dangerous,
+            ));
+        }
+    }
+
+    warnings
+}
+
+// ---------------------------------------------------------------------------
 // Server struct
 // ---------------------------------------------------------------------------
 
@@ -765,7 +827,11 @@ impl ColmenaServer {
         let prompt_content = std::fs::read_to_string(&prompt_path)
             .map_err(|e| sanitize_error(&format!("Failed to read prompt: {e}")))?;
 
-        Ok(format!(
+        // STRIDE TM Finding #21 (DREAD 6.2): Analyze tools_allowed for risky combinations.
+        // Don't block (human already approved via restricted), but make risks visible.
+        let security_warnings = audit_role_tools_allowed(&role_content);
+
+        let mut result = format!(
             "Role '{}' created.\n\n\
             ## Files\n  {}\n  {}\n\n\
             ## Role YAML\n```yaml\n{}\n```\n\n\
@@ -776,7 +842,16 @@ impl ColmenaServer {
             prompt_path.display(),
             role_content,
             prompt_content,
-        ))
+        );
+
+        if !security_warnings.is_empty() {
+            result.push_str("\n\n## Security Warnings\n\n");
+            for warning in &security_warnings {
+                result.push_str(&format!("- WARNING: {}\n", warning));
+            }
+        }
+
+        Ok(result)
     }
 
     #[rmcp::tool(description = "Create a new pattern in the Colmena Wisdom Library with intelligent defaults based on topology (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)")]
@@ -824,6 +899,19 @@ impl ColmenaServer {
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
         let audit_log = self.config_dir.join("audit.log");
+
+        // STRIDE TM Finding #13 (DREAD 6.0): validate artifact_path is within project directory.
+        // Prevents agents from submitting /etc/shadow or other system files for review.
+        let project_dir = self.config_dir.parent().unwrap_or(&self.config_dir);
+        let canonical_artifact = std::fs::canonicalize(&artifact_path)
+            .map_err(|e| sanitize_error(&format!("Error: artifact path not accessible: {e}")))?;
+        let canonical_project = std::fs::canonicalize(project_dir)
+            .unwrap_or_else(|_| project_dir.to_path_buf());
+        if !canonical_artifact.starts_with(&canonical_project) {
+            return Err(sanitize_error(
+                "Error: artifact_path must be within the project directory"
+            ));
+        }
 
         // Auto-invalidate stale reviews before submission.
         // Computes current hash and moves any pending reviews with mismatched hash
@@ -939,9 +1027,11 @@ impl ColmenaServer {
         let review_dir = self.config_dir.join("reviews");
         let artifact_path = std::path::PathBuf::from(&input.artifact_path);
 
-        // Validate severity values before processing
+        // Validate severity and category values before processing (Finding #16: category validation)
         for f in &input.findings {
             colmena_core::findings::validate_severity(&f.severity)
+                .map_err(|e| sanitize_error(&e.to_string()))?;
+            colmena_core::findings::validate_category(&f.category)
                 .map_err(|e| sanitize_error(&e.to_string()))?;
         }
 

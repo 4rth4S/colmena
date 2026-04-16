@@ -8,6 +8,40 @@ use serde::{Deserialize, Serialize};
 /// Valid severity levels for findings.
 pub const VALID_SEVERITIES: &[&str] = &["critical", "high", "medium", "low"];
 
+/// Valid categories for findings (STRIDE TM Finding #16, DREAD 5.8).
+///
+/// Closed enum prevents prompt injection via crafted category strings in
+/// `findings_query`. Covers security findings, code quality, review meta,
+/// and the special `prompt_improvement` category used by mentor pattern.
+pub const VALID_CATEGORIES: &[&str] = &[
+    // Security findings
+    "injection",
+    "authentication",
+    "authorization",
+    "cryptography",
+    "configuration",
+    "information_disclosure",
+    "denial_of_service",
+    "xss",
+    "csrf",
+    "ssrf",
+    "rce",
+    // Code quality
+    "completeness",
+    "accuracy",
+    "correctness",
+    "performance",
+    "maintainability",
+    "security_gap",
+    // Review / meta
+    "prompt_improvement",
+    "auditor_calibration",
+    "design",
+    "documentation",
+    // General
+    "other",
+];
+
 /// Validate that a severity string is one of the allowed values.
 pub fn validate_severity(severity: &str) -> anyhow::Result<()> {
     if VALID_SEVERITIES.contains(&severity) {
@@ -17,6 +51,23 @@ pub fn validate_severity(severity: &str) -> anyhow::Result<()> {
             "invalid severity '{}': must be one of {:?}",
             severity,
             VALID_SEVERITIES
+        )
+    }
+}
+
+/// Validate that a category string is one of the allowed values.
+///
+/// STRIDE TM Finding #16 (DREAD 5.8): free-form category field enables
+/// prompt injection via `findings_query`. Validating against a closed enum
+/// prevents arbitrary strings from reaching agent prompts.
+pub fn validate_category(category: &str) -> anyhow::Result<()> {
+    if VALID_CATEGORIES.contains(&category) {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "invalid category '{}': must be one of {:?}",
+            category,
+            VALID_CATEGORIES
         )
     }
 }
@@ -60,7 +111,14 @@ pub struct FindingsFilter {
 
 /// Save a finding record to `findings_dir/<mission>/<review_id>.json`.
 /// Creates directories as needed.
+///
+/// Validates category of each finding against `VALID_CATEGORIES` (STRIDE TM #16).
 pub fn save_finding_record(findings_dir: &Path, record: &FindingRecord) -> Result<()> {
+    // STRIDE TM Finding #16: validate category before persisting
+    for finding in &record.findings {
+        validate_category(&finding.category)?;
+    }
+
     let mission_dir = findings_dir.join(&record.mission);
     std::fs::create_dir_all(&mission_dir)
         .with_context(|| format!("creating findings dir {}", mission_dir.display()))?;
@@ -279,7 +337,7 @@ mod tests {
         let r3 = make_record(
             "rev-003", "m1", "coder", "pentester", now - Duration::seconds(2),
             vec![
-                make_finding("auth", "medium"),
+                make_finding("authentication", "medium"),
                 make_finding("injection", "critical"),
             ],
         );
@@ -309,7 +367,7 @@ mod tests {
 
         let r1 = make_record(
             "rev-001", "m1", "coder", "pentester", now,
-            vec![make_finding("bug", "medium")],
+            vec![make_finding("correctness", "medium")],
         );
         let r2 = make_record(
             "rev-002", "m1", "architect", "pentester", now - Duration::seconds(1),
@@ -337,7 +395,7 @@ mod tests {
 
         let r1 = make_record(
             "rev-001", "audit-payments", "coder", "pentester", now,
-            vec![make_finding("sqli", "high")],
+            vec![make_finding("injection", "high")],
         );
         let r2 = make_record(
             "rev-002", "audit-auth", "coder", "pentester", now - Duration::seconds(1),
@@ -366,15 +424,15 @@ mod tests {
 
         let r1 = make_record(
             "rev-001", "m1", "coder", "pentester", now - Duration::hours(1),
-            vec![make_finding("bug", "medium")],
+            vec![make_finding("correctness", "medium")],
         );
         let r2 = make_record(
             "rev-002", "m1", "coder", "pentester", now - Duration::days(3),
-            vec![make_finding("bug", "low")],
+            vec![make_finding("correctness", "low")],
         );
         let r3 = make_record(
             "rev-003", "m1", "coder", "pentester", now - Duration::days(10),
-            vec![make_finding("bug", "high")],
+            vec![make_finding("correctness", "high")],
         );
 
         save_finding_record(&findings_dir, &r1).unwrap();
@@ -408,7 +466,7 @@ mod tests {
                 "coder",
                 "pentester",
                 now - Duration::seconds(i as i64),
-                vec![make_finding("bug", "medium")],
+                vec![make_finding("correctness", "medium")],
             );
             save_finding_record(&findings_dir, &record).unwrap();
         }
@@ -464,6 +522,71 @@ mod tests {
         assert_eq!(results[0].review_id, "rev-001");
     }
 
+    // ── STRIDE TM Finding #16: category validation ───────────────────
+
+    #[test]
+    fn test_validate_category_valid() {
+        assert!(validate_category("injection").is_ok());
+        assert!(validate_category("prompt_improvement").is_ok());
+        assert!(validate_category("auditor_calibration").is_ok());
+        assert!(validate_category("other").is_ok());
+    }
+
+    #[test]
+    fn test_validate_category_rejects_invalid() {
+        let result = validate_category("prompt_injection_payload");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid category"));
+    }
+
+    #[test]
+    fn test_validate_category_rejects_empty() {
+        assert!(validate_category("").is_err());
+    }
+
+    #[test]
+    fn test_save_finding_record_rejects_invalid_category() {
+        let tmp = TempDir::new().unwrap();
+        let findings_dir = tmp.path().join("findings");
+        let now = Utc::now();
+
+        let record = make_record(
+            "rev-bad",
+            "m1",
+            "coder",
+            "pentester",
+            now,
+            vec![Finding {
+                category: "evil_prompt_injection".to_string(),
+                severity: "high".to_string(),
+                description: "test".to_string(),
+                recommendation: "test".to_string(),
+            }],
+        );
+
+        let result = save_finding_record(&findings_dir, &record);
+        assert!(result.is_err(), "should reject invalid category");
+        assert!(result.unwrap_err().to_string().contains("invalid category"));
+    }
+
+    #[test]
+    fn test_save_finding_record_accepts_valid_category() {
+        let tmp = TempDir::new().unwrap();
+        let findings_dir = tmp.path().join("findings");
+        let now = Utc::now();
+
+        let record = make_record(
+            "rev-good",
+            "m1",
+            "coder",
+            "pentester",
+            now,
+            vec![make_finding("injection", "high")],
+        );
+
+        assert!(save_finding_record(&findings_dir, &record).is_ok());
+    }
+
     #[test]
     fn test_results_sorted_by_timestamp_desc() {
         let tmp = TempDir::new().unwrap();
@@ -473,15 +596,15 @@ mod tests {
         // Save in non-chronological order
         let r2 = make_record(
             "rev-002", "m1", "coder", "pentester", now - Duration::hours(2),
-            vec![make_finding("bug", "low")],
+            vec![make_finding("correctness", "low")],
         );
         let r1 = make_record(
             "rev-001", "m1", "coder", "pentester", now,
-            vec![make_finding("bug", "low")],
+            vec![make_finding("correctness", "low")],
         );
         let r3 = make_record(
             "rev-003", "m1", "coder", "pentester", now - Duration::hours(5),
-            vec![make_finding("bug", "low")],
+            vec![make_finding("correctness", "low")],
         );
 
         save_finding_record(&findings_dir, &r2).unwrap();

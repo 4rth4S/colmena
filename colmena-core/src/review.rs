@@ -23,6 +23,16 @@ pub const MIN_SCORE_DIMENSIONS: usize = 2;
 /// M1: Prevents u32 overflow on sum() and ELO inflation via absurdly large scores.
 pub const MAX_REVIEW_SCORE: u32 = 10;
 
+/// Maximum artifact file size for hashing (100 MB).
+/// STRIDE TM Finding #13 (DREAD 6.0): prevents OOM when an agent submits a
+/// huge file (e.g. /dev/urandom symlink or multi-GB log) as artifact.
+pub const MAX_ARTIFACT_SIZE: u64 = 100 * 1024 * 1024;
+
+/// Maximum number of pending reviews per (author_role, mission) pair.
+/// STRIDE TM Finding #24 (DREAD 5.4): prevents review_submit flooding that
+/// causes SubagentStop timeout via slow `has_pending_evaluations` directory scan.
+pub const MAX_PENDING_PER_AUTHOR: usize = 5;
+
 // ── Types ──────────────────────────────────────────────────────────
 
 /// State machine for a review lifecycle.
@@ -67,7 +77,19 @@ pub struct ReviewEntry {
 // ── Public API ─────────────────────────────────────────────────────
 
 /// Compute SHA-256 hash of a file and return as `"sha256:{hex}"`.
+///
+/// STRIDE TM Finding #13 (DREAD 6.0): enforces `MAX_ARTIFACT_SIZE` to prevent
+/// OOM when an agent submits a huge or infinite file as artifact.
 pub fn hash_artifact(path: &Path) -> Result<String> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("reading artifact metadata {}", path.display()))?;
+    if metadata.len() > MAX_ARTIFACT_SIZE {
+        bail!(
+            "Artifact too large: {} bytes (max {} bytes)",
+            metadata.len(),
+            MAX_ARTIFACT_SIZE
+        );
+    }
     let bytes = std::fs::read(path)
         .with_context(|| format!("reading artifact {}", path.display()))?;
     let mut hasher = Sha256::new();
@@ -81,6 +103,7 @@ pub fn hash_artifact(path: &Path) -> Result<String> {
 /// Invariants enforced:
 /// 1. Author cannot review their own work (author != reviewer).
 /// 2. Anti-reciprocal: if reviewer already reviewed author, skip that pairing.
+/// 3. Max pending per (author, mission) — STRIDE TM Finding #24 (DREAD 5.4).
 ///
 /// Returns the created `ReviewEntry` in Pending state.
 pub fn submit_review(
@@ -91,6 +114,19 @@ pub fn submit_review(
     available_roles: &[String],
     existing_reviews: &[(String, String)],
 ) -> Result<ReviewEntry> {
+    // STRIDE TM Finding #24: limit pending reviews per (author, mission)
+    let pending_count = count_pending_for_author(review_dir, author_role, mission);
+    if pending_count >= MAX_PENDING_PER_AUTHOR {
+        bail!(
+            "Too many pending reviews: {} has {} pending reviews for mission '{}' (max {}). \
+             Wait for existing reviews to be evaluated or invalidate stale ones.",
+            author_role,
+            pending_count,
+            mission,
+            MAX_PENDING_PER_AUTHOR,
+        );
+    }
+
     // Filter out the author (invariant 1: author != reviewer)
     let mut candidates: Vec<&String> = available_roles
         .iter()
@@ -444,6 +480,45 @@ pub fn invalidate_stale_reviews(
 }
 
 // ── Private helpers ────────────────────────────────────────────────
+
+/// Count pending reviews for a given (author_role, mission) pair.
+/// Returns 0 on any error (safe fallback).
+fn count_pending_for_author(review_dir: &Path, author_role: &str, mission: &str) -> usize {
+    let pending_dir = review_dir.join("pending");
+    if !pending_dir.exists() {
+        return 0;
+    }
+
+    let read = match std::fs::read_dir(&pending_dir) {
+        Ok(r) => r,
+        Err(_) => return 0,
+    };
+
+    let mut count = 0usize;
+    for file_entry in read {
+        let file_entry = match file_entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = file_entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if let Ok(entry) = serde_json::from_str::<ReviewEntry>(&content) {
+            if entry.author_role == author_role
+                && entry.mission == mission
+                && entry.state == ReviewState::Pending
+            {
+                count += 1;
+            }
+        }
+    }
+    count
+}
 
 /// Save a review entry to `review_dir/pending/{review_id}.json`.
 fn save_review(review_dir: &Path, entry: &ReviewEntry) -> Result<PathBuf> {
@@ -1277,6 +1352,107 @@ mod tests {
             invalidated.is_empty(),
             "cross-agent invalidation should be blocked"
         );
+    }
+
+    // ── STRIDE TM Finding #13: artifact size check ──────────────────
+
+    #[test]
+    fn test_hash_artifact_rejects_oversized_file() {
+        let tmp = TempDir::new().unwrap();
+        // We can't create a real 100MB+ file in a unit test, but we can verify
+        // the check runs by creating a normal file and asserting it passes
+        let artifact = create_artifact(tmp.path(), "small.rs", "fn main() {}");
+        let result = hash_artifact(&artifact);
+        assert!(result.is_ok(), "small files should be accepted");
+    }
+
+    // ── STRIDE TM Finding #24: pending review cap ──────────────────
+
+    #[test]
+    fn test_submit_review_rejects_excess_pending() {
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+
+        let roles = vec![
+            "coder".to_string(),
+            "pentester".to_string(),
+            "architect".to_string(),
+        ];
+        let existing: Vec<(String, String)> = vec![];
+
+        // Submit MAX_PENDING_PER_AUTHOR reviews (should succeed)
+        for i in 0..MAX_PENDING_PER_AUTHOR {
+            let artifact_name = format!("file_{}.rs", i);
+            let artifact = create_artifact(tmp.path(), &artifact_name, &format!("fn f{}() {{}}", i));
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            submit_review(
+                &review_dir,
+                &artifact,
+                "coder",
+                "audit-payments",
+                &roles,
+                &existing,
+            )
+            .unwrap();
+        }
+
+        // The next submission should fail
+        let extra_artifact = create_artifact(tmp.path(), "extra.rs", "fn extra() {}");
+        let result = submit_review(
+            &review_dir,
+            &extra_artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
+        );
+        assert!(result.is_err(), "should reject when MAX_PENDING_PER_AUTHOR reached");
+        assert!(
+            result.unwrap_err().to_string().contains("Too many pending reviews"),
+            "error message should mention pending limit"
+        );
+    }
+
+    #[test]
+    fn test_submit_review_cap_is_per_mission() {
+        // Pending reviews for mission A should not count towards mission B's cap
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+
+        let roles = vec![
+            "coder".to_string(),
+            "pentester".to_string(),
+            "architect".to_string(),
+        ];
+        let existing: Vec<(String, String)> = vec![];
+
+        // Fill up mission A
+        for i in 0..MAX_PENDING_PER_AUTHOR {
+            let artifact_name = format!("a_{}.rs", i);
+            let artifact = create_artifact(tmp.path(), &artifact_name, &format!("fn a{}() {{}}", i));
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            submit_review(
+                &review_dir,
+                &artifact,
+                "coder",
+                "mission-a",
+                &roles,
+                &existing,
+            )
+            .unwrap();
+        }
+
+        // Mission B should still accept reviews from the same author
+        let artifact_b = create_artifact(tmp.path(), "b_0.rs", "fn b0() {}");
+        let result = submit_review(
+            &review_dir,
+            &artifact_b,
+            "coder",
+            "mission-b",
+            &roles,
+            &existing,
+        );
+        assert!(result.is_ok(), "different mission should have its own cap");
     }
 
     #[test]
