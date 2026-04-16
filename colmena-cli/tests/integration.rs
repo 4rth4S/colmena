@@ -68,6 +68,11 @@ fn make_colmena_home_with_delegation(agent_id: &str) -> tempfile::TempDir {
     let tmp = make_colmena_home();
     let config_dir = tmp.path().join("config");
 
+    // Create mission directory (Finding #1 fix: source="role" delegations
+    // require a valid mission directory to prevent injection attacks)
+    let mission_dir = config_dir.join("missions").join("test-mission");
+    std::fs::create_dir_all(&mission_dir).unwrap();
+
     // Create runtime-delegations.json with a role delegation
     // Action uses kebab-case: "auto-approve", not "allow"
     let delegations = json!([{
@@ -921,5 +926,76 @@ fn test_mission_gate_skips_non_agent_tools() {
         !response_str.contains("mission gate"),
         "Non-Agent tools should never trigger mission gate: {}",
         stdout
+    );
+}
+
+// ── Finding #8 (DREAD 5.6): PermissionRequest revocation check ────────────
+
+/// Build a COLMENA_HOME with a role delegation AND the agent in revoked-missions.json.
+fn make_colmena_home_with_revoked_agent(agent_id: &str) -> tempfile::TempDir {
+    let tmp = make_colmena_home_with_delegation(agent_id);
+    let config_dir = tmp.path().join("config");
+
+    // Add agent to revoked-missions.json
+    let revoked: std::collections::HashSet<String> = vec![agent_id.to_string()].into_iter().collect();
+    std::fs::write(
+        config_dir.join("revoked-missions.json"),
+        serde_json::to_string(&revoked).unwrap(),
+    )
+    .unwrap();
+
+    tmp
+}
+
+#[test]
+fn test_permission_request_blocks_revoked_agent() {
+    // Agent has a role delegation but is in revoked-missions.json.
+    // PermissionRequest should NOT teach session rules — should return no output.
+    let tmp = make_colmena_home_with_revoked_agent("pentester");
+    let payload = make_permission_request_payload("Read", Some("pentester"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0, "Exit code should be 0");
+    // Revoked agent → no output (CC prompts user, session rules not taught)
+    assert!(
+        stdout.trim().is_empty(),
+        "Revoked agent should get no output from PermissionRequest; got: {stdout}"
+    );
+}
+
+// ── Finding #1 (DREAD 7.6): Delegation injection integration test ─────────
+
+#[test]
+fn test_delegation_injection_source_role_without_mission_dir() {
+    // Create a COLMENA_HOME with a delegation that has source="role" but
+    // the mission directory does NOT exist — simulates injection attack
+    let tmp = make_colmena_home();
+    let config_dir = tmp.path().join("config");
+
+    // Injected delegation with source="role" and fake mission_id (no directory)
+    let delegations = json!([{
+        "tool": "Agent",
+        "agent_id": "injected-agent",
+        "action": "auto-approve",
+        "created_at": "2099-01-01T00:00:00Z",
+        "expires_at": "2099-12-31T23:59:59Z",
+        "source": "role",
+        "mission_id": "fake-mission-never-created"
+    }]);
+    std::fs::write(
+        config_dir.join("runtime-delegations.json"),
+        serde_json::to_string_pretty(&delegations).unwrap(),
+    )
+    .unwrap();
+
+    // PermissionRequest for the injected agent — should produce no output
+    // because the delegation should be filtered out at load time
+    let payload = make_permission_request_payload("Agent", Some("injected-agent"));
+    let (stdout, code) = colmena_hook_with_env(&payload, tmp.path());
+
+    assert_eq!(code, 0);
+    assert!(
+        stdout.trim().is_empty(),
+        "Injected delegation should be filtered; no session rules taught. Got: {stdout}"
     );
 }
