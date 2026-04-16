@@ -35,6 +35,55 @@ impl Default for TrustThresholds {
     }
 }
 
+impl TrustThresholds {
+    /// Validate that calibration thresholds are consistent with hardcoded review constants.
+    ///
+    /// Fix Finding #9 (DREAD 5.0): Cross-validate calibrate.rs thresholds against
+    /// review.rs constants to prevent inconsistency between the ELO trust system
+    /// and the review trust gate.
+    ///
+    /// Returns a list of warnings (empty if consistent).
+    pub fn validate_consistency(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        // The review trust gate floor (AUTO_APPROVE_FLOOR in review.rs) is 5.0 on a
+        // 1-10 score scale. The calibrate thresholds use raw ELO values (1000-2000).
+        // These are different scales, but the logical invariant is:
+        // floor_elo must never be below a safe minimum (trust gate is meaningless if
+        // agents in probation can still get auto-approved reviews).
+        const SAFE_FLOOR_MINIMUM: i32 = 1000;
+        if self.floor_elo < SAFE_FLOOR_MINIMUM {
+            warnings.push(format!(
+                "floor_elo ({}) is below safe minimum ({}). Probation agents may not be properly restricted.",
+                self.floor_elo, SAFE_FLOOR_MINIMUM
+            ));
+        }
+
+        // Threshold ordering invariant
+        if self.floor_elo >= self.restrict_elo {
+            warnings.push(format!(
+                "floor_elo ({}) >= restrict_elo ({}). Restricted tier is unreachable.",
+                self.floor_elo, self.restrict_elo
+            ));
+        }
+        if self.restrict_elo >= self.elevate_elo {
+            warnings.push(format!(
+                "restrict_elo ({}) >= elevate_elo ({}). Standard tier is unreachable.",
+                self.restrict_elo, self.elevate_elo
+            ));
+        }
+
+        // min_reviews_to_calibrate must be >= 1
+        if self.min_reviews_to_calibrate == 0 {
+            warnings.push(
+                "min_reviews_to_calibrate is 0. Agents will be calibrated without any review history.".to_string()
+            );
+        }
+
+        warnings
+    }
+}
+
 // ── Trust tiers ──────────────────────────────────────────────────────────────
 
 /// Trust tier assigned to an agent based on ELO score and review count.
@@ -613,5 +662,82 @@ mod tests {
         let change = orphan_change.unwrap();
         assert_eq!(change.new_tier, TrustTier::Standard);
         assert_eq!(change.elo, 0);
+    }
+
+    // ── Finding #9 (DREAD 5.0): Threshold consistency validation ───────────
+
+    #[test]
+    fn test_threshold_validation_default_is_consistent() {
+        let thresholds = TrustThresholds::default();
+        let warnings = thresholds.validate_consistency();
+        assert!(
+            warnings.is_empty(),
+            "Default thresholds should be consistent, got warnings: {:?}",
+            warnings,
+        );
+    }
+
+    #[test]
+    fn test_threshold_validation_floor_below_minimum() {
+        let thresholds = TrustThresholds {
+            floor_elo: 900,
+            restrict_elo: 1300,
+            elevate_elo: 1600,
+            min_reviews_to_calibrate: 3,
+        };
+        let warnings = thresholds.validate_consistency();
+        assert!(
+            warnings.iter().any(|w| w.contains("floor_elo") && w.contains("safe minimum")),
+            "Should warn about floor_elo below safe minimum: {:?}",
+            warnings,
+        );
+    }
+
+    #[test]
+    fn test_threshold_validation_inverted_ordering() {
+        let thresholds = TrustThresholds {
+            floor_elo: 1500,    // above restrict_elo!
+            restrict_elo: 1300,
+            elevate_elo: 1600,
+            min_reviews_to_calibrate: 3,
+        };
+        let warnings = thresholds.validate_consistency();
+        assert!(
+            warnings.iter().any(|w| w.contains("floor_elo") && w.contains("restrict_elo")),
+            "Should warn about inverted floor/restrict: {:?}",
+            warnings,
+        );
+    }
+
+    #[test]
+    fn test_threshold_validation_restrict_above_elevate() {
+        let thresholds = TrustThresholds {
+            floor_elo: 1100,
+            restrict_elo: 1700,  // above elevate_elo!
+            elevate_elo: 1600,
+            min_reviews_to_calibrate: 3,
+        };
+        let warnings = thresholds.validate_consistency();
+        assert!(
+            warnings.iter().any(|w| w.contains("restrict_elo") && w.contains("elevate_elo")),
+            "Should warn about restrict >= elevate: {:?}",
+            warnings,
+        );
+    }
+
+    #[test]
+    fn test_threshold_validation_zero_min_reviews() {
+        let thresholds = TrustThresholds {
+            floor_elo: 1100,
+            restrict_elo: 1300,
+            elevate_elo: 1600,
+            min_reviews_to_calibrate: 0,
+        };
+        let warnings = thresholds.validate_consistency();
+        assert!(
+            warnings.iter().any(|w| w.contains("min_reviews_to_calibrate is 0")),
+            "Should warn about zero min_reviews: {:?}",
+            warnings,
+        );
     }
 }

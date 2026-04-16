@@ -368,25 +368,101 @@ fn extract_path(payload: &EvaluationInput) -> Option<String> {
     }
 }
 
+/// Strip content inside matched single and double quotes from a command string.
+/// Replaces quoted regions with spaces so that operators inside quotes are not detected.
+/// Unmatched trailing quotes preserve all consumed content (conservative: better false
+/// positive than bypass). (Finding #15, DREAD 5.6)
+fn strip_quoted_regions(cmd: &str) -> String {
+    let mut result = String::with_capacity(cmd.len());
+    let chars: Vec<(usize, char)> = cmd.char_indices().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let (byte_idx, c) = chars[i];
+        if c == '\'' || c == '"' {
+            let quote = c;
+            // Scan ahead for matching close quote
+            let mut found_close = None;
+            for (j, &(_, ch)) in chars.iter().enumerate().skip(i + 1) {
+                if ch == quote {
+                    found_close = Some(j);
+                    break;
+                }
+            }
+            if let Some(close_idx) = found_close {
+                // Replace entire quoted region (open + content + close) with a space
+                result.push(' ');
+                i = close_idx + 1;
+            } else {
+                // Unmatched quote — preserve everything from here (conservative)
+                result.push_str(&cmd[byte_idx..]);
+                break;
+            }
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Normalize Unicode homoglyphs to their ASCII equivalents before chain guard check.
+/// Replaces known shell-operator lookalikes with their ASCII counterparts.
+/// (Finding #3, DREAD 5.2)
+fn normalize_unicode_operators(cmd: &str) -> String {
+    cmd.chars()
+        .map(|c| match c {
+            // Greek question mark (U+037E) looks like semicolon
+            '\u{037E}' => ';',
+            // Fullwidth semicolon (U+FF1B)
+            '\u{FF1B}' => ';',
+            // Fullwidth ampersand (U+FF06)
+            '\u{FF06}' => '&',
+            // Fullwidth vertical line (U+FF5C)
+            '\u{FF5C}' => '|',
+            // Fullwidth dollar sign (U+FF04)
+            '\u{FF04}' => '$',
+            // Fullwidth grave accent (U+FF40)
+            '\u{FF40}' => '`',
+            // Fullwidth left parenthesis (U+FF08)
+            '\u{FF08}' => '(',
+            // Armenian semicolon (U+0589) — looks like colon but can confuse
+            // Small semicolon (U+FE54)
+            '\u{FE54}' => ';',
+            // Keep all other characters as-is
+            _ => c,
+        })
+        .collect()
+}
+
 /// Detect shell chain operators in a Bash command.
 ///
-/// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick.
+/// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick
+/// **outside of quoted strings**.
 /// Plain pipes (`|`) are intentionally excluded — single pipes are safe for
 /// the piped-commands trust_circle rules (`cat file | grep foo`).
 ///
-/// This check is conservative: it will produce false positives for operators
-/// inside quoted strings (e.g. `echo "a;b"`), but false positives only result
-/// in an extra human confirmation, never in a security bypass.
+/// Quote-aware: operators inside matched single/double quotes are ignored
+/// (Finding #15, DREAD 5.6). Unmatched quotes are treated conservatively.
+///
+/// Unicode-normalized: homoglyph characters are replaced with ASCII equivalents
+/// before detection (Finding #3, DREAD 5.2).
 fn contains_shell_chain(cmd: &str) -> bool {
-    cmd.contains("&&")
-        || cmd.contains("||")
-        || cmd.contains(';')
-        || cmd.contains("$(")
-        || cmd.contains('`')
+    let normalized = normalize_unicode_operators(cmd);
+    let stripped = strip_quoted_regions(&normalized);
+    stripped.contains("&&")
+        || stripped.contains("||")
+        || stripped.contains(';')
+        || stripped.contains("$(")
+        || stripped.contains('`')
 }
 
-/// Glob matching against the filename (last path component).
-/// Supports: `*.ext` (extension match), `prefix*` (prefix match), `*contains*` (substring in filename).
+/// Glob matching for path_not_match rules.
+///
+/// STRIDE TM Finding #2 (DREAD 6.4): `*contains*` patterns match against the
+/// FULL PATH (not just filename) so that `*reviews*` blocks writes to any path
+/// containing "reviews" (e.g. `config/reviews/pending/fake.json`).
+///
+/// Extension patterns (`*.ext`) and exact matches still operate on filename only.
 fn glob_match(pattern: &str, value: &str) -> bool {
     let filename = std::path::Path::new(value)
         .file_name()
@@ -394,9 +470,11 @@ fn glob_match(pattern: &str, value: &str) -> bool {
         .unwrap_or(value);
 
     if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 2 {
+        // Substring pattern: match against FULL PATH for directory protection
         let needle = &pattern[1..pattern.len() - 1];
-        filename.contains(needle)
+        value.contains(needle)
     } else if let Some(suffix) = pattern.strip_prefix('*') {
+        // Extension pattern: match against filename
         filename.ends_with(suffix)
     } else if let Some(prefix) = pattern.strip_suffix('*') {
         filename.starts_with(prefix)
@@ -756,5 +834,195 @@ mod tests {
         let payload = make_payload("Write", json!({"file_path": "/Users/test/project/src/lib.rs"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
         assert_eq!(decision.action, Action::AutoApprove, "exact project path must be auto-approved");
+    }
+
+    // ── Finding #4/#6: Bash blocked regex for critical config files ─────────
+
+    #[test]
+    fn test_bash_block_audit_log_truncate() {
+        // Finding #4 (DREAD 7.6): Bash commands targeting audit.log must be blocked
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "truncate -s 0 config/audit.log"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "truncate audit.log must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_audit_log_sed() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "sed -i '/DENY/d' config/audit.log"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "sed on audit.log must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_elo_overrides_redirect() {
+        // Finding #6: destructive redirect targeting elo-overrides must be blocked
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "jq '.' /tmp/x > config/elo-overrides.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "redirect to elo-overrides.json must be blocked");
+    }
+
+    #[test]
+    fn test_bash_allow_jq_readonly_elo_overrides() {
+        // jq without redirect is read-only — should NOT be blocked
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "jq '.pentester' config/elo-overrides.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_ne!(decision.action, Action::Block, "read-only jq should not be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_revoked_missions() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "echo '[]' > config/revoked-missions.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "writing to revoked-missions.json via Bash must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_trust_firewall_yaml() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "python3 -c 'open(\"trust-firewall.yaml\",\"w\").write(\"\")'"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "python writing trust-firewall.yaml must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_runtime_delegations() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "cat malicious.json > config/runtime-delegations.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "overwriting runtime-delegations.json via Bash must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_alerts_json() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "rm config/alerts.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "removing alerts.json via Bash must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_reviews_dir() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "rm -r config/reviews/pending/"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "removing reviews/ dir via Bash must be blocked");
+    }
+
+    #[test]
+    fn test_bash_block_findings_dir() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "find config/findings/ -delete"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::Block, "deleting findings/ via Bash must be blocked");
+    }
+
+    #[test]
+    fn test_bash_safe_commands_still_work() {
+        // Non-regression: normal safe commands must not be blocked by config protection regex
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "cat src/main.rs"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "cat on normal file must still be auto-approved");
+    }
+
+    // ── Finding #15: Quote-aware chain guard ────────────────────────────────
+
+    #[test]
+    fn test_chain_guard_ignores_semicolon_in_double_quotes() {
+        // Finding #15 (DREAD 5.6): operators inside quotes should not trigger chain guard
+        assert!(!contains_shell_chain("echo \"a;b\""), "semicolon inside double quotes should not trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_ignores_ampersand_in_single_quotes() {
+        assert!(!contains_shell_chain("echo 'a && b'"), "&& inside single quotes should not trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_ignores_subshell_in_quotes() {
+        assert!(!contains_shell_chain("echo \"$(date)\""), "$() inside double quotes should not trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_detects_semicolon_outside_quotes() {
+        // Non-regression: real operators outside quotes must still be detected
+        assert!(contains_shell_chain("echo \"safe\"; rm -rf /"), "semicolon outside quotes must trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_detects_ampersand_outside_quotes() {
+        assert!(contains_shell_chain("echo 'safe' && rm -rf /"), "&& outside quotes must trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_unmatched_quote_conservative() {
+        // Unmatched quote: conservative — the trailing content remains and is checked
+        assert!(contains_shell_chain("echo \"unterminated; rm -rf /"), "unmatched quote should be conservative");
+    }
+
+    #[test]
+    fn test_chain_guard_grep_semicolon_pattern() {
+        // Real use case: grep for semicolon in code
+        assert!(!contains_shell_chain("grep \";\" file.txt"), "grep for semicolon in quotes should not trigger");
+    }
+
+    #[test]
+    fn test_chain_guard_echo_ampersand_string() {
+        // Real use case: echo a string containing &&
+        assert!(!contains_shell_chain("echo \"test && done\""), "echo with && in quotes should not trigger");
+    }
+
+    // ── Finding #3: Unicode homoglyph normalization ─────────────────────────
+
+    #[test]
+    fn test_chain_guard_unicode_greek_semicolon() {
+        // Finding #3 (DREAD 5.2): Greek question mark (U+037E) looks like ';'
+        let cmd = "echo foo\u{037E} rm -rf /";
+        assert!(contains_shell_chain(cmd), "Greek question mark U+037E must be normalized to semicolon");
+    }
+
+    #[test]
+    fn test_chain_guard_unicode_fullwidth_ampersand() {
+        // Fullwidth ampersand (U+FF06) pair as &&
+        let cmd = "echo foo \u{FF06}\u{FF06} rm -rf /";
+        assert!(contains_shell_chain(cmd), "Fullwidth ampersands must be normalized to &&");
+    }
+
+    #[test]
+    fn test_chain_guard_unicode_fullwidth_dollar() {
+        // Fullwidth dollar sign (U+FF04) + (
+        let cmd = "echo \u{FF04}(id)";
+        assert!(contains_shell_chain(cmd), "Fullwidth dollar sign must be normalized to $");
+    }
+
+    #[test]
+    fn test_chain_guard_unicode_fullwidth_backtick() {
+        // Fullwidth grave accent (U+FF40)
+        let cmd = "echo \u{FF40}id\u{FF40}";
+        assert!(contains_shell_chain(cmd), "Fullwidth backtick must be normalized");
+    }
+
+    #[test]
+    fn test_chain_guard_normal_ascii_unaffected_by_normalize() {
+        // Non-regression: normal ASCII commands must work the same
+        assert!(!contains_shell_chain("ls -la"), "normal command should not trigger after normalization");
+        assert!(contains_shell_chain("echo foo && bar"), "normal && should still trigger after normalization");
+    }
+
+    #[test]
+    fn test_strip_quoted_regions_basic() {
+        assert_eq!(strip_quoted_regions("echo \"a;b\" foo"), "echo   foo");
+        assert_eq!(strip_quoted_regions("echo 'a&&b' foo"), "echo   foo");
+    }
+
+    #[test]
+    fn test_normalize_unicode_operators_basic() {
+        assert_eq!(normalize_unicode_operators("foo\u{037E}bar"), "foo;bar");
+        assert_eq!(normalize_unicode_operators("foo\u{FF06}\u{FF06}bar"), "foo&&bar");
     }
 }
