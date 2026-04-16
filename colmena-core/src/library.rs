@@ -120,7 +120,11 @@ pub fn load_patterns(library_dir: &Path) -> Result<Vec<Pattern>> {
     load_yaml_dir(&library_dir.join("patterns"))
 }
 
-/// Load a system prompt markdown file
+/// Load a system prompt markdown file.
+///
+/// STRIDE TM Finding #23 (DREAD 5.0): after normalize_path check, also runs
+/// `canonicalize()` to resolve symlinks and verify the real path is still
+/// within the library directory. Prevents symlink-based traversal attacks.
 pub fn load_prompt(library_dir: &Path, prompt_ref: &str) -> Result<String> {
     let path = library_dir.join(prompt_ref);
 
@@ -133,6 +137,20 @@ pub fn load_prompt(library_dir: &Path, prompt_ref: &str) -> Result<String> {
             "Prompt path traversal detected: '{}' escapes library directory",
             prompt_ref
         );
+    }
+
+    // STRIDE TM Finding #23: resolve symlinks and verify canonical path is still within library
+    if path.exists() {
+        let canonical = std::fs::canonicalize(&path)
+            .with_context(|| format!("Failed to canonicalize prompt path: {}", path.display()))?;
+        let library_canonical = std::fs::canonicalize(library_dir)
+            .with_context(|| format!("Failed to canonicalize library dir: {}", library_dir.display()))?;
+        if !canonical.starts_with(&library_canonical) {
+            anyhow::bail!(
+                "Prompt symlink traversal detected: '{}' resolves outside library directory",
+                prompt_ref
+            );
+        }
     }
 
     std::fs::read_to_string(&path)
@@ -508,6 +526,47 @@ elo_lead_selection: true
             result.unwrap_err().to_string().contains("traversal"),
             "error message should mention traversal"
         );
+    }
+
+    // ── STRIDE TM Finding #23: symlink traversal ─────────────────────────
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_prompt_blocks_symlink_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let prompts_dir = library_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+
+        // Create a target outside the library
+        let outside_dir = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::write(outside_dir.join("secret.md"), "SECRET DATA").unwrap();
+
+        // Create a symlink inside prompts/ that points outside library/
+        let symlink_path = prompts_dir.join("evil.md");
+        std::os::unix::fs::symlink(outside_dir.join("secret.md"), &symlink_path).unwrap();
+
+        // load_prompt should detect the symlink traversal
+        let result = load_prompt(&library_dir, "prompts/evil.md");
+        assert!(result.is_err(), "symlink traversal should be blocked");
+        assert!(
+            result.unwrap_err().to_string().contains("symlink traversal"),
+            "error should mention symlink traversal"
+        );
+    }
+
+    #[test]
+    fn test_load_prompt_allows_normal_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let prompts_dir = library_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("safe.md"), "# Safe prompt").unwrap();
+
+        let result = load_prompt(&library_dir, "prompts/safe.md");
+        assert!(result.is_ok(), "normal file should be allowed");
+        assert_eq!(result.unwrap(), "# Safe prompt");
     }
 
     // ── 7. RoleToolsAllowed ─────────────────────────────────────────────────

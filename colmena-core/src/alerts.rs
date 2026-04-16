@@ -26,14 +26,45 @@ pub fn generate_alert_id() -> String {
     format!("a_{}_{:04x}", now.timestamp_millis(), rand::random::<u16>())
 }
 
+// ── Constants ─────────────────────────────────────────────────────
+
+/// Maximum number of alerts stored. When exceeded, oldest acknowledged alerts
+/// are dropped first, then oldest unacknowledged. Prevents OOM on load and
+/// alert fatigue (STRIDE TM Finding #10, DREAD 6.6).
+pub const MAX_ALERTS: usize = 1000;
+
 // ── Public API ─────────────────────────────────────────────────────
 
 /// Create an alert by appending it to the alerts JSON array file.
 ///
+/// Deduplicates by (agent_id, mission_id, severity) — if an unacknowledged
+/// alert with the same triple already exists, the new alert is silently dropped.
+///
+/// Enforces MAX_ALERTS cap: when at capacity, drops oldest acknowledged alerts
+/// first, then oldest unacknowledged alerts.
+///
 /// Uses atomic write (temp + rename) for concurrent safety.
 pub fn create_alert(alerts_path: &Path, alert: Alert) -> Result<()> {
     let mut alerts = load_alerts_from_file(alerts_path)?;
+
+    // Dedup: skip if an unacknowledged alert with same (agent_id, mission_id, severity) exists
+    let is_duplicate = alerts.iter().any(|a| {
+        !a.acknowledged
+            && a.agent_id == alert.agent_id
+            && a.mission_id == alert.mission_id
+            && a.severity == alert.severity
+    });
+    if is_duplicate {
+        return Ok(());
+    }
+
     alerts.push(alert);
+
+    // Enforce cap: drop oldest acknowledged first, then oldest unacknowledged
+    if alerts.len() > MAX_ALERTS {
+        enforce_alerts_cap(&mut alerts);
+    }
+
     save_alerts(alerts_path, &alerts)
 }
 
@@ -75,6 +106,35 @@ pub fn acknowledge_all(alerts_path: &Path) -> Result<()> {
 }
 
 // ── Private helpers ────────────────────────────────────────────────
+
+/// Enforce MAX_ALERTS cap by dropping oldest alerts.
+/// Priority: acknowledged alerts dropped first (oldest first), then unacknowledged.
+fn enforce_alerts_cap(alerts: &mut Vec<Alert>) {
+    while alerts.len() > MAX_ALERTS {
+        // Find oldest acknowledged alert
+        if let Some(pos) = alerts
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.acknowledged)
+            .min_by_key(|(_, a)| a.timestamp)
+            .map(|(i, _)| i)
+        {
+            alerts.remove(pos);
+            continue;
+        }
+        // No acknowledged alerts left — drop oldest unacknowledged
+        if let Some(pos) = alerts
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, a)| a.timestamp)
+            .map(|(i, _)| i)
+        {
+            alerts.remove(pos);
+        } else {
+            break;
+        }
+    }
+}
 
 /// Load alerts from JSON file. Returns empty vec if file doesn't exist.
 fn load_alerts_from_file(alerts_path: &Path) -> Result<Vec<Alert>> {
@@ -241,6 +301,136 @@ mod tests {
         let result = acknowledge_alert(&alerts_path, "nonexistent_id");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    // ── STRIDE TM Finding #10: dedup and cap ──────────────────────
+
+    #[test]
+    fn test_alert_dedup_same_agent_mission_severity() {
+        let tmp = TempDir::new().unwrap();
+        let alerts_path = tmp.path().join("alerts.json");
+
+        // Create first alert
+        create_alert(&alerts_path, make_alert("a_600_0001", "critical", false)).unwrap();
+
+        // Create duplicate (same agent_id, mission_id, severity, different alert_id)
+        create_alert(&alerts_path, make_alert("a_600_0002", "critical", false)).unwrap();
+
+        let alerts = list_alerts(&alerts_path, None).unwrap();
+        assert_eq!(alerts.len(), 1, "duplicate should be silently dropped");
+        assert_eq!(alerts[0].alert_id, "a_600_0001");
+    }
+
+    #[test]
+    fn test_alert_dedup_different_severity_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let alerts_path = tmp.path().join("alerts.json");
+
+        create_alert(&alerts_path, make_alert("a_700_0001", "critical", false)).unwrap();
+        // Same agent+mission but different severity — should be allowed
+        create_alert(&alerts_path, make_alert("a_700_0002", "warning", false)).unwrap();
+
+        let alerts = list_alerts(&alerts_path, None).unwrap();
+        assert_eq!(alerts.len(), 2, "different severity should be allowed");
+    }
+
+    #[test]
+    fn test_alert_dedup_acknowledged_allows_new() {
+        let tmp = TempDir::new().unwrap();
+        let alerts_path = tmp.path().join("alerts.json");
+
+        // Create and acknowledge
+        create_alert(&alerts_path, make_alert("a_800_0001", "critical", false)).unwrap();
+        acknowledge_alert(&alerts_path, "a_800_0001").unwrap();
+
+        // New alert with same triple should be allowed since existing is acknowledged
+        create_alert(&alerts_path, make_alert("a_800_0002", "critical", false)).unwrap();
+
+        let alerts = list_alerts(&alerts_path, None).unwrap();
+        assert_eq!(alerts.len(), 2, "acknowledged duplicate should allow new alert");
+    }
+
+    #[test]
+    fn test_alerts_cap_enforcement() {
+        let tmp = TempDir::new().unwrap();
+        let alerts_path = tmp.path().join("alerts.json");
+
+        // Create MAX_ALERTS + 10 alerts (each with unique triple to bypass dedup)
+        for i in 0..(MAX_ALERTS + 10) {
+            let alert = Alert {
+                alert_id: format!("a_{}_0001", i),
+                timestamp: Utc::now(),
+                severity: "warning".to_string(),
+                mission_id: format!("mission-{}", i),  // unique to bypass dedup
+                agent_id: "test-agent".to_string(),
+                review_id: format!("r_{}", i),
+                score_average: 4.5,
+                critical_findings: 0,
+                message: format!("Alert {}", i),
+                acknowledged: false,
+            };
+            create_alert(&alerts_path, alert).unwrap();
+        }
+
+        let alerts = list_alerts(&alerts_path, None).unwrap();
+        assert!(
+            alerts.len() <= MAX_ALERTS,
+            "alert count {} should not exceed MAX_ALERTS {}",
+            alerts.len(),
+            MAX_ALERTS,
+        );
+    }
+
+    #[test]
+    fn test_alerts_cap_drops_acknowledged_first() {
+        let tmp = TempDir::new().unwrap();
+        let alerts_path = tmp.path().join("alerts.json");
+
+        // Create some acknowledged and some unacknowledged alerts
+        let mut initial_alerts = Vec::new();
+        for i in 0..MAX_ALERTS {
+            let alert = Alert {
+                alert_id: format!("a_{}_0001", i),
+                timestamp: Utc::now() + chrono::Duration::milliseconds(i as i64),
+                severity: "warning".to_string(),
+                mission_id: format!("mission-{}", i),
+                agent_id: "test-agent".to_string(),
+                review_id: format!("r_{}", i),
+                score_average: 4.5,
+                critical_findings: 0,
+                message: format!("Alert {}", i),
+                acknowledged: i < 100,  // first 100 are acknowledged
+            };
+            initial_alerts.push(alert);
+        }
+
+        // Write directly to avoid dedup
+        let json = serde_json::to_string_pretty(&initial_alerts).unwrap();
+        std::fs::write(&alerts_path, &json).unwrap();
+
+        // Add one more (unique triple)
+        let new_alert = Alert {
+            alert_id: "a_new_0001".to_string(),
+            timestamp: Utc::now() + chrono::Duration::seconds(999),
+            severity: "critical".to_string(),
+            mission_id: "mission-new".to_string(),
+            agent_id: "new-agent".to_string(),
+            review_id: "r_new".to_string(),
+            score_average: 3.0,
+            critical_findings: 1,
+            message: "New critical alert".to_string(),
+            acknowledged: false,
+        };
+        create_alert(&alerts_path, new_alert).unwrap();
+
+        let alerts = list_alerts(&alerts_path, None).unwrap();
+        assert!(alerts.len() <= MAX_ALERTS);
+
+        // The new critical alert should still be present
+        assert!(
+            alerts.iter().any(|a| a.alert_id == "a_new_0001"),
+            "new alert should survive cap enforcement"
+        );
     }
 
     #[test]
