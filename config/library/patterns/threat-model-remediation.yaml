@@ -1,0 +1,30 @@
+name: threat model remediation
+id: threat-model-remediation
+source: custom
+description: "Fan-out-merge pattern for implementing STRIDE/DREAD threat model fixes. N security_hardener workers execute in parallel, each with exclusive file ownership (no overlap). Workers implement fixes + tests following the DREAD decision matrix. One auditor reviews all work against the TM CSV checklist, verifying fixes close vulnerabilities without removing functionality. Use after running appsec-tm when findings need remediation."
+topology: fan-out-merge
+communication: map-reduce
+when_to_use:
+  - "Post-TM remediation with multiple findings across different files"
+  - "STRIDE/DREAD findings that can be grouped by file ownership"
+  - "Security hardening sprint where fixes are independent"
+  - "Need parallel fix implementation with unified audit review"
+when_not_to_use:
+  - "Findings all touch the same files (use sequential pattern instead)"
+  - "Single finding that doesn't benefit from parallelism"
+  - "Findings with strong cross-dependencies between files"
+pros:
+  - "Parallel hardeners — all squads work concurrently"
+  - "No merge conflicts — exclusive file ownership per squad"
+  - "Auditor catches cross-cutting issues hardeners might miss"
+  - "DREAD decision matrix prevents functionality loss"
+cons:
+  - "High total token cost from parallel workers"
+  - "Auditor must understand all squads' changes"
+  - "Cross-file findings may need coordination between squads"
+estimated_token_cost: high
+estimated_agents: "4-6"
+roles_suggested:
+  workers: [security_hardener, security_hardener, security_hardener]
+  reviewer: auditor
+elo_lead_selection: true
