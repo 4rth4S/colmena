@@ -1,5 +1,9 @@
 # Colmena
 
+[![CI](https://github.com/4rth4S/colmena/actions/workflows/ci.yml/badge.svg)](https://github.com/4rth4S/colmena/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Version](https://img.shields.io/badge/version-0.11.1-blue.svg)](./Cargo.toml)
+
 <p align="center">
   <img src="docs/colmena-banner.png" alt="Colmena — the hive defends the colony" width="400">
 </p>
@@ -233,6 +237,10 @@ colmena stats                         # Session statistics
 ## License
 
 Private — not yet licensed for distribution.
+
+## Contributors
+
+See [CONTRIBUTORS.md](./CONTRIBUTORS.md) for acknowledgments.
 
 ---
 
