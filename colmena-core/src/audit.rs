@@ -180,12 +180,25 @@ fn format_event(event: &AuditEvent) -> String {
 /// read the entire file into memory, risking OOM on long-running deployments.
 const MAX_AUDIT_LOG_BYTES: u64 = 10 * 1024 * 1024;
 
+/// Maximum number of rotated audit log files to keep (Finding #14, DREAD 5.6).
+/// With 5 rotations at 10 MiB each, we retain ~50 MiB of audit history.
+const MAX_AUDIT_ROTATIONS: u32 = 5;
+
 /// Rotate the audit log if it has exceeded MAX_AUDIT_LOG_BYTES.
-/// The current log is renamed to `audit.log.1`, overwriting any previous rotation.
+/// Uses numbered rotation: audit.log -> audit.log.1, .1 -> .2, ... up to MAX_AUDIT_ROTATIONS.
+/// Oldest rotation beyond the limit is dropped. (Finding #14, DREAD 5.6)
 /// Best-effort: silently ignores rotation errors (append still proceeds normally).
 fn maybe_rotate(audit_log: &Path) {
     let size = std::fs::metadata(audit_log).map(|m| m.len()).unwrap_or(0);
     if size >= MAX_AUDIT_LOG_BYTES {
+        // Shift existing rotations: .4 -> .5, .3 -> .4, ... .1 -> .2
+        // The oldest file (MAX_AUDIT_ROTATIONS) is overwritten/dropped.
+        for i in (1..MAX_AUDIT_ROTATIONS).rev() {
+            let from = audit_log.with_extension(format!("log.{}", i));
+            let to = audit_log.with_extension(format!("log.{}", i + 1));
+            let _ = std::fs::rename(&from, &to);
+        }
+        // Move current log to .1
         let rotated = audit_log.with_extension("log.1");
         let _ = std::fs::rename(audit_log, rotated);
     }
@@ -514,5 +527,103 @@ mod tests {
         assert!(contents.contains("DELEGATE_REVOKE"));
         assert!(contents.contains("tool=WebFetch"));
         assert!(contents.contains("agent=researcher"));
+    }
+
+    // ── Finding #14: Numbered audit log rotation ────────────────────────────
+
+    #[test]
+    fn test_audit_log_numbered_rotation() {
+        // Finding #14 (DREAD 5.6): rotation should shift .1 -> .2 -> .3 etc.
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        // Create a file that exceeds MAX size to trigger rotation
+        let big_content = "x".repeat((MAX_AUDIT_LOG_BYTES + 1) as usize);
+        std::fs::write(&log_path, &big_content).unwrap();
+
+        // First rotation: audit.log -> audit.log.1
+        maybe_rotate(&log_path);
+        let rotated_1 = tmp.path().join("audit.log.1");
+        assert!(rotated_1.exists(), "audit.log.1 should exist after first rotation");
+        assert!(!log_path.exists(), "audit.log should not exist after rotation (renamed)");
+
+        // Write another big file
+        std::fs::write(&log_path, &big_content).unwrap();
+
+        // Second rotation: audit.log.1 -> audit.log.2, audit.log -> audit.log.1
+        maybe_rotate(&log_path);
+        let rotated_2 = tmp.path().join("audit.log.2");
+        assert!(rotated_1.exists(), "audit.log.1 should exist after second rotation");
+        assert!(rotated_2.exists(), "audit.log.2 should exist after second rotation");
+    }
+
+    #[test]
+    fn test_audit_log_rotation_shifts_existing() {
+        // Verify that existing rotations are shifted before creating new .1
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        // Pre-create .1 with identifiable content
+        let rotated_1 = tmp.path().join("audit.log.1");
+        std::fs::write(&rotated_1, "first_rotation_content").unwrap();
+
+        // Create oversized main log
+        let big_content = "x".repeat((MAX_AUDIT_LOG_BYTES + 1) as usize);
+        std::fs::write(&log_path, &big_content).unwrap();
+
+        // Rotate: .1 should move to .2, main moves to .1
+        maybe_rotate(&log_path);
+
+        let rotated_2 = tmp.path().join("audit.log.2");
+        assert!(rotated_2.exists(), "audit.log.2 should exist (shifted from .1)");
+        let content_2 = std::fs::read_to_string(&rotated_2).unwrap();
+        assert_eq!(content_2, "first_rotation_content", "audit.log.2 should contain original .1 content");
+    }
+
+    #[test]
+    fn test_audit_log_rotation_max_limit() {
+        // Verify that rotation beyond MAX_AUDIT_ROTATIONS drops oldest
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        // Pre-create rotations up to the max
+        for i in 1..=MAX_AUDIT_ROTATIONS {
+            let path = tmp.path().join(format!("audit.log.{}", i));
+            std::fs::write(&path, format!("rotation_{}", i)).unwrap();
+        }
+
+        // Create oversized main log
+        let big_content = "x".repeat((MAX_AUDIT_LOG_BYTES + 1) as usize);
+        std::fs::write(&log_path, &big_content).unwrap();
+
+        // Rotate: everything shifts, .MAX is overwritten by .MAX-1
+        maybe_rotate(&log_path);
+
+        // .1 should now contain the main log data
+        let rotated_1 = tmp.path().join("audit.log.1");
+        assert!(rotated_1.exists(), "audit.log.1 should exist");
+
+        // Old .1 content ("rotation_1") should now be in .2
+        let rotated_2 = tmp.path().join("audit.log.2");
+        let content_2 = std::fs::read_to_string(&rotated_2).unwrap();
+        assert_eq!(content_2, "rotation_1", ".2 should contain old .1 content");
+
+        // .MAX+1 should NOT exist (not created beyond limit)
+        let beyond = tmp.path().join(format!("audit.log.{}", MAX_AUDIT_ROTATIONS + 1));
+        assert!(!beyond.exists(), "should not create rotation beyond MAX_AUDIT_ROTATIONS");
+    }
+
+    #[test]
+    fn test_audit_log_no_rotation_under_limit() {
+        // Verify that small logs are not rotated
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        std::fs::write(&log_path, "small log content").unwrap();
+        maybe_rotate(&log_path);
+
+        assert!(log_path.exists(), "small log should not be rotated");
+        let rotated_1 = tmp.path().join("audit.log.1");
+        assert!(!rotated_1.exists(), "no rotation should occur for small log");
     }
 }
