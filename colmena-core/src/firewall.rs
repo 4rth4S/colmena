@@ -456,8 +456,13 @@ fn contains_shell_chain(cmd: &str) -> bool {
         || stripped.contains('`')
 }
 
-/// Glob matching against the filename (last path component).
-/// Supports: `*.ext` (extension match), `prefix*` (prefix match), `*contains*` (substring in filename).
+/// Glob matching for path_not_match rules.
+///
+/// STRIDE TM Finding #2 (DREAD 6.4): `*contains*` patterns match against the
+/// FULL PATH (not just filename) so that `*reviews*` blocks writes to any path
+/// containing "reviews" (e.g. `config/reviews/pending/fake.json`).
+///
+/// Extension patterns (`*.ext`) and exact matches still operate on filename only.
 fn glob_match(pattern: &str, value: &str) -> bool {
     let filename = std::path::Path::new(value)
         .file_name()
@@ -465,9 +470,11 @@ fn glob_match(pattern: &str, value: &str) -> bool {
         .unwrap_or(value);
 
     if pattern.starts_with('*') && pattern.ends_with('*') && pattern.len() > 2 {
+        // Substring pattern: match against FULL PATH for directory protection
         let needle = &pattern[1..pattern.len() - 1];
-        filename.contains(needle)
+        value.contains(needle)
     } else if let Some(suffix) = pattern.strip_prefix('*') {
+        // Extension pattern: match against filename
         filename.ends_with(suffix)
     } else if let Some(prefix) = pattern.strip_suffix('*') {
         filename.starts_with(prefix)
@@ -849,12 +856,21 @@ mod tests {
     }
 
     #[test]
-    fn test_bash_block_elo_overrides_jq() {
-        // Finding #6 (DREAD 6.8): Bash commands targeting elo-overrides.json must be blocked
+    fn test_bash_block_elo_overrides_redirect() {
+        // Finding #6: destructive redirect targeting elo-overrides must be blocked
         let (config, patterns) = load_test_config_and_patterns();
-        let payload = make_payload("Bash", json!({"command": "jq '.pentester.action = \"auto-approve\"' config/elo-overrides.json"}));
+        let payload = make_payload("Bash", json!({"command": "jq '.' /tmp/x > config/elo-overrides.json"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
-        assert_eq!(decision.action, Action::Block, "jq on elo-overrides.json must be blocked");
+        assert_eq!(decision.action, Action::Block, "redirect to elo-overrides.json must be blocked");
+    }
+
+    #[test]
+    fn test_bash_allow_jq_readonly_elo_overrides() {
+        // jq without redirect is read-only — should NOT be blocked
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "jq '.pentester' config/elo-overrides.json"}));
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_ne!(decision.action, Action::Block, "read-only jq should not be blocked");
     }
 
     #[test]

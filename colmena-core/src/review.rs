@@ -33,6 +33,11 @@ pub const MAX_ARTIFACT_SIZE: u64 = 100 * 1024 * 1024;
 /// causes SubagentStop timeout via slow `has_pending_evaluations` directory scan.
 pub const MAX_PENDING_PER_AUTHOR: usize = 5;
 
+/// Maximum length for evaluation_narrative field (characters).
+/// STRIDE TM: prevents megabyte-sized narratives that bloat review JSON files
+/// and slow down list_reviews/calibrate_auditor calls.
+pub const MAX_NARRATIVE_CHARS: usize = 10_000;
+
 // ── Types ──────────────────────────────────────────────────────────
 
 /// State machine for a review lifecycle.
@@ -240,7 +245,16 @@ pub fn evaluate_review(
     entry.score_average = Some(avg);
     entry.finding_count = Some(findings.len());
     entry.evaluated_at = Some(now);
-    entry.evaluation_narrative = narrative;
+    // Truncate narrative to prevent bloated review JSON files
+    entry.evaluation_narrative = narrative.map(|n| {
+        if n.len() > MAX_NARRATIVE_CHARS {
+            let mut truncated = n[..MAX_NARRATIVE_CHARS].to_string();
+            truncated.push_str("... [truncated]");
+            truncated
+        } else {
+            n
+        }
+    });
     entry.state = ReviewState::Evaluated;
 
     // Move from pending/ to completed/

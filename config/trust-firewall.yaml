@@ -61,7 +61,7 @@ trust_circle:
   - tools: [Write, Edit]
     conditions:
       path_within: ['${PROJECT_DIR}']
-      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*', '*alerts*', '*reviews*', '*findings*']
+      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*colmena-errors*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*', '*alerts*', '*reviews*', '*findings*']
     action: auto-approve
     reason: 'Project-scoped file writes excluding secrets'
 
@@ -133,7 +133,7 @@ blocked:
   # targeting protected files. Read-only commands (cat, grep, git add/commit) are NOT blocked.
   - tools: [Bash]
     conditions:
-      bash_pattern: '(truncate|rm\s|rm$|shred|dd\s+of=|sed\s+-i|perl\s+-[ip]|python3?\s+-c|ruby\s+-e|node\s+-e|jq\s+--arg|tee\s|>\s*|>>\s*).*(audit\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
+      bash_pattern: '(truncate|rm\s|rm$|shred|dd\s+of=|cp\s|mv\s|sed\s+-i|perl\s+-[ip]|python3?\s+-c|ruby\s+-e|node\s+-e|jq\s+--arg|tee\s|>\s*|>>\s*).*(audit\.log|colmena-errors\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
     action: block
     reason: 'Destructive Bash operations on critical config files are blocked — use dedicated Colmena tools'
 
