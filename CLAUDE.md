@@ -150,10 +150,11 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ### Output Filtering (PostToolUse)
 
-- Filter pipeline order: ANSI strip → stderr-only → dedup → truncate (clean first, hard cap last)
+- Filter pipeline order: ANSI strip → stderr-only → dedup → prompt_injection → truncate (clean first, hard cap last)
 - Each filter wrapped in catch_unwind — a buggy filter never crashes the hook
 - FilterConfig max_output_chars (30K) must be < CC's internal limit (50K)
 - Filters only apply to Bash tool outputs (Read/Write/Edit don't need filtering)
+- Prompt injection static detection (`prompt_injection.rs`): 10 pattern IDs (OWASP LLM-01 canonical + tag injection + exfiltration) prepend a warning banner to outputs without mutating content. Configurable via `[prompt_injection]` with `enabled` + `patterns_custom`. Complements Claude Code auto-mode's LLM probe (different layers; use together). Does NOT catch: semantic/obfuscated injections, multi-step chains, non-English rephrasings, image/pdf payloads — those need the LLM probe.
 
 ### ELO & Calibration
 
