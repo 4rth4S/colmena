@@ -1,5 +1,6 @@
 pub mod ansi;
 pub mod dedup;
+pub mod prompt_injection;
 pub mod stderr_only;
 pub mod truncate;
 
