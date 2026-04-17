@@ -6,6 +6,35 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-04-16
+
+### Added
+- Release engineer role for CI/release missions (`config/library/roles/release_engineer.yaml`).
+- MIT LICENSE + `[workspace.package]` metadata fully populated; all 4 crates publishable to crates.io.
+- `rust-toolchain.toml` pinning stable toolchain with rustfmt + clippy components.
+- Dependabot config (`dependabot.yml`) — weekly updates for cargo and github-actions ecosystems.
+- `deny.toml` for `cargo-deny` license + advisory checks.
+- `SECURITY.md` enabling GitHub private vulnerability reporting.
+- `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1) and `CONTRIBUTORS.md` (GitHub-handle acknowledgments only).
+- GitHub issue and PR templates (`.github/ISSUE_TEMPLATE/`, `.github/PULL_REQUEST_TEMPLATE.md`).
+- CI hardening in `ci.yml`: `cargo fmt --check`, `cargo audit`, `cargo deny check`, `clippy -D warnings` on every PR.
+- Cross-platform release matrix in `release.yml`: Linux x86_64 + aarch64, macOS x86_64 + aarch64, Windows x86_64.
+- Versioned artifact packaging: `colmena-v{version}-{target}.tar.gz` (Linux/macOS) and `.zip` (Windows).
+- Per-artifact `sha256sum` checksums aggregated into `SHA256SUMS.txt` for release integrity.
+- `cargo publish` step for all 4 crates with ordering delays and crates.io index wait; gated off for pre-release tags.
+- README install section: `cargo install`, pre-built binary with checksum verification, build from source.
+
+### Fixed
+- Clippy 1.95 `unnecessary_sort_by` errors across selector, elo, findings, pattern_scaffold, queue, review, stats, mcp/main.
+- `release.yml` step composition: orphan `uses:` blocks without `name:` field corrected throughout.
+
+### Changed
+- `enforce_missions` default reverted to `false` (opt-in per-session, zero impact on existing installs).
+
+### Security
+- Untrack `config/runtime-delegations.json` + `config/queue/pending/*.json` (runtime state that had leaked to git history).
+- Git history cleaned of personal emails via git filter-repo; author identities limited to github.com noreply addresses.
+
 ## [0.11.0] - 2026-04-14
 
 ### Added

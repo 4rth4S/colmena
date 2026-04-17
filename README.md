@@ -69,8 +69,37 @@ Auto-mode is strong at catching semantic intent — prompt injection attempts, m
 
 Two ways to install Colmena:
 
-- **Mode A — binary + setup.** Clone the repo, `cargo build --workspace --release`, then `./target/release/colmena setup`. See [Quick Start](#quick-start) below.
+- **Mode A — binary + setup.** You install Colmena yourself. Three paths: crates.io, pre-built binary with checksum verification, or from source. See sub-sections below.
 - **Mode B — point your Claude Code at this repo.** Let your own CC read the repo and bootstrap everything for you. See [docs/install-mode-b.md](docs/install-mode-b.md). Validated with 4 power users (2026-04-16).
+
+### Mode A — from crates.io (post v0.12.0)
+
+```bash
+cargo install colmena-cli colmena-mcp
+```
+
+### Mode A — pre-built binary
+
+Download the artifact matching your platform from the [latest release](https://github.com/4rth4S/colmena/releases/latest), then verify the checksum:
+
+```bash
+curl -LO https://github.com/4rth4S/colmena/releases/download/vX.Y.Z/colmena-vX.Y.Z-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/4rth4S/colmena/releases/download/vX.Y.Z/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+tar xzf colmena-vX.Y.Z-*.tar.gz
+./colmena setup
+```
+
+Replace `x86_64-apple-darwin` with your platform: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin`, or `x86_64-pc-windows-msvc`.
+
+### Mode A — from source
+
+```bash
+git clone https://github.com/4rth4S/colmena
+cd colmena
+cargo build --workspace --release
+./target/release/colmena setup
+```
 
 ## Quick Start
 
