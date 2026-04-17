@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -13,20 +16,195 @@ jobs:
     name: Test before release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace -- -D warnings
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            use-cross: false
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            use-cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+            use-cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use-cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use-cross: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable + target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (aarch64-linux only)
+        if: matrix.use-cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
+      - name: Build with cross
+        if: matrix.use-cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: '!matrix.use-cross'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TARGET="${{ matrix.target }}"
+          ARCHIVE="colmena-v${VERSION}-${TARGET}.tar.gz"
+          mkdir -p dist
+          cp "target/${TARGET}/release/colmena" dist/
+          cp "target/${TARGET}/release/colmena-mcp" dist/
+          cp LICENSE README.md dist/
+          tar -czf "${ARCHIVE}" -C dist colmena colmena-mcp LICENSE README.md
+          sha256sum "${ARCHIVE}" > "${ARCHIVE}.sha256"
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $VERSION = "${{ steps.version.outputs.VERSION }}"
+          $TARGET = "${{ matrix.target }}"
+          $ARCHIVE = "colmena-v${VERSION}-${TARGET}.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\${TARGET}\release\colmena.exe" dist\
+          Copy-Item "target\${TARGET}\release\colmena-mcp.exe" dist\
+          Copy-Item LICENSE dist\
+          Copy-Item README.md dist\
+          Compress-Archive -Path dist\colmena.exe, dist\colmena-mcp.exe, dist\LICENSE, dist\README.md -DestinationPath $ARCHIVE
+          $hash = (Get-FileHash $ARCHIVE -Algorithm SHA256).Hash.ToLower()
+          "$hash  $ARCHIVE" | Out-File -FilePath "${ARCHIVE}.sha256" -Encoding utf8
+          echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
+          if-no-files-found: error
+
+  checksums:
+    name: Aggregate checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: artifacts
+
+      - name: Aggregate SHA256SUMS.txt
+        run: |
+          cd artifacts
+          cat *.sha256 > SHA256SUMS.txt
+          echo "=== SHA256SUMS.txt ==="
+          cat SHA256SUMS.txt
+
+      - name: Upload combined checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish-crates:
+    name: Publish to crates.io
+    needs: test
+    runs-on: ubuntu-latest
+    if: ${{ !contains(github.ref, '-rc.') && !contains(github.ref, '-beta.') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish colmena-core
+        run: cargo publish -p colmena-core --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index (colmena-core)
+        run: sleep 30
+
+      - name: Publish colmena-filter
+        run: cargo publish -p colmena-filter --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index (colmena-filter)
+        run: sleep 30
+
+      - name: Publish colmena-cli
+        run: cargo publish -p colmena-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index (colmena-cli)
+        run: sleep 30
+
+      - name: Publish colmena-mcp
+        run: cargo publish -p colmena-mcp --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   release:
     name: Create GitHub Release
-    needs: test
+    needs: [build, checksums]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Extract version from tag
         id: version
@@ -41,30 +219,34 @@ jobs:
             exit 1
           fi
 
-      - name: Extract changelog for this version
+      - name: Extract changelog section for this version
         id: changelog
         run: |
-          # Extract the section for this version from CHANGELOG.md
           VERSION="${{ steps.version.outputs.VERSION }}"
-          CHANGELOG=$(awk "/^## \[$VERSION\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md)
-          # Write to file for multi-line support
-          echo "$CHANGELOG" > /tmp/release-notes.md
+          awk "/^## \[$VERSION\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/release-notes.md
+          echo "=== Release notes preview ==="
+          head -20 /tmp/release-notes.md
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-artifacts
 
-      - name: Setup Rust cache
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build release binaries
-        run: cargo build --workspace --release
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: release-artifacts
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           body_path: /tmp/release-notes.md
           files: |
-            target/release/colmena
-            target/release/colmena-mcp
+            release-artifacts/*.tar.gz
+            release-artifacts/*.zip
+            release-artifacts/SHA256SUMS.txt
           draft: false
           prerelease: ${{ !startsWith(steps.version.outputs.VERSION, '1.') }}
