@@ -1,0 +1,61 @@
+name: DevOps Engineer
+id: devops_engineer
+icon: "🔧"
+description: "DevOps engineer — infrastructure as code, container orchestration, CI/CD pipelines, deployment automation, and monitoring integration"
+
+system_prompt_ref: prompts/devops_engineer.md
+
+default_trust_level: ask
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__review_submit
+  - mcp__colmena__findings_list
+
+permissions:
+  bash_patterns:
+    - '^docker\b'
+    - '^docker-compose\b'
+    - '^kubectl\b'
+    - '^helm\b'
+    - '^terraform\b'
+    - '^ansible(-playbook)?\b'
+    - '^aws\b'
+    - '^gcloud\b'
+    - '^az\b'
+    - '^make\b'
+    - '^gh\b'
+    - '^git\b'
+    - '^cargo (build|test|check)\b'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+    - '*.pem'
+    - '*terraform.tfstate*'
+    - '*kubeconfig*'
+
+specializations:
+  - infrastructure_as_code
+  - container_orchestration
+  - cicd_pipelines
+  - deployment_automation
+  - monitoring_integration
+
+elo:
+  initial: 1500
+  categories:
+    infrastructure_as_code: 1500
+    container_orchestration: 1500
+    cicd_pipelines: 1500
+    deployment_automation: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [architect]

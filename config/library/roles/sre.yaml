@@ -1,0 +1,61 @@
+name: SRE
+id: sre
+icon: "📡"
+description: "Site Reliability Engineer — observability, incident response, SLO/SLI management, capacity planning, reliability engineering, and runbook authoring"
+
+system_prompt_ref: prompts/sre.md
+
+default_trust_level: ask
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__review_submit
+  - mcp__colmena__findings_list
+  - mcp__colmena__alerts_list
+
+permissions:
+  bash_patterns:
+    - '^kubectl\b'
+    - '^helm\b'
+    - '^curl\b'
+    - '^prometheus\b'
+    - '^promtool\b'
+    - '^amtool\b'
+    - '^journalctl\b'
+    - '^systemctl (status|show|list-units)\b'
+    - '^dig\b'
+    - '^nslookup\b'
+    - '^traceroute\b'
+    - '^gh\b'
+    - '^git\b'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+    - '*.pem'
+
+specializations:
+  - observability
+  - incident_response
+  - slo_management
+  - capacity_planning
+  - reliability_engineering
+  - runbook_authoring
+
+elo:
+  initial: 1500
+  categories:
+    observability: 1500
+    incident_response: 1500
+    slo_management: 1500
+    reliability_engineering: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [architect]
