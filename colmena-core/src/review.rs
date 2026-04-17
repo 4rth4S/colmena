@@ -334,7 +334,7 @@ pub fn list_reviews(
     }
 
     // Sort by created_at descending
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.created_at));
 
     Ok(entries)
 }

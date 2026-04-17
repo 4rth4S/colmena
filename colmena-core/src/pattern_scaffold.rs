@@ -856,7 +856,7 @@ pub fn map_topology_roles(
             .collect();
 
         // Sort by mission keyword score (descending), then by preference order (implicit from iter order)
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|(_, score)| std::cmp::Reverse(*score));
 
         if let Some((role_id, _)) = candidates.first() {
             assigned.insert(role_id.to_string());

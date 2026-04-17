@@ -22,6 +22,16 @@ confidence-threshold = 0.8
 [advisories]
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "warn"
+# Temporarily ignored advisories — track each with a follow-up task:
+#   RUSTSEC-2025-0068 — serde_yml unmaintained + unsound.
+#     Follow-up: migrate to `serde_yaml_ng` (drop-in) in a dedicated PR.
+#     Scope: ~15 `use serde_yml` sites across colmena-core/colmena-cli.
+#   RUSTSEC-2026-0097 — rand unsound in custom-logger edge case (we do not hit it).
+#     Follow-up: upgrade `rand` once a patched release lands upstream.
+ignore = [
+    "RUSTSEC-2025-0068",
+    "RUSTSEC-2026-0097",
+]
 
 [bans]
 multiple-versions = "warn"

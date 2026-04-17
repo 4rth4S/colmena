@@ -268,7 +268,7 @@ pub fn leaderboard(events: &[StoredEloEvent], baselines: &[(String, u32)]) -> Ve
         })
         .collect();
 
-    ratings.sort_by(|a, b| b.elo.cmp(&a.elo));
+    ratings.sort_by_key(|r| std::cmp::Reverse(r.elo));
     ratings
 }
 
