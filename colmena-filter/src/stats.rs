@@ -102,7 +102,7 @@ pub fn summarize(events: &[FilterStatsEvent]) -> FilterStatsSummary {
         *cmd_savings.entry(event.command_prefix.clone()).or_default() += event.chars_saved;
     }
     let mut top_commands: Vec<(String, usize)> = cmd_savings.into_iter().collect();
-    top_commands.sort_by(|a, b| b.1.cmp(&a.1));
+    top_commands.sort_by_key(|(_, saved)| std::cmp::Reverse(*saved));
     top_commands.truncate(10);
 
     FilterStatsSummary {

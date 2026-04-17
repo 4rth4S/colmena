@@ -124,8 +124,7 @@ pub fn save_finding_record(findings_dir: &Path, record: &FindingRecord) -> Resul
         .with_context(|| format!("creating findings dir {}", mission_dir.display()))?;
 
     let file_path = mission_dir.join(format!("{}.json", record.review_id));
-    let json = serde_json::to_string_pretty(record)
-        .context("serializing finding record")?;
+    let json = serde_json::to_string_pretty(record).context("serializing finding record")?;
 
     // Atomic write: temp + rename
     let tmp_path = mission_dir.join(format!(".{}.tmp", record.review_id));
@@ -193,7 +192,7 @@ pub fn load_findings(findings_dir: &Path, filter: &FindingsFilter) -> Result<Vec
     }
 
     // Sort by timestamp descending
-    records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    records.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
 
     // Apply limit
     if let Some(limit) = filter.limit {
@@ -327,15 +326,27 @@ mod tests {
         let now = Utc::now();
 
         let r1 = make_record(
-            "rev-001", "m1", "coder", "pentester", now,
+            "rev-001",
+            "m1",
+            "coder",
+            "pentester",
+            now,
             vec![make_finding("injection", "critical")],
         );
         let r2 = make_record(
-            "rev-002", "m1", "coder", "pentester", now - Duration::seconds(1),
+            "rev-002",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::seconds(1),
             vec![make_finding("xss", "low")],
         );
         let r3 = make_record(
-            "rev-003", "m1", "coder", "pentester", now - Duration::seconds(2),
+            "rev-003",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::seconds(2),
             vec![
                 make_finding("authentication", "medium"),
                 make_finding("injection", "critical"),
@@ -366,11 +377,19 @@ mod tests {
         let now = Utc::now();
 
         let r1 = make_record(
-            "rev-001", "m1", "coder", "pentester", now,
+            "rev-001",
+            "m1",
+            "coder",
+            "pentester",
+            now,
             vec![make_finding("correctness", "medium")],
         );
         let r2 = make_record(
-            "rev-002", "m1", "architect", "pentester", now - Duration::seconds(1),
+            "rev-002",
+            "m1",
+            "architect",
+            "pentester",
+            now - Duration::seconds(1),
             vec![make_finding("design", "low")],
         );
 
@@ -394,11 +413,19 @@ mod tests {
         let now = Utc::now();
 
         let r1 = make_record(
-            "rev-001", "audit-payments", "coder", "pentester", now,
+            "rev-001",
+            "audit-payments",
+            "coder",
+            "pentester",
+            now,
             vec![make_finding("injection", "high")],
         );
         let r2 = make_record(
-            "rev-002", "audit-auth", "coder", "pentester", now - Duration::seconds(1),
+            "rev-002",
+            "audit-auth",
+            "coder",
+            "pentester",
+            now - Duration::seconds(1),
             vec![make_finding("csrf", "medium")],
         );
 
@@ -423,15 +450,27 @@ mod tests {
         let now = Utc::now();
 
         let r1 = make_record(
-            "rev-001", "m1", "coder", "pentester", now - Duration::hours(1),
+            "rev-001",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::hours(1),
             vec![make_finding("correctness", "medium")],
         );
         let r2 = make_record(
-            "rev-002", "m1", "coder", "pentester", now - Duration::days(3),
+            "rev-002",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::days(3),
             vec![make_finding("correctness", "low")],
         );
         let r3 = make_record(
-            "rev-003", "m1", "coder", "pentester", now - Duration::days(10),
+            "rev-003",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::days(10),
             vec![make_finding("correctness", "high")],
         );
 
@@ -501,11 +540,19 @@ mod tests {
         let now = Utc::now();
 
         let r1 = make_record(
-            "rev-001", "m1", "coder", "pentester", now,
+            "rev-001",
+            "m1",
+            "coder",
+            "pentester",
+            now,
             vec![make_finding("injection", "high")],
         );
         let r2 = make_record(
-            "rev-002", "m1", "coder", "pentester", now - Duration::seconds(1),
+            "rev-002",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::seconds(1),
             vec![make_finding("xss", "medium")],
         );
 
@@ -595,15 +642,27 @@ mod tests {
 
         // Save in non-chronological order
         let r2 = make_record(
-            "rev-002", "m1", "coder", "pentester", now - Duration::hours(2),
+            "rev-002",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::hours(2),
             vec![make_finding("correctness", "low")],
         );
         let r1 = make_record(
-            "rev-001", "m1", "coder", "pentester", now,
+            "rev-001",
+            "m1",
+            "coder",
+            "pentester",
+            now,
             vec![make_finding("correctness", "low")],
         );
         let r3 = make_record(
-            "rev-003", "m1", "coder", "pentester", now - Duration::hours(5),
+            "rev-003",
+            "m1",
+            "coder",
+            "pentester",
+            now - Duration::hours(5),
             vec![make_finding("correctness", "low")],
         );
 

@@ -75,7 +75,10 @@ pub fn list_alerts(alerts_path: &Path, acknowledged: Option<bool>) -> Result<Vec
     let alerts = load_alerts_from_file(alerts_path)?;
 
     match acknowledged {
-        Some(ack) => Ok(alerts.into_iter().filter(|a| a.acknowledged == ack).collect()),
+        Some(ack) => Ok(alerts
+            .into_iter()
+            .filter(|a| a.acknowledged == ack)
+            .collect()),
         None => Ok(alerts),
     }
 }
@@ -162,14 +165,18 @@ fn save_alerts(alerts_path: &Path, alerts: &[Alert]) -> Result<()> {
             .with_context(|| format!("creating alerts directory {}", parent.display()))?;
     }
 
-    let json = serde_json::to_string_pretty(alerts)
-        .context("serializing alerts")?;
+    let json = serde_json::to_string_pretty(alerts).context("serializing alerts")?;
 
     let tmp_path = alerts_path.with_extension("tmp");
     std::fs::write(&tmp_path, &json)
         .with_context(|| format!("writing temp alerts file {}", tmp_path.display()))?;
-    std::fs::rename(&tmp_path, alerts_path)
-        .with_context(|| format!("renaming {} -> {}", tmp_path.display(), alerts_path.display()))?;
+    std::fs::rename(&tmp_path, alerts_path).with_context(|| {
+        format!(
+            "renaming {} -> {}",
+            tmp_path.display(),
+            alerts_path.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -347,7 +354,11 @@ mod tests {
         create_alert(&alerts_path, make_alert("a_800_0002", "critical", false)).unwrap();
 
         let alerts = list_alerts(&alerts_path, None).unwrap();
-        assert_eq!(alerts.len(), 2, "acknowledged duplicate should allow new alert");
+        assert_eq!(
+            alerts.len(),
+            2,
+            "acknowledged duplicate should allow new alert"
+        );
     }
 
     #[test]
@@ -361,7 +372,7 @@ mod tests {
                 alert_id: format!("a_{}_0001", i),
                 timestamp: Utc::now(),
                 severity: "warning".to_string(),
-                mission_id: format!("mission-{}", i),  // unique to bypass dedup
+                mission_id: format!("mission-{}", i), // unique to bypass dedup
                 agent_id: "test-agent".to_string(),
                 review_id: format!("r_{}", i),
                 score_average: 4.5,
@@ -399,7 +410,7 @@ mod tests {
                 score_average: 4.5,
                 critical_findings: 0,
                 message: format!("Alert {}", i),
-                acknowledged: i < 100,  // first 100 are acknowledged
+                acknowledged: i < 100, // first 100 are acknowledged
             };
             initial_alerts.push(alert);
         }
@@ -436,8 +447,16 @@ mod tests {
     #[test]
     fn test_generate_alert_id_format() {
         let id = generate_alert_id();
-        assert!(id.starts_with("a_"), "alert ID should start with 'a_', got: {}", id);
+        assert!(
+            id.starts_with("a_"),
+            "alert ID should start with 'a_', got: {}",
+            id
+        );
         let parts: Vec<&str> = id.split('_').collect();
-        assert_eq!(parts.len(), 3, "alert ID should have 3 parts: a_{{ts}}_{{hex4}}");
+        assert_eq!(
+            parts.len(),
+            3,
+            "alert ID should have 3 parts: a_{{ts}}_{{hex4}}"
+        );
     }
 }

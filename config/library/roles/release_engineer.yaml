@@ -1,0 +1,62 @@
+name: release engineer
+id: release_engineer
+icon: "⚙"
+description: "CI/CD and release engineering for Rust workspaces. Owns GitHub Actions workflows, Cargo metadata for crates.io publication, dependabot config, MSRV pinning via rust-toolchain.toml, semver decisions, deny.toml policies (licenses, advisories, bans), release artifacts with checksums, and release.yml step composition."
+
+system_prompt_ref: prompts/release_engineer.md
+
+default_trust_level: ask
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__review_submit
+  - mcp__colmena__findings_list
+
+permissions:
+  bash_patterns:
+    - '^cargo\b'
+    - '^git\b'
+    - '^gh\b'
+    - '^yamllint\b'
+    - '^grep\b'
+    - '^cat\b'
+    - '^head\b'
+    - '^tail\b'
+    - '^wc\b'
+    - '^ls\b'
+    - '^test\b'
+  path_within:
+    - '${PROJECT_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+    - '*.pem'
+    - '*trust-firewall*'
+    - '*runtime-delegations*'
+    - '*audit.log*'
+
+specializations:
+  - ci_cd_pipelines
+  - cargo_metadata
+  - release_engineering
+  - github_actions
+  - semver_versioning
+
+elo:
+  initial: 1500
+  categories:
+    ci_cd_pipelines: 1500
+    cargo_metadata: 1500
+    release_engineering: 1500
+    github_actions: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [architect]

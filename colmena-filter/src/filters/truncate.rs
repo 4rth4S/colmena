@@ -9,7 +9,10 @@ pub struct TruncateFilter {
 
 impl TruncateFilter {
     pub fn new(max_lines: usize, max_chars: usize) -> Self {
-        Self { max_lines, max_chars }
+        Self {
+            max_lines,
+            max_chars,
+        }
     }
 }
 
@@ -27,8 +30,7 @@ impl OutputFilter for TruncateFilter {
         let new_stderr = truncate_smart(stderr, self.max_lines, self.max_chars);
 
         let modified = new_stdout != stdout || new_stderr != stderr;
-        let chars_saved =
-            (stdout.len() + stderr.len()) - (new_stdout.len() + new_stderr.len());
+        let chars_saved = (stdout.len() + stderr.len()) - (new_stdout.len() + new_stderr.len());
 
         FilterResult {
             stdout: new_stdout,

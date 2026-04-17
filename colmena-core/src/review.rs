@@ -95,8 +95,8 @@ pub fn hash_artifact(path: &Path) -> Result<String> {
             MAX_ARTIFACT_SIZE
         );
     }
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading artifact {}", path.display()))?;
+    let bytes =
+        std::fs::read(path).with_context(|| format!("reading artifact {}", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     let digest = hasher.finalize();
@@ -258,7 +258,9 @@ pub fn evaluate_review(
     entry.state = ReviewState::Evaluated;
 
     // Move from pending/ to completed/
-    let pending_path = review_dir.join("pending").join(format!("{}.json", review_id));
+    let pending_path = review_dir
+        .join("pending")
+        .join(format!("{}.json", review_id));
     if pending_path.exists() {
         std::fs::remove_file(&pending_path)
             .with_context(|| format!("removing pending file {}", pending_path.display()))?;
@@ -332,7 +334,7 @@ pub fn list_reviews(
     }
 
     // Sort by created_at descending
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.created_at));
 
     Ok(entries)
 }
@@ -546,8 +548,7 @@ fn save_review_to(review_dir: &Path, entry: &ReviewEntry, subdir: &str) -> Resul
         .with_context(|| format!("creating review dir {}", dir.display()))?;
 
     let file_path = dir.join(format!("{}.json", entry.review_id));
-    let json = serde_json::to_string_pretty(entry)
-        .context("serializing review entry")?;
+    let json = serde_json::to_string_pretty(entry).context("serializing review entry")?;
 
     // Atomic write: temp + rename
     let tmp_path = dir.join(format!(".{}.tmp", entry.review_id));
@@ -943,9 +944,15 @@ mod tests {
             None,
         );
 
-        assert!(result.is_err(), "score above MAX_REVIEW_SCORE must be rejected");
+        assert!(
+            result.is_err(),
+            "score above MAX_REVIEW_SCORE must be rejected"
+        );
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("exceeds maximum"), "error message should mention limit: {msg}");
+        assert!(
+            msg.contains("exceeds maximum"),
+            "error message should mention limit: {msg}"
+        );
     }
 
     #[test]
@@ -982,7 +989,10 @@ mod tests {
             None,
         );
 
-        assert!(result.is_ok(), "score equal to MAX_REVIEW_SCORE must be accepted");
+        assert!(
+            result.is_ok(),
+            "score equal to MAX_REVIEW_SCORE must be accepted"
+        );
     }
 
     // ── M6.4: has_submitted_review tests ─────────────────────────────────────
@@ -1114,7 +1124,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         let entry = submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1146,7 +1161,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1166,7 +1186,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         let entry = submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1177,7 +1202,13 @@ mod tests {
         scores.insert("quality".to_string(), 8);
         scores.insert("precision".to_string(), 7);
         evaluate_review(
-            &review_dir, &entry.review_id, &reviewer, scores, vec![], &artifact, None,
+            &review_dir,
+            &entry.review_id,
+            &reviewer,
+            scores,
+            vec![],
+            &artifact,
+            None,
         )
         .unwrap();
 
@@ -1200,7 +1231,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         let entry = submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1246,7 +1282,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1274,7 +1315,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1303,7 +1349,12 @@ mod tests {
         let existing: Vec<(String, String)> = vec![];
 
         submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1340,12 +1391,21 @@ mod tests {
         let review_dir = tmp.path().join("reviews");
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
-        let roles = vec!["coder".to_string(), "pentester".to_string(), "architect".to_string()];
+        let roles = vec![
+            "coder".to_string(),
+            "pentester".to_string(),
+            "architect".to_string(),
+        ];
         let existing: Vec<(String, String)> = vec![];
 
         // Coder submits a review
         submit_review(
-            &review_dir, &artifact, "coder", "audit-payments", &roles, &existing,
+            &review_dir,
+            &artifact,
+            "coder",
+            "audit-payments",
+            &roles,
+            &existing,
         )
         .unwrap();
 
@@ -1357,7 +1417,7 @@ mod tests {
             &review_dir,
             &artifact.to_string_lossy(),
             "audit-payments",
-            "pentester",  // different author — should NOT invalidate coder's review
+            "pentester", // different author — should NOT invalidate coder's review
             &new_hash,
         )
         .unwrap();
@@ -1397,7 +1457,8 @@ mod tests {
         // Submit MAX_PENDING_PER_AUTHOR reviews (should succeed)
         for i in 0..MAX_PENDING_PER_AUTHOR {
             let artifact_name = format!("file_{}.rs", i);
-            let artifact = create_artifact(tmp.path(), &artifact_name, &format!("fn f{}() {{}}", i));
+            let artifact =
+                create_artifact(tmp.path(), &artifact_name, &format!("fn f{}() {{}}", i));
             std::thread::sleep(std::time::Duration::from_millis(2));
             submit_review(
                 &review_dir,
@@ -1420,9 +1481,15 @@ mod tests {
             &roles,
             &existing,
         );
-        assert!(result.is_err(), "should reject when MAX_PENDING_PER_AUTHOR reached");
         assert!(
-            result.unwrap_err().to_string().contains("Too many pending reviews"),
+            result.is_err(),
+            "should reject when MAX_PENDING_PER_AUTHOR reached"
+        );
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Too many pending reviews"),
             "error message should mention pending limit"
         );
     }
@@ -1443,7 +1510,8 @@ mod tests {
         // Fill up mission A
         for i in 0..MAX_PENDING_PER_AUTHOR {
             let artifact_name = format!("a_{}.rs", i);
-            let artifact = create_artifact(tmp.path(), &artifact_name, &format!("fn a{}() {{}}", i));
+            let artifact =
+                create_artifact(tmp.path(), &artifact_name, &format!("fn a{}() {{}}", i));
             std::thread::sleep(std::time::Duration::from_millis(2));
             submit_review(
                 &review_dir,

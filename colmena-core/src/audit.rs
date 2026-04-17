@@ -73,10 +73,7 @@ pub enum AuditEvent<'a> {
         delegation_count: usize,
     },
     /// Mission deactivated (all delegations revoked)
-    MissionDeactivate {
-        mission_id: &'a str,
-        revoked: usize,
-    },
+    MissionDeactivate { mission_id: &'a str, revoked: usize },
     /// ELO calibration changed an agent's trust tier
     Calibration {
         agent: &'a str,
@@ -85,9 +82,7 @@ pub enum AuditEvent<'a> {
         elo: i32,
     },
     /// Hook watchdog timeout
-    Timeout {
-        reason: &'a str,
-    },
+    Timeout { reason: &'a str },
     /// Role tools_allowed auto-approve via PermissionRequest learning
     RoleToolsAllow {
         agent: &'a str,
@@ -112,7 +107,14 @@ pub enum AuditEvent<'a> {
 fn format_event(event: &AuditEvent) -> String {
     let ts = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     match event {
-        AuditEvent::Decision { action, session_id, agent_id, tool, key_field, rule } => {
+        AuditEvent::Decision {
+            action,
+            session_id,
+            agent_id,
+            tool,
+            key_field,
+            rule,
+        } => {
             let agent = agent_id.unwrap_or("*");
             // Truncate key_field to 120 chars for log readability
             let truncated = if key_field.len() > 120 {
@@ -122,7 +124,12 @@ fn format_event(event: &AuditEvent) -> String {
             };
             format!("[{ts}] {action:<5} session={session_id} agent={agent} tool={tool} key=\"{truncated}\" rule={rule}")
         }
-        AuditEvent::DelegateCreate { tool, agent, ttl, source } => {
+        AuditEvent::DelegateCreate {
+            tool,
+            agent,
+            ttl,
+            source,
+        } => {
             let agent = agent.unwrap_or("*");
             format!("[{ts}] DELEGATE_CREATE tool={tool} agent={agent} ttl={ttl} source={source}")
         }
@@ -130,7 +137,11 @@ fn format_event(event: &AuditEvent) -> String {
             let agent = agent.unwrap_or("*");
             format!("[{ts}] DELEGATE_MATCH tool={tool} agent={agent}")
         }
-        AuditEvent::DelegateExpire { tool, agent, source } => {
+        AuditEvent::DelegateExpire {
+            tool,
+            agent,
+            source,
+        } => {
             let agent = agent.unwrap_or("*");
             format!("[{ts}] DELEGATE_EXPIRE tool={tool} agent={agent} source={source}")
         }
@@ -138,37 +149,77 @@ fn format_event(event: &AuditEvent) -> String {
             let agent = agent.unwrap_or("*");
             format!("[{ts}] DELEGATE_REVOKE tool={tool} agent={agent}")
         }
-        AuditEvent::ReviewSubmit { review_id, author_role, artifact_path, mission } => {
+        AuditEvent::ReviewSubmit {
+            review_id,
+            author_role,
+            artifact_path,
+            mission,
+        } => {
             format!("[{ts}] REVIEW_SUBMIT review={review_id} author={author_role} artifact={artifact_path} mission={mission}")
         }
-        AuditEvent::ReviewEvaluate { review_id, reviewer_role, score_avg, finding_count } => {
+        AuditEvent::ReviewEvaluate {
+            review_id,
+            reviewer_role,
+            score_avg,
+            finding_count,
+        } => {
             format!("[{ts}] REVIEW_EVALUATE review={review_id} reviewer={reviewer_role} score_avg={score_avg:.1} findings={finding_count}")
         }
         AuditEvent::ReviewCompleted { review_id, outcome } => {
             format!("[{ts}] REVIEW_COMPLETED review={review_id} outcome={outcome}")
         }
-        AuditEvent::ReviewInvalidated { review_id, artifact_path, mission, old_hash, new_hash } => {
+        AuditEvent::ReviewInvalidated {
+            review_id,
+            artifact_path,
+            mission,
+            old_hash,
+            new_hash,
+        } => {
             format!("[{ts}] REVIEW_INVALIDATED review={review_id} artifact={artifact_path} mission={mission} old_hash={old_hash} new_hash={new_hash}")
         }
-        AuditEvent::MissionActivate { mission_id, agent_count, delegation_count } => {
+        AuditEvent::MissionActivate {
+            mission_id,
+            agent_count,
+            delegation_count,
+        } => {
             format!("[{ts}] MISSION_ACTIVATE mission={mission_id} agents={agent_count} delegations={delegation_count}")
         }
-        AuditEvent::MissionDeactivate { mission_id, revoked } => {
+        AuditEvent::MissionDeactivate {
+            mission_id,
+            revoked,
+        } => {
             format!("[{ts}] MISSION_DEACTIVATE mission={mission_id} revoked={revoked}")
         }
-        AuditEvent::Calibration { agent, old_tier, new_tier, elo } => {
+        AuditEvent::Calibration {
+            agent,
+            old_tier,
+            new_tier,
+            elo,
+        } => {
             format!("[{ts}] CALIBRATION agent={agent} old_tier={old_tier} new_tier={new_tier} elo={elo}")
         }
         AuditEvent::Timeout { reason } => {
             format!("[{ts}] TIMEOUT reason={reason}")
         }
-        AuditEvent::RoleToolsAllow { agent, tool, role_id } => {
+        AuditEvent::RoleToolsAllow {
+            agent,
+            tool,
+            role_id,
+        } => {
             format!("[{ts}] ROLE_TOOLS_ALLOW agent={agent} tool={tool} role={role_id}")
         }
-        AuditEvent::MissionSpawn { mission_id, pattern_id, pattern_auto_created, agent_count } => {
+        AuditEvent::MissionSpawn {
+            mission_id,
+            pattern_id,
+            pattern_auto_created,
+            agent_count,
+        } => {
             format!("[{ts}] MISSION_SPAWN mission={mission_id} pattern={pattern_id} auto_created={pattern_auto_created} agents={agent_count}")
         }
-        AuditEvent::MissionGate { session_id, agent_id } => {
+        AuditEvent::MissionGate {
+            session_id,
+            agent_id,
+        } => {
             let agent = agent_id.unwrap_or("*");
             format!("[{ts}] MISSION_GATE session={session_id} agent={agent}")
         }
@@ -544,8 +595,14 @@ mod tests {
         // First rotation: audit.log -> audit.log.1
         maybe_rotate(&log_path);
         let rotated_1 = tmp.path().join("audit.log.1");
-        assert!(rotated_1.exists(), "audit.log.1 should exist after first rotation");
-        assert!(!log_path.exists(), "audit.log should not exist after rotation (renamed)");
+        assert!(
+            rotated_1.exists(),
+            "audit.log.1 should exist after first rotation"
+        );
+        assert!(
+            !log_path.exists(),
+            "audit.log should not exist after rotation (renamed)"
+        );
 
         // Write another big file
         std::fs::write(&log_path, &big_content).unwrap();
@@ -553,8 +610,14 @@ mod tests {
         // Second rotation: audit.log.1 -> audit.log.2, audit.log -> audit.log.1
         maybe_rotate(&log_path);
         let rotated_2 = tmp.path().join("audit.log.2");
-        assert!(rotated_1.exists(), "audit.log.1 should exist after second rotation");
-        assert!(rotated_2.exists(), "audit.log.2 should exist after second rotation");
+        assert!(
+            rotated_1.exists(),
+            "audit.log.1 should exist after second rotation"
+        );
+        assert!(
+            rotated_2.exists(),
+            "audit.log.2 should exist after second rotation"
+        );
     }
 
     #[test]
@@ -575,9 +638,15 @@ mod tests {
         maybe_rotate(&log_path);
 
         let rotated_2 = tmp.path().join("audit.log.2");
-        assert!(rotated_2.exists(), "audit.log.2 should exist (shifted from .1)");
+        assert!(
+            rotated_2.exists(),
+            "audit.log.2 should exist (shifted from .1)"
+        );
         let content_2 = std::fs::read_to_string(&rotated_2).unwrap();
-        assert_eq!(content_2, "first_rotation_content", "audit.log.2 should contain original .1 content");
+        assert_eq!(
+            content_2, "first_rotation_content",
+            "audit.log.2 should contain original .1 content"
+        );
     }
 
     #[test]
@@ -609,8 +678,13 @@ mod tests {
         assert_eq!(content_2, "rotation_1", ".2 should contain old .1 content");
 
         // .MAX+1 should NOT exist (not created beyond limit)
-        let beyond = tmp.path().join(format!("audit.log.{}", MAX_AUDIT_ROTATIONS + 1));
-        assert!(!beyond.exists(), "should not create rotation beyond MAX_AUDIT_ROTATIONS");
+        let beyond = tmp
+            .path()
+            .join(format!("audit.log.{}", MAX_AUDIT_ROTATIONS + 1));
+        assert!(
+            !beyond.exists(),
+            "should not create rotation beyond MAX_AUDIT_ROTATIONS"
+        );
     }
 
     #[test]
@@ -624,6 +698,9 @@ mod tests {
 
         assert!(log_path.exists(), "small log should not be rotated");
         let rotated_1 = tmp.path().join("audit.log.1");
-        assert!(!rotated_1.exists(), "no rotation should occur for small log");
+        assert!(
+            !rotated_1.exists(),
+            "no rotation should occur for small log"
+        );
     }
 }
