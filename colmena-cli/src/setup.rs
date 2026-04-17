@@ -145,10 +145,7 @@ fn atomic_write(path: &Path, content: &str) -> Result<()> {
     std::fs::create_dir_all(parent)
         .with_context(|| format!("Failed to create dir {}", parent.display()))?;
 
-    let temp_path = parent.join(format!(
-        ".colmena-setup-{}.tmp",
-        std::process::id()
-    ));
+    let temp_path = parent.join(format!(".colmena-setup-{}.tmp", std::process::id()));
     std::fs::write(&temp_path, content)
         .with_context(|| format!("Failed to write temp file {}", temp_path.display()))?;
     std::fs::rename(&temp_path, path).with_context(|| {
@@ -254,8 +251,8 @@ fn register_mcp(dry_run: bool) -> Result<McpResult> {
         }),
     );
 
-    let json = serde_json::to_string_pretty(&mcp_config)
-        .context("Failed to serialize MCP config")?;
+    let json =
+        serde_json::to_string_pretty(&mcp_config).context("Failed to serialize MCP config")?;
 
     atomic_write(&mcp_path, &json)?;
 
@@ -289,27 +286,25 @@ fn verify_setup(config_dir: &Path) -> Vec<VerifyResult> {
     // 1. Config validation
     let firewall_path = config_dir.join("trust-firewall.yaml");
     match colmena_core::config::load_config(&firewall_path, "/tmp/verify") {
-        Ok(cfg) => {
-            match colmena_core::config::compile_config(&cfg) {
-                Ok(_) => {
-                    results.push(VerifyResult {
-                        check: "Config valid",
-                        status: VerifyStatus::Ok(format!(
-                            "{} trust_circle, {} restricted, {} blocked",
-                            cfg.trust_circle.len(),
-                            cfg.restricted.len(),
-                            cfg.blocked.len()
-                        )),
-                    });
-                }
-                Err(e) => {
-                    results.push(VerifyResult {
-                        check: "Config valid",
-                        status: VerifyStatus::Error(format!("regex compile failed: {e}")),
-                    });
-                }
+        Ok(cfg) => match colmena_core::config::compile_config(&cfg) {
+            Ok(_) => {
+                results.push(VerifyResult {
+                    check: "Config valid",
+                    status: VerifyStatus::Ok(format!(
+                        "{} trust_circle, {} restricted, {} blocked",
+                        cfg.trust_circle.len(),
+                        cfg.restricted.len(),
+                        cfg.blocked.len()
+                    )),
+                });
             }
-        }
+            Err(e) => {
+                results.push(VerifyResult {
+                    check: "Config valid",
+                    status: VerifyStatus::Error(format!("regex compile failed: {e}")),
+                });
+            }
+        },
         Err(e) => {
             results.push(VerifyResult {
                 check: "Config valid",
@@ -669,8 +664,15 @@ mod tests {
 
         std::fs::write(&target, custom_content).unwrap();
 
-        let result =
-            ensure_file(&target, default_content, &backup_dir, "test.yaml", false, false).unwrap();
+        let result = ensure_file(
+            &target,
+            default_content,
+            &backup_dir,
+            "test.yaml",
+            false,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(result, CopyResult::PreservedCustom);
         // Custom file preserved
@@ -694,8 +696,15 @@ mod tests {
 
         std::fs::write(&target, custom_content).unwrap();
 
-        let result =
-            ensure_file(&target, default_content, &backup_dir, "test.yaml", false, true).unwrap();
+        let result = ensure_file(
+            &target,
+            default_content,
+            &backup_dir,
+            "test.yaml",
+            false,
+            true,
+        )
+        .unwrap();
 
         assert_eq!(result, CopyResult::Overwritten);
         assert_eq!(std::fs::read_to_string(&target).unwrap(), default_content);
@@ -786,11 +795,7 @@ mod tests {
                 "type": "stdio"
             }),
         );
-        atomic_write(
-            &mcp_path,
-            &serde_json::to_string_pretty(&config).unwrap(),
-        )
-        .unwrap();
+        atomic_write(&mcp_path, &serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&mcp_path).unwrap()).unwrap();
@@ -822,9 +827,7 @@ mod tests {
         // Re-read and check — no mutation needed
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&mcp_path).unwrap()).unwrap();
-        let existing_cmd = parsed["mcpServers"]["colmena"]["command"]
-            .as_str()
-            .unwrap();
+        let existing_cmd = parsed["mcpServers"]["colmena"]["command"].as_str().unwrap();
         assert_eq!(existing_cmd, "/usr/local/bin/colmena-mcp");
     }
 }

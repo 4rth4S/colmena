@@ -35,9 +35,8 @@ fn truncate_input(tool_name: &str, input: &serde_json::Value) -> serde_json::Val
                 if let Some(cmd) = obj.get_mut("command") {
                     if let Some(s) = cmd.as_str() {
                         if s.len() > MAX_COMMAND_LEN {
-                            *cmd = serde_json::Value::String(
-                                format!("{}...", &s[..MAX_COMMAND_LEN])
-                            );
+                            *cmd =
+                                serde_json::Value::String(format!("{}...", &s[..MAX_COMMAND_LEN]));
                         }
                     }
                 }
@@ -57,9 +56,10 @@ fn truncate_input(tool_name: &str, input: &serde_json::Value) -> serde_json::Val
                     if let Some(v) = obj.get_mut(*key) {
                         if let Some(s) = v.as_str() {
                             if s.len() > MAX_COMMAND_LEN {
-                                *v = serde_json::Value::String(
-                                    format!("{}...", &s[..MAX_COMMAND_LEN])
-                                );
+                                *v = serde_json::Value::String(format!(
+                                    "{}...",
+                                    &s[..MAX_COMMAND_LEN]
+                                ));
                             }
                         }
                     }
@@ -70,9 +70,7 @@ fn truncate_input(tool_name: &str, input: &serde_json::Value) -> serde_json::Val
                 for v in obj.values_mut() {
                     if let Some(s) = v.as_str() {
                         if s.len() > MAX_COMMAND_LEN {
-                            *v = serde_json::Value::String(
-                                format!("{}...", &s[..MAX_COMMAND_LEN])
-                            );
+                            *v = serde_json::Value::String(format!("{}...", &s[..MAX_COMMAND_LEN]));
                         }
                     }
                 }
@@ -84,7 +82,11 @@ fn truncate_input(tool_name: &str, input: &serde_json::Value) -> serde_json::Val
 
 /// Write a pending approval entry to disk.
 /// Filename: {timestamp_ms}-{tool_use_id}.json for uniqueness across concurrent CC instances.
-pub fn enqueue_pending(config_dir: &Path, payload: &EvaluationInput, decision: &Decision) -> Result<PathBuf> {
+pub fn enqueue_pending(
+    config_dir: &Path,
+    payload: &EvaluationInput,
+    decision: &Decision,
+) -> Result<PathBuf> {
     let pending_dir = config_dir.join("queue/pending");
     std::fs::create_dir_all(&pending_dir)
         .with_context(|| format!("Failed to create pending dir: {}", pending_dir.display()))?;
@@ -111,8 +113,7 @@ pub fn enqueue_pending(config_dir: &Path, payload: &EvaluationInput, decision: &
         reason: decision.reason.clone(),
     };
 
-    let json = serde_json::to_string_pretty(&entry)
-        .context("Failed to serialize queue entry")?;
+    let json = serde_json::to_string_pretty(&entry).context("Failed to serialize queue entry")?;
     std::fs::write(&filepath, json)
         .with_context(|| format!("Failed to write queue entry: {}", filepath.display()))?;
 
@@ -147,7 +148,7 @@ pub fn list_pending(config_dir: &Path) -> Result<Vec<QueueEntry>> {
         }
     }
 
-    entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    entries.sort_by_key(|e| e.timestamp);
     Ok(entries)
 }
 

@@ -1,10 +1,9 @@
 mod rate_limit;
 
 use rmcp::{
-    ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ServerCapabilities, ServerInfo},
-    schemars, tool_handler, tool_router,
+    schemars, tool_handler, tool_router, ServerHandler, ServiceExt,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -17,7 +16,9 @@ use colmena_core::sanitize::sanitize_error;
 /// unchanged. All other values are single-quoted (POSIX shell safe) with internal
 /// single-quotes escaped via the `'\''` sequence.
 fn safe_cli_arg(s: &str) -> String {
-    if s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+    if s.chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
         s.to_string()
     } else {
         format!("'{}'", s.replace('\'', r"'\''"))
@@ -380,8 +381,11 @@ impl ColmenaServer {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| self.config_dir.join("trust-firewall.yaml"));
 
-        let cfg = colmena_core::config::load_config(&config_path, self.config_dir.to_str().unwrap_or("/tmp"))
-            .map_err(|e| sanitize_error(&format!("Config load failed: {e}")))?;
+        let cfg = colmena_core::config::load_config(
+            &config_path,
+            self.config_dir.to_str().unwrap_or("/tmp"),
+        )
+        .map_err(|e| sanitize_error(&format!("Config load failed: {e}")))?;
 
         match colmena_core::config::compile_config(&cfg) {
             Ok(_) => {
@@ -411,7 +415,8 @@ impl ColmenaServer {
             return Ok("No pending approvals.".to_string());
         }
 
-        serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
+        serde_json::to_string_pretty(&entries)
+            .map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
     }
 
     #[rmcp::tool(
@@ -423,7 +428,11 @@ impl ColmenaServer {
         let ttl = input.ttl.clamp(1, colmena_core::delegate::MAX_TTL_HOURS);
         let scope = input.agent.as_deref().unwrap_or("all agents");
 
-        let mut cmd = format!("colmena delegate add --tool {} --ttl {}", safe_cli_arg(&input.tool), ttl);
+        let mut cmd = format!(
+            "colmena delegate add --tool {} --ttl {}",
+            safe_cli_arg(&input.tool),
+            ttl
+        );
         if let Some(ref agent) = input.agent {
             cmd.push_str(&format!(" --agent {}", safe_cli_arg(agent)));
         }
@@ -476,7 +485,10 @@ impl ColmenaServer {
         Parameters(input): Parameters<DelegateRevokeInput>,
     ) -> Result<String, String> {
         // Read-only: returns CLI command for human to execute
-        let mut cmd = format!("colmena delegate revoke --tool {}", safe_cli_arg(&input.tool));
+        let mut cmd = format!(
+            "colmena delegate revoke --tool {}",
+            safe_cli_arg(&input.tool)
+        );
         if let Some(ref agent) = input.agent {
             cmd.push_str(&format!(" --agent {}", safe_cli_arg(agent)));
         }
@@ -519,7 +531,12 @@ impl ColmenaServer {
         let revoked_agents = colmena_core::delegate::load_revoked_missions(&self.config_dir);
 
         let decision = colmena_core::firewall::evaluate_with_elo(
-            &cfg, &patterns, &delegations, &eval_input, &elo_overrides, &revoked_agents,
+            &cfg,
+            &patterns,
+            &delegations,
+            &eval_input,
+            &elo_overrides,
+            &revoked_agents,
         );
 
         let result = serde_json::json!({
@@ -528,7 +545,8 @@ impl ColmenaServer {
             "matched_rule": decision.matched_rule,
         });
 
-        serde_json::to_string_pretty(&result).map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
+        serde_json::to_string_pretty(&result)
+            .map_err(|e| sanitize_error(&format!("Serialize failed: {e}")))
     }
 
     #[rmcp::tool(description = "List all roles and patterns in the Colmena Wisdom Library")]
@@ -547,10 +565,7 @@ impl ColmenaServer {
 
         output.push_str(&format!("Roles ({}):\n", roles.len()));
         for role in &roles {
-            output.push_str(&format!(
-                "  {} {} — {}\n",
-                role.icon, role.id, role.name
-            ));
+            output.push_str(&format!("  {} {} — {}\n", role.icon, role.id, role.name));
         }
 
         output.push('\n');
@@ -619,7 +634,10 @@ impl ColmenaServer {
             return Ok(output);
         }
 
-        Err(sanitize_error(&format!("No role or pattern found with id '{}'", input.id)))
+        Err(sanitize_error(&format!(
+            "No role or pattern found with id '{}'",
+            input.id
+        )))
     }
 
     #[rmcp::tool(description = "Select patterns from the Wisdom Library for a given mission")]
@@ -641,7 +659,8 @@ impl ColmenaServer {
 
         // If no patterns matched, suggest creating one
         if recommendations.is_empty() {
-            let suggestion = colmena_core::pattern_scaffold::suggest_pattern_for_mission(&input.mission);
+            let suggestion =
+                colmena_core::pattern_scaffold::suggest_pattern_for_mission(&input.mission);
             output.push_str(&format!(
                 "\nSuggested topology: {} — {}\n\nTo create a custom pattern:\n  {}\n",
                 suggestion.topology, suggestion.reasoning, suggestion.create_command,
@@ -653,7 +672,10 @@ impl ColmenaServer {
         if !gaps.is_empty() {
             output.push_str("\nRole gap warnings:\n");
             for gap in &gaps {
-                output.push_str(&format!("  WARNING: No role covers domain keyword '{}'\n", gap));
+                output.push_str(&format!(
+                    "  WARNING: No role covers domain keyword '{}'\n",
+                    gap
+                ));
             }
         }
 
@@ -680,7 +702,12 @@ impl ColmenaServer {
         let pattern = patterns
             .iter()
             .find(|p| p.id == input.pattern_id)
-            .ok_or_else(|| sanitize_error(&format!("Pattern '{}' not found in library", input.pattern_id)))?;
+            .ok_or_else(|| {
+                sanitize_error(&format!(
+                    "Pattern '{}' not found in library",
+                    input.pattern_id
+                ))
+            })?;
 
         // Build a Recommendation from the pattern directly (no scoring needed — user specified it)
         let role_map: std::collections::HashMap<&str, &colmena_core::library::Role> =
@@ -719,7 +746,8 @@ impl ColmenaServer {
         let elo_dir = self.config_dir.join("elo");
         let elo_log_path = elo_dir.join("elo-log.jsonl");
         let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
-        let baselines: Vec<(String, u32)> = roles.iter()
+        let baselines: Vec<(String, u32)> = roles
+            .iter()
             .map(|r| (r.id.clone(), r.elo.initial))
             .collect();
         let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
@@ -761,13 +789,17 @@ impl ColmenaServer {
         // Agent prompts section
         output.push_str("\n## Agent Prompts (ready for Agent tool)\n\n");
         for agent in &mission_config.agent_configs {
-            let is_lead = mission_config.reviewer_lead.as_ref()
+            let is_lead = mission_config
+                .reviewer_lead
+                .as_ref()
                 .map(|l| l.role_id == agent.role_id)
                 .unwrap_or(false);
             let role_label = if is_lead { " [REVIEWER]" } else { "" };
             output.push_str(&format!(
                 "### {} {}{}\nPrompt: {}\n\n",
-                agent.role_id, agent.role_name, role_label,
+                agent.role_id,
+                agent.role_name,
+                role_label,
                 agent.claude_md_path.display()
             ));
         }
@@ -781,7 +813,11 @@ impl ColmenaServer {
                     .map(|exp| {
                         let dur = exp - d.created_at;
                         let h = dur.num_hours();
-                        if h < 1 { 1 } else { h }
+                        if h < 1 {
+                            1
+                        } else {
+                            h
+                        }
                     })
                     .unwrap_or(colmena_core::selector::DEFAULT_MISSION_TTL_HOURS);
 
@@ -803,7 +839,9 @@ impl ColmenaServer {
         Ok(output)
     }
 
-    #[rmcp::tool(description = "Create a new role in the Colmena Wisdom Library with intelligent defaults based on category (offensive, defensive, compliance, architecture, research, development, operations, creative)")]
+    #[rmcp::tool(
+        description = "Create a new role in the Colmena Wisdom Library with intelligent defaults based on category (offensive, defensive, compliance, architecture, research, development, operations, creative)"
+    )]
     fn library_create_role(
         &self,
         Parameters(input): Parameters<LibraryCreateRoleInput>,
@@ -811,15 +849,20 @@ impl ColmenaServer {
         self.rate_limiter.check("library_create_role")?;
         let library_dir = self.config_dir.join("library");
 
-        let category = input.category
+        let category = input
+            .category
             .as_deref()
             .map(|c| c.parse::<colmena_core::templates::RoleCategory>())
             .transpose()
             .map_err(|e| sanitize_error(&format!("Invalid category: {e}")))?;
 
-        let (role_path, prompt_path) =
-            colmena_core::selector::scaffold_role(&input.id, &input.description, category, &library_dir)
-                .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
+        let (role_path, prompt_path) = colmena_core::selector::scaffold_role(
+            &input.id,
+            &input.description,
+            category,
+            &library_dir,
+        )
+        .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
 
         // Read back generated files for inline review
         let role_content = std::fs::read_to_string(&role_path)
@@ -854,7 +897,9 @@ impl ColmenaServer {
         Ok(result)
     }
 
-    #[rmcp::tool(description = "Create a new pattern in the Colmena Wisdom Library with intelligent defaults based on topology (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)")]
+    #[rmcp::tool(
+        description = "Create a new pattern in the Colmena Wisdom Library with intelligent defaults based on topology (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)"
+    )]
     fn library_create_pattern(
         &self,
         Parameters(input): Parameters<LibraryCreatePatternInput>,
@@ -862,15 +907,20 @@ impl ColmenaServer {
         self.rate_limiter.check("library_create_pattern")?;
         let library_dir = self.config_dir.join("library");
 
-        let topology = input.topology
+        let topology = input
+            .topology
             .as_deref()
             .map(|t| t.parse::<colmena_core::pattern_scaffold::PatternTopology>())
             .transpose()
             .map_err(|e| sanitize_error(&format!("Invalid topology: {e}")))?;
 
-        let pattern_path =
-            colmena_core::pattern_scaffold::scaffold_pattern(&input.id, &input.description, topology, &library_dir)
-                .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
+        let pattern_path = colmena_core::pattern_scaffold::scaffold_pattern(
+            &input.id,
+            &input.description,
+            topology,
+            &library_dir,
+        )
+        .map_err(|e| sanitize_error(&format!("Scaffold failed: {e}")))?;
 
         let pattern_content = std::fs::read_to_string(&pattern_path)
             .map_err(|e| sanitize_error(&format!("Failed to read pattern YAML: {e}")))?;
@@ -905,11 +955,11 @@ impl ColmenaServer {
         let project_dir = self.config_dir.parent().unwrap_or(&self.config_dir);
         let canonical_artifact = std::fs::canonicalize(&artifact_path)
             .map_err(|e| sanitize_error(&format!("Error: artifact path not accessible: {e}")))?;
-        let canonical_project = std::fs::canonicalize(project_dir)
-            .unwrap_or_else(|_| project_dir.to_path_buf());
+        let canonical_project =
+            std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
         if !canonical_artifact.starts_with(&canonical_project) {
             return Err(sanitize_error(
-                "Error: artifact_path must be within the project directory"
+                "Error: artifact_path must be within the project directory",
             ));
         }
 
@@ -979,7 +1029,11 @@ impl ColmenaServer {
             result.push_str(&format!(
                 "\n\n  {} stale review(s) invalidated: {}",
                 invalidated.len(),
-                invalidated.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>().join(", ")
+                invalidated
+                    .iter()
+                    .map(|(id, _)| id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
 
@@ -997,9 +1051,7 @@ impl ColmenaServer {
             Some("pending") => Some(colmena_core::review::ReviewState::Pending),
             Some("completed") => Some(colmena_core::review::ReviewState::Completed),
             Some("evaluated") => Some(colmena_core::review::ReviewState::Evaluated),
-            Some("needs_human_review") => {
-                Some(colmena_core::review::ReviewState::NeedsHumanReview)
-            }
+            Some("needs_human_review") => Some(colmena_core::review::ReviewState::NeedsHumanReview),
             Some("rejected") => Some(colmena_core::review::ReviewState::Rejected),
             Some("invalidated") => Some(colmena_core::review::ReviewState::Invalidated),
             Some(other) => return Err(sanitize_error(&format!("Unknown state filter: '{other}'"))),
@@ -1016,9 +1068,7 @@ impl ColmenaServer {
         serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
-    #[rmcp::tool(
-        description = "Evaluate a peer review — submit scores and findings as a reviewer"
-    )]
+    #[rmcp::tool(description = "Evaluate a peer review — submit scores and findings as a reviewer")]
     fn review_evaluate(
         &self,
         Parameters(input): Parameters<ReviewEvaluateInput>,
@@ -1071,9 +1121,17 @@ impl ColmenaServer {
         if gate == colmena_core::review::TrustGateResult::NeedsHumanReview {
             let critical_count = findings.iter().filter(|f| f.severity == "critical").count();
             let alert = colmena_core::alerts::Alert {
-                alert_id: format!("a_{}_{:04x}", chrono::Utc::now().timestamp_millis(), rand::random::<u16>()),
+                alert_id: format!(
+                    "a_{}_{:04x}",
+                    chrono::Utc::now().timestamp_millis(),
+                    rand::random::<u16>()
+                ),
                 timestamp: chrono::Utc::now(),
-                severity: if score_avg < 5.0 || critical_count > 0 { "critical".to_string() } else { "warning".to_string() },
+                severity: if score_avg < 5.0 || critical_count > 0 {
+                    "critical".to_string()
+                } else {
+                    "warning".to_string()
+                },
                 mission_id: entry.mission.clone(),
                 agent_id: entry.author_role.clone(),
                 review_id: entry.review_id.clone(),
@@ -1120,10 +1178,7 @@ impl ColmenaServer {
                         agent: entry.author_role.clone(),
                         event_type: colmena_core::elo::EloEventType::FindingAgainst,
                         delta: finding_d,
-                        reason: format!(
-                            "{} {} finding",
-                            finding.severity, finding.category
-                        ),
+                        reason: format!("{} {} finding", finding.severity, finding.category),
                         mission: entry.mission.clone(),
                         review_id: entry.review_id.clone(),
                     },
@@ -1138,10 +1193,7 @@ impl ColmenaServer {
                     agent: entry.reviewer_role.clone(),
                     event_type: colmena_core::elo::EloEventType::ReviewQuality,
                     delta: colmena_core::elo::REVIEWER_FINDING_DELTA,
-                    reason: format!(
-                        "found {} {} issue",
-                        finding.severity, finding.category
-                    ),
+                    reason: format!("found {} {} issue", finding.severity, finding.category),
                     mission: entry.mission.clone(),
                     review_id: entry.review_id.clone(),
                 },
@@ -1199,14 +1251,17 @@ impl ColmenaServer {
         Parameters(_input): Parameters<EloRatingsInput>,
     ) -> Result<String, String> {
         let elo_log = self.config_dir.join("elo/elo-log.jsonl");
-        let events =
-            colmena_core::elo::read_elo_log(&elo_log).map_err(|e| sanitize_error(&format!("Error: {e}")))?;
+        let events = colmena_core::elo::read_elo_log(&elo_log)
+            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 
         // Load roles for baseline ELO values
         let library_dir = self.config_dir.join("library");
         let baselines: Vec<(String, u32)> =
             if let Ok(roles) = colmena_core::library::load_roles(&library_dir) {
-                roles.iter().map(|r| (r.id.clone(), r.elo.initial)).collect()
+                roles
+                    .iter()
+                    .map(|r| (r.id.clone(), r.elo.initial))
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -1310,13 +1365,18 @@ impl ColmenaServer {
 
     // ── Mission management ───────────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Deactivate a mission — returns CLI command to revoke all its delegations (read-only, requires human confirmation)")]
+    #[rmcp::tool(
+        description = "Deactivate a mission — returns CLI command to revoke all its delegations (read-only, requires human confirmation)"
+    )]
     fn mission_deactivate(
         &self,
         Parameters(input): Parameters<MissionDeactivateInput>,
     ) -> Result<String, String> {
         self.rate_limiter.check("mission_deactivate")?;
-        let cmd = format!("colmena mission deactivate --id {}", safe_cli_arg(&input.mission_id));
+        let cmd = format!(
+            "colmena mission deactivate --id {}",
+            safe_cli_arg(&input.mission_id)
+        );
         Ok(format!(
             "Mission deactivation requested for '{}'.\n\n\
              To confirm, run this command in the terminal:\n\n  {}\n\n\
@@ -1327,7 +1387,9 @@ impl ColmenaServer {
 
     // ── Mission Spawn ────────────────────────────────────────────────────────
 
-    #[rmcp::tool(description = "One-step mission creation — selects pattern, maps roles, generates agent prompts with mission markers, and returns delegation commands. Use this instead of library_select + library_generate when you want everything in one call.")]
+    #[rmcp::tool(
+        description = "One-step mission creation — selects pattern, maps roles, generates agent prompts with mission markers, and returns delegation commands. Use this instead of library_select + library_generate when you want everything in one call."
+    )]
     fn mission_spawn(
         &self,
         Parameters(input): Parameters<MissionSpawnInput>,
@@ -1345,7 +1407,10 @@ impl ColmenaServer {
         if let Some(ref pid) = input.pattern_id {
             let found = patterns.iter().any(|p| p.id == *pid);
             if !found {
-                return Err(sanitize_error(&format!("Pattern '{}' not found in library", pid)));
+                return Err(sanitize_error(&format!(
+                    "Pattern '{}' not found in library",
+                    pid
+                )));
             }
             patterns.retain(|p| p.id == *pid);
         }
@@ -1353,7 +1418,8 @@ impl ColmenaServer {
         // Query ELO ratings
         let elo_log_path = self.config_dir.join("elo/elo-log.jsonl");
         let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
-        let baselines: Vec<(String, u32)> = roles.iter()
+        let baselines: Vec<(String, u32)> = roles
+            .iter()
             .map(|r| (r.id.clone(), r.elo.initial))
             .collect();
         let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
@@ -1372,19 +1438,26 @@ impl ColmenaServer {
 
         // Log audit event
         let audit_path = self.config_dir.join("audit.log");
-        let _ = colmena_core::audit::log_event(&audit_path, &colmena_core::audit::AuditEvent::MissionSpawn {
-            mission_id: &spawn_result.mission_name,
-            pattern_id: &spawn_result.pattern_id,
-            pattern_auto_created: spawn_result.pattern_auto_created,
-            agent_count: spawn_result.agent_prompts.len(),
-        });
+        let _ = colmena_core::audit::log_event(
+            &audit_path,
+            &colmena_core::audit::AuditEvent::MissionSpawn {
+                mission_id: &spawn_result.mission_name,
+                pattern_id: &spawn_result.pattern_id,
+                pattern_auto_created: spawn_result.pattern_auto_created,
+                agent_count: spawn_result.agent_prompts.len(),
+            },
+        );
 
         // Format output
         let mut output = format!(
             "## Mission: {}\n\nPattern: {}{}\nAgents: {}\n",
             spawn_result.mission_name,
             spawn_result.pattern_id,
-            if spawn_result.pattern_auto_created { " (auto-created)" } else { "" },
+            if spawn_result.pattern_auto_created {
+                " (auto-created)"
+            } else {
+                ""
+            },
             spawn_result.agent_prompts.len(),
         );
 
@@ -1428,7 +1501,9 @@ impl ColmenaServer {
 
     // ── Mission Suggest ──────────────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Analyze a mission description and recommend whether to use Colmena — returns complexity, agent count, pattern suggestion, and confidence. Use this before mission_spawn to check if the task warrants multi-agent orchestration.")]
+    #[rmcp::tool(
+        description = "Analyze a mission description and recommend whether to use Colmena — returns complexity, agent count, pattern suggestion, and confidence. Use this before mission_spawn to check if the task warrants multi-agent orchestration."
+    )]
     fn mission_suggest(
         &self,
         Parameters(input): Parameters<MissionSuggestInput>,
@@ -1440,7 +1515,8 @@ impl ColmenaServer {
         let patterns = colmena_core::library::load_patterns(&library_dir)
             .map_err(|e| sanitize_error(&format!("Failed to load patterns: {e}")))?;
 
-        let suggestion = colmena_core::selector::suggest_mission_size(&input.mission, &roles, &patterns);
+        let suggestion =
+            colmena_core::selector::suggest_mission_size(&input.mission, &roles, &patterns);
 
         let mut output = format!(
             "## Mission Analysis\n\n\
@@ -1456,7 +1532,11 @@ impl ColmenaServer {
             suggestion.recommended_agents,
             suggestion.needs_colmena,
             suggestion.confidence,
-            if suggestion.domains_detected.is_empty() { "none".to_string() } else { suggestion.domains_detected.join(", ") },
+            if suggestion.domains_detected.is_empty() {
+                "none".to_string()
+            } else {
+                suggestion.domains_detected.join(", ")
+            },
         );
 
         if suggestion.needs_colmena {
@@ -1464,7 +1544,10 @@ impl ColmenaServer {
                 output.push_str(&format!("| Suggested pattern | {} |\n", pattern));
             }
             if !suggestion.suggested_roles.is_empty() {
-                output.push_str(&format!("| Suggested roles | {} |\n", suggestion.suggested_roles.join(" → ")));
+                output.push_str(&format!(
+                    "| Suggested roles | {} |\n",
+                    suggestion.suggested_roles.join(" → ")
+                ));
             }
             output.push_str(&format!(
                 "\n**Recommendation:** Use `mcp__colmena__mission_spawn` to create this mission.\n\n{}",
@@ -1482,11 +1565,10 @@ impl ColmenaServer {
 
     // ── Calibration ──────────────────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Show current ELO-based trust calibration state — which agents are elevated, restricted, or on probation")]
-    fn calibrate(
-        &self,
-        Parameters(_input): Parameters<CalibrateInput>,
-    ) -> Result<String, String> {
+    #[rmcp::tool(
+        description = "Show current ELO-based trust calibration state — which agents are elevated, restricted, or on probation"
+    )]
+    fn calibrate(&self, Parameters(_input): Parameters<CalibrateInput>) -> Result<String, String> {
         let library_dir = colmena_core::library::default_library_dir();
         let elo_log_path = self.config_dir.join("elo/elo-log.jsonl");
 
@@ -1495,7 +1577,8 @@ impl ColmenaServer {
         let events = colmena_core::elo::read_elo_log(&elo_log_path)
             .map_err(|e| sanitize_error(&format!("Error reading ELO log: {e}")))?;
 
-        let baselines: Vec<(String, u32)> = roles.iter()
+        let baselines: Vec<(String, u32)> = roles
+            .iter()
             .map(|r| (r.id.clone(), r.elo.initial))
             .collect();
         let ratings = colmena_core::elo::leaderboard(&events, &baselines);
@@ -1514,7 +1597,9 @@ impl ColmenaServer {
                 let tier = colmena_core::calibrate::determine_tier(rating, &thresholds);
                 output.push_str(&format!(
                     "  {:<25} ELO:{:<6} reviews:{:<3} tier:{}\n",
-                    rating.agent, rating.elo, rating.review_count,
+                    rating.agent,
+                    rating.elo,
+                    rating.review_count,
                     tier.as_str().to_uppercase(),
                 ));
             }
@@ -1522,7 +1607,7 @@ impl ColmenaServer {
 
         output.push_str(
             "\nTo apply calibration, run: colmena calibrate run\n\
-             To reset all overrides:     colmena calibrate reset"
+             To reset all overrides:     colmena calibrate reset",
         );
 
         Ok(output)
@@ -1530,7 +1615,9 @@ impl ColmenaServer {
 
     // ── Session Stats ────────────────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Show Colmena session stats — prompts saved by auto-approve + tokens saved by output filtering. Call this before ending a session to show the value summary.")]
+    #[rmcp::tool(
+        description = "Show Colmena session stats — prompts saved by auto-approve + tokens saved by output filtering. Call this before ending a session to show the value summary."
+    )]
     fn session_stats(
         &self,
         Parameters(input): Parameters<SessionStatsInput>,
@@ -1538,22 +1625,25 @@ impl ColmenaServer {
         let audit_path = self.config_dir.join("audit.log");
         let stats_path = self.config_dir.join("filter-stats.jsonl");
 
-        let audit = colmena_core::audit::session_stats(
-            &audit_path,
-            input.session_id.as_deref(),
-        );
+        let audit = colmena_core::audit::session_stats(&audit_path, input.session_id.as_deref());
 
-        let all_events = colmena_filter::stats::read_filter_stats(&stats_path)
-            .unwrap_or_default();
+        let all_events = colmena_filter::stats::read_filter_stats(&stats_path).unwrap_or_default();
 
         let session_events: Vec<_> = if let Some(ref sid) = input.session_id {
-            all_events.into_iter().filter(|e| e.session_id == *sid).collect()
+            all_events
+                .into_iter()
+                .filter(|e| e.session_id == *sid)
+                .collect()
         } else {
             all_events
         };
         let filter = colmena_filter::stats::summarize(&session_events);
 
-        let scope = if input.session_id.is_some() { "This Session" } else { "All Sessions" };
+        let scope = if input.session_id.is_some() {
+            "This Session"
+        } else {
+            "All Sessions"
+        };
 
         let auto_pct = if audit.total_decisions > 0 {
             (audit.allow_count as f64 / audit.total_decisions as f64) * 100.0
@@ -1561,24 +1651,38 @@ impl ColmenaServer {
             0.0
         };
 
-        let mut output = format!("Colmena Stats — {scope}\n{}\n\n",
-            "=".repeat(40));
+        let mut output = format!("Colmena Stats — {scope}\n{}\n\n", "=".repeat(40));
 
         output.push_str("  Firewall Decisions\n");
-        output.push_str(&format!("  Auto-approved:      {} ({:.0}%)\n", audit.allow_count, auto_pct));
+        output.push_str(&format!(
+            "  Auto-approved:      {} ({:.0}%)\n",
+            audit.allow_count, auto_pct
+        ));
         output.push_str(&format!("  Asked human:        {}\n", audit.ask_count));
         output.push_str(&format!("  Blocked:            {}\n", audit.deny_count));
-        output.push_str(&format!("  Total:              {}\n", audit.total_decisions));
+        output.push_str(&format!(
+            "  Total:              {}\n",
+            audit.total_decisions
+        ));
         output.push_str(&format!("  Unique agents:      {}\n", audit.unique_agents));
-        output.push_str(&format!("\n  → {} prompts saved (auto-approved without asking)\n\n", audit.allow_count));
+        output.push_str(&format!(
+            "\n  → {} prompts saved (auto-approved without asking)\n\n",
+            audit.allow_count
+        ));
 
         output.push_str("  Output Filtering\n");
         if filter.total_events > 0 {
             let tokens_saved = filter.total_chars_saved / 4;
             output.push_str(&format!("  Outputs filtered:   {}\n", filter.total_events));
-            output.push_str(&format!("  Chars saved:        {}\n", filter.total_chars_saved));
+            output.push_str(&format!(
+                "  Chars saved:        {}\n",
+                filter.total_chars_saved
+            ));
             output.push_str(&format!("  Est. tokens saved:  ~{}\n", tokens_saved));
-            output.push_str(&format!("  Avg reduction:      {:.1}%\n", filter.avg_reduction_pct));
+            output.push_str(&format!(
+                "  Avg reduction:      {:.1}%\n",
+                filter.avg_reduction_pct
+            ));
         } else {
             output.push_str("  No outputs filtered yet.\n");
         }
@@ -1596,7 +1700,8 @@ impl ColmenaServer {
                 let critical = unacked.iter().filter(|a| a.severity == "critical").count();
                 output.push_str(&format!(
                     "\n  ⚠ {} unacknowledged alert(s) ({} critical) — use alerts_list to review\n",
-                    unacked.len(), critical,
+                    unacked.len(),
+                    critical,
                 ));
             }
         }
@@ -1652,10 +1757,7 @@ impl ColmenaServer {
     #[rmcp::tool(
         description = "Acknowledge a review alert by ID, or pass 'all' to acknowledge all pending alerts"
     )]
-    fn alerts_ack(
-        &self,
-        Parameters(input): Parameters<AlertsAckInput>,
-    ) -> Result<String, String> {
+    fn alerts_ack(&self, Parameters(input): Parameters<AlertsAckInput>) -> Result<String, String> {
         let alerts_path = self.config_dir.join("alerts.json");
 
         if input.alert_id == "all" {
@@ -1711,7 +1813,7 @@ impl ColmenaServer {
             .collect();
 
         // Sort by evaluated_at descending (most recent first)
-        auditor_reviews.sort_by(|a, b| b.evaluated_at.cmp(&a.evaluated_at));
+        auditor_reviews.sort_by_key(|r| std::cmp::Reverse(r.evaluated_at));
 
         // Take last N
         let selected: Vec<_> = auditor_reviews.into_iter().take(last_n).collect();
@@ -1735,14 +1837,25 @@ impl ColmenaServer {
         let mut output = format!("{}\n{}\n\n", header, "=".repeat(header.len()));
 
         for (i, review) in selected.iter().enumerate() {
-            output.push_str(&format!("--- {} #{} ---\n", if is_spanish { "Evaluacion" } else { "Evaluation" }, i + 1));
+            output.push_str(&format!(
+                "--- {} #{} ---\n",
+                if is_spanish {
+                    "Evaluacion"
+                } else {
+                    "Evaluation"
+                },
+                i + 1
+            ));
             output.push_str(&format!("  Review ID: {}\n", review.review_id));
             output.push_str(&format!("  Mission: {}\n", review.mission));
             output.push_str(&format!("  Author: {}\n", review.author_role));
             output.push_str(&format!("  Reviewer: {}\n", review.reviewer_role));
 
             if let Some(ref eval_at) = review.evaluated_at {
-                output.push_str(&format!("  Date: {}\n", eval_at.format("%Y-%m-%d %H:%M UTC")));
+                output.push_str(&format!(
+                    "  Date: {}\n",
+                    eval_at.format("%Y-%m-%d %H:%M UTC")
+                ));
             }
 
             // Scores section
@@ -1763,7 +1876,11 @@ impl ColmenaServer {
             output.push_str(&format!("\n  {}:\n", findings_label));
             if let Some(count) = review.finding_count {
                 if count == 0 {
-                    let none_msg = if is_spanish { "    Ninguno" } else { "    None" };
+                    let none_msg = if is_spanish {
+                        "    Ninguno"
+                    } else {
+                        "    None"
+                    };
                     output.push_str(&format!("{}\n", none_msg));
                 } else {
                     output.push_str(&format!("    {} finding(s)\n", count));
@@ -1771,17 +1888,29 @@ impl ColmenaServer {
             }
 
             // Narrative section
-            let narrative_label = if is_spanish { "Narrativa de evaluacion" } else { "Evaluation Narrative" };
+            let narrative_label = if is_spanish {
+                "Narrativa de evaluacion"
+            } else {
+                "Evaluation Narrative"
+            };
             output.push_str(&format!("\n  {}:\n", narrative_label));
             if let Some(ref narrative) = review.evaluation_narrative {
                 output.push_str(&format!("    {}\n", narrative));
             } else {
-                let no_narrative = if is_spanish { "    (sin narrativa)" } else { "    (no narrative provided)" };
+                let no_narrative = if is_spanish {
+                    "    (sin narrativa)"
+                } else {
+                    "    (no narrative provided)"
+                };
                 output.push_str(&format!("{}\n", no_narrative));
             }
 
             // Prompt for human feedback
-            let feedback_label = if is_spanish { "Tu evaluacion" } else { "Your Evaluation" };
+            let feedback_label = if is_spanish {
+                "Tu evaluacion"
+            } else {
+                "Your Evaluation"
+            };
             output.push_str(&format!(
                 "\n  {}:\n    Use calibrate_auditor_feedback with review_id='{}' and choice='current'|'correction'\n\n",
                 feedback_label, review.review_id
@@ -1816,14 +1945,26 @@ impl ColmenaServer {
 
         // Determine ELO adjustment based on choice
         let (delta, reason) = if input.choice == "current" {
-            (10, "Human confirmed auditor evaluation was correct".to_string())
+            (
+                10,
+                "Human confirmed auditor evaluation was correct".to_string(),
+            )
         } else if input.choice.starts_with("alternative_") {
-            (-5, format!("Human preferred auditor's alternative option ({})", input.choice))
+            (
+                -5,
+                format!(
+                    "Human preferred auditor's alternative option ({})",
+                    input.choice
+                ),
+            )
         } else if input.choice == "correction" {
             if input.correction_text.is_none() {
                 return Err("correction_text is required when choice is 'correction'".to_string());
             }
-            (-10, "Human provided correction — auditor evaluation was inaccurate".to_string())
+            (
+                -10,
+                "Human provided correction — auditor evaluation was inaccurate".to_string(),
+            )
         } else {
             return Err(format!(
                 "Invalid choice '{}'. Use 'current', 'alternative_N', or 'correction'",

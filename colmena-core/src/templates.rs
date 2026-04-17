@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use std::fmt;
 use std::str::FromStr;
 
@@ -65,14 +65,59 @@ impl RoleCategory {
 
     pub fn tools_allowed(&self) -> &'static [&'static str] {
         match self {
-            RoleCategory::Offensive => &["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent"],
+            RoleCategory::Offensive => &[
+                "Bash",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+                "Agent",
+            ],
             RoleCategory::Defensive => &["Bash", "Read", "Glob", "Grep", "WebFetch", "WebSearch"],
-            RoleCategory::Compliance => &["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
-            RoleCategory::Architecture => &["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent"],
+            RoleCategory::Compliance => &[
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+            ],
+            RoleCategory::Architecture => &[
+                "Bash",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+                "Agent",
+            ],
             RoleCategory::Research => &["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
-            RoleCategory::Development => &["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+            RoleCategory::Development => &[
+                "Bash",
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+            ],
             RoleCategory::Operations => &["Bash", "Read", "Glob", "Grep", "WebFetch", "WebSearch"],
-            RoleCategory::Creative => &["Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+            RoleCategory::Creative => &[
+                "Read",
+                "Write",
+                "Edit",
+                "Glob",
+                "Grep",
+                "WebFetch",
+                "WebSearch",
+            ],
         }
     }
 
@@ -172,44 +217,135 @@ impl RoleCategory {
     fn detection_keywords(&self) -> &'static [&'static str] {
         match self {
             RoleCategory::Offensive => &[
-                "pentest", "penetration", "exploit", "vulnerab", "attack", "offensive",
-                "red_team", "bypass", "injection", "xss", "sqli", "bug_bounty",
-                "hack", "payload", "brute",
+                "pentest",
+                "penetration",
+                "exploit",
+                "vulnerab",
+                "attack",
+                "offensive",
+                "red_team",
+                "bypass",
+                "injection",
+                "xss",
+                "sqli",
+                "bug_bounty",
+                "hack",
+                "payload",
+                "brute",
             ],
             RoleCategory::Defensive => &[
-                "defend", "monitor", "incident", "response", "soc", "blue_team",
-                "detection", "siem", "forensics", "triage", "alert", "threat_hunt",
-                "malware", "containment", "edr",
+                "defend",
+                "monitor",
+                "incident",
+                "response",
+                "soc",
+                "blue_team",
+                "detection",
+                "siem",
+                "forensics",
+                "triage",
+                "alert",
+                "threat_hunt",
+                "malware",
+                "containment",
+                "edr",
             ],
             RoleCategory::Compliance => &[
-                "audit", "compliance", "regulation", "pci", "gdpr", "hipaa",
-                "soc2", "iso27001", "nist", "standards", "policy", "governance",
-                "evidence", "control", "framework",
+                "audit",
+                "compliance",
+                "regulation",
+                "pci",
+                "gdpr",
+                "hipaa",
+                "soc2",
+                "iso27001",
+                "nist",
+                "standards",
+                "policy",
+                "governance",
+                "evidence",
+                "control",
+                "framework",
             ],
             RoleCategory::Architecture => &[
-                "architect", "design", "threat_model", "system_design", "review",
-                "strategy", "integration", "risk_assessment", "modeling",
-                "blueprint", "diagram", "strategic", "synthesis",
+                "architect",
+                "design",
+                "threat_model",
+                "system_design",
+                "review",
+                "strategy",
+                "integration",
+                "risk_assessment",
+                "modeling",
+                "blueprint",
+                "diagram",
+                "strategic",
+                "synthesis",
             ],
             RoleCategory::Research => &[
-                "research", "osint", "reconnaissance", "cve", "analysis",
-                "intelligence", "documentation", "survey", "investigate",
-                "discover", "enumerate", "recon", "inventory",
+                "research",
+                "osint",
+                "reconnaissance",
+                "cve",
+                "analysis",
+                "intelligence",
+                "documentation",
+                "survey",
+                "investigate",
+                "discover",
+                "enumerate",
+                "recon",
+                "inventory",
             ],
             RoleCategory::Development => &[
-                "develop", "code", "implement", "refactor", "build", "test",
-                "ci_cd", "cicd", "deploy", "frontend", "backend", "api", "database",
-                "fullstack", "react", "node",
+                "develop",
+                "code",
+                "implement",
+                "refactor",
+                "build",
+                "test",
+                "ci_cd",
+                "cicd",
+                "deploy",
+                "frontend",
+                "backend",
+                "api",
+                "database",
+                "fullstack",
+                "react",
+                "node",
             ],
             RoleCategory::Operations => &[
-                "infra", "infrastructure", "cloud", "aws", "gcp", "azure",
-                "kubernetes", "k8s", "docker", "terraform", "ansible", "sre",
-                "devops", "pipeline", "monitoring",
+                "infra",
+                "infrastructure",
+                "cloud",
+                "aws",
+                "gcp",
+                "azure",
+                "kubernetes",
+                "k8s",
+                "docker",
+                "terraform",
+                "ansible",
+                "sre",
+                "devops",
+                "pipeline",
+                "monitoring",
             ],
             RoleCategory::Creative => &[
-                "write", "document", "content", "technical_writing", "prompt",
-                "creative", "report", "presentation", "tutorial", "guide",
-                "copywriting", "narrative", "editorial",
+                "write",
+                "document",
+                "content",
+                "technical_writing",
+                "prompt",
+                "creative",
+                "report",
+                "presentation",
+                "tutorial",
+                "guide",
+                "copywriting",
+                "narrative",
+                "editorial",
             ],
         }
     }
@@ -217,14 +353,49 @@ impl RoleCategory {
     /// Default specialization slugs for this category.
     fn default_specializations(&self) -> &'static [&'static str] {
         match self {
-            RoleCategory::Offensive => &["vulnerability_assessment", "exploitation", "attack_surface_mapping", "proof_of_concept"],
-            RoleCategory::Defensive => &["incident_response", "threat_detection", "log_analysis", "containment"],
-            RoleCategory::Compliance => &["standards_mapping", "gap_analysis", "evidence_collection", "policy_review"],
-            RoleCategory::Architecture => &["architecture_review", "threat_modeling", "design_patterns", "risk_assessment"],
-            RoleCategory::Research => &["reconnaissance", "cve_research", "documentation_analysis", "intelligence_gathering"],
+            RoleCategory::Offensive => &[
+                "vulnerability_assessment",
+                "exploitation",
+                "attack_surface_mapping",
+                "proof_of_concept",
+            ],
+            RoleCategory::Defensive => &[
+                "incident_response",
+                "threat_detection",
+                "log_analysis",
+                "containment",
+            ],
+            RoleCategory::Compliance => &[
+                "standards_mapping",
+                "gap_analysis",
+                "evidence_collection",
+                "policy_review",
+            ],
+            RoleCategory::Architecture => &[
+                "architecture_review",
+                "threat_modeling",
+                "design_patterns",
+                "risk_assessment",
+            ],
+            RoleCategory::Research => &[
+                "reconnaissance",
+                "cve_research",
+                "documentation_analysis",
+                "intelligence_gathering",
+            ],
             RoleCategory::Development => &["implementation", "testing", "code_review", "debugging"],
-            RoleCategory::Operations => &["infrastructure_management", "deployment", "monitoring", "automation"],
-            RoleCategory::Creative => &["technical_writing", "documentation", "content_strategy", "editorial_review"],
+            RoleCategory::Operations => &[
+                "infrastructure_management",
+                "deployment",
+                "monitoring",
+                "automation",
+            ],
+            RoleCategory::Creative => &[
+                "technical_writing",
+                "documentation",
+                "content_strategy",
+                "editorial_review",
+            ],
         }
     }
 
@@ -370,73 +541,92 @@ impl RoleCategory {
     /// Escalation guidance appropriate for this category.
     fn escalation_guidance(&self) -> &'static str {
         match self {
-            RoleCategory::Offensive => "\
+            RoleCategory::Offensive => {
+                "\
 Escalate immediately when you discover critical-severity findings such as remote code execution, \
 authentication bypass, or mass data exposure. Do not wait for the engagement to conclude. \
 Notify the Security Architect with a finding summary, severity assessment, reproduction steps, \
 and recommended immediate mitigation. For findings that could indicate active compromise of \
-production systems, escalate to incident response as well.",
+production systems, escalate to incident response as well."
+            }
 
-            RoleCategory::Defensive => "\
+            RoleCategory::Defensive => {
+                "\
 Escalate immediately when you identify indicators of active compromise, data exfiltration, \
 or lateral movement. Notify the incident commander with affected systems, attack timeline, \
 and containment recommendations. For confirmed breaches involving regulated data, trigger \
 the regulatory notification workflow. Time-sensitive containment decisions should not wait \
-for full investigation completion.",
+for full investigation completion."
+            }
 
-            RoleCategory::Compliance => "\
+            RoleCategory::Compliance => {
+                "\
 Escalate when you identify critical compliance gaps that expose the organization to \
 regulatory penalties or legal liability. Notify the compliance officer with the specific \
 standard requirement, the observed gap, and the potential impact. For gaps involving \
-active data handling violations, escalate to both legal and technical leadership.",
+active data handling violations, escalate to both legal and technical leadership."
+            }
 
-            RoleCategory::Architecture => "\
+            RoleCategory::Architecture => {
+                "\
 Escalate when you identify fundamental architectural weaknesses that cannot be mitigated \
 without significant redesign. Notify technical leadership with the identified risk, affected \
 components, and proposed architectural alternatives with effort estimates. For security \
 architecture issues that are actively exploitable, coordinate with the offensive team \
-for validation before escalating.",
+for validation before escalating."
+            }
 
-            RoleCategory::Research => "\
+            RoleCategory::Research => {
+                "\
 Escalate when you discover intelligence that requires immediate action, such as actively \
 exploited zero-day vulnerabilities affecting the target, exposed credentials in public \
 repositories, or indicators of prior compromise. Provide the raw intelligence with source \
 citations and confidence assessment. Let the receiving team determine the response rather \
-than interpreting operational implications.",
+than interpreting operational implications."
+            }
 
-            RoleCategory::Development => "\
+            RoleCategory::Development => {
+                "\
 Escalate when you encounter blocking issues that prevent progress, such as unclear requirements, \
 architectural decisions that need approval, or security concerns in existing code that affect \
 your implementation approach. For bugs discovered in production code during development, \
-report them through the standard defect tracking process rather than attempting ad-hoc fixes.",
+report them through the standard defect tracking process rather than attempting ad-hoc fixes."
+            }
 
-            RoleCategory::Operations => "\
+            RoleCategory::Operations => {
+                "\
 Escalate when infrastructure changes have unexpected side effects, when rollback procedures \
 fail, or when monitoring reveals degraded service health. Notify the on-call team with affected \
 services, impact assessment, and actions taken so far. For changes that risk data loss or \
-extended downtime, pause execution and seek explicit approval before proceeding.",
+extended downtime, pause execution and seek explicit approval before proceeding."
+            }
 
-            RoleCategory::Creative => "\
+            RoleCategory::Creative => {
+                "\
 Escalate when you identify technical inaccuracies that you cannot verify independently, when \
 content requirements conflict with factual accuracy, or when deliverables require subject \
 matter expertise outside your domain. Request review from the relevant technical specialist \
-before publishing content that makes claims about system behavior or security properties.",
+before publishing content that makes claims about system behavior or security properties."
+            }
         }
     }
 
     /// Output format guidance appropriate for this category.
     fn output_format(&self) -> &'static str {
         match self {
-            RoleCategory::Offensive => "\
+            RoleCategory::Offensive => {
+                "\
 For each finding, document:\n\
 - **Title:** Short, descriptive (e.g., \"Unauthenticated SQL Injection in /api/search\")\n\
 - **Severity:** Critical / High / Medium / Low / Informational\n\
 - **Description:** What the vulnerability is and why it matters\n\
 - **Reproduction Steps:** Exact steps to reproduce, including any required setup\n\
 - **Proof of Concept:** Code, curl commands, or request/response pairs\n\
-- **Recommended Fix:** Specific remediation, not generic advice",
+- **Recommended Fix:** Specific remediation, not generic advice"
+            }
 
-            RoleCategory::Defensive => "\
+            RoleCategory::Defensive => {
+                "\
 For each incident or detection, document:\n\
 - **Incident ID:** Unique identifier for tracking\n\
 - **Timeline:** Chronological sequence of events with timestamps\n\
@@ -444,58 +634,71 @@ For each incident or detection, document:\n\
 - **Indicators of Compromise:** Observable artifacts (IPs, hashes, domains, patterns)\n\
 - **Containment Actions:** Steps taken to limit impact\n\
 - **Root Cause:** Determined or suspected cause of the incident\n\
-- **Recommendations:** Preventive measures to avoid recurrence",
+- **Recommendations:** Preventive measures to avoid recurrence"
+            }
 
-            RoleCategory::Compliance => "\
+            RoleCategory::Compliance => {
+                "\
 For each control assessment, document:\n\
 - **Control ID:** Standard reference (e.g., \"PCI-DSS v4.0 Req 6.3.3\")\n\
 - **Requirement:** Quoted requirement text from the standard\n\
 - **Status:** Compliant / Non-Compliant / Partially Compliant / Not Applicable\n\
 - **Evidence:** Artifacts demonstrating compliance status\n\
 - **Gap Description:** Specific delta between required and observed state\n\
-- **Remediation:** Steps to achieve compliance with effort estimate",
+- **Remediation:** Steps to achieve compliance with effort estimate"
+            }
 
-            RoleCategory::Architecture => "\
+            RoleCategory::Architecture => {
+                "\
 For each design element, document:\n\
 - **Component:** System or subsystem under review\n\
 - **Current State:** Existing architecture and its properties\n\
 - **Identified Risks:** Security or reliability concerns with severity\n\
 - **Proposed Design:** Recommended architecture with rationale\n\
 - **Trade-offs:** What is gained and what is sacrificed\n\
-- **Implementation Notes:** Key considerations for development teams",
+- **Implementation Notes:** Key considerations for development teams"
+            }
 
-            RoleCategory::Research => "\
+            RoleCategory::Research => {
+                "\
 For each intelligence item, document:\n\
 - **Finding:** Clear statement of what was discovered\n\
 - **Source:** URL, document name, or repository with access date\n\
 - **Confidence:** High (directly observed) / Medium (inferred) / Low (circumstantial)\n\
 - **Relevance:** How this finding relates to the current engagement\n\
-- **Actionability:** What the team should do with this information",
+- **Actionability:** What the team should do with this information"
+            }
 
-            RoleCategory::Development => "\
+            RoleCategory::Development => {
+                "\
 For each implementation unit, document:\n\
 - **Change Summary:** What was changed and why\n\
 - **Files Modified:** List of files with brief description of changes\n\
 - **Testing:** Tests added or modified, and verification results\n\
 - **Edge Cases:** Known limitations or boundary conditions handled\n\
-- **Breaking Changes:** Any backward-incompatible changes with migration notes",
+- **Breaking Changes:** Any backward-incompatible changes with migration notes"
+            }
 
-            RoleCategory::Operations => "\
+            RoleCategory::Operations => {
+                "\
 For each operational change, document:\n\
 - **Change Description:** What is being changed and the business justification\n\
 - **Impact Assessment:** Services affected and expected downtime\n\
 - **Execution Plan:** Step-by-step procedure with estimated duration\n\
 - **Rollback Plan:** Steps to revert if the change causes issues\n\
 - **Verification:** Health checks and metrics to confirm success\n\
-- **Monitoring:** Alerts and dashboards to watch post-change",
+- **Monitoring:** Alerts and dashboards to watch post-change"
+            }
 
-            RoleCategory::Creative => "\
+            RoleCategory::Creative => {
+                "\
 For each deliverable, include:\n\
 - **Title:** Clear, descriptive title appropriate for the audience\n\
 - **Summary:** One-paragraph overview of the content\n\
 - **Body:** Structured content with clear headings and logical flow\n\
 - **References:** Cited sources for all factual claims\n\
-- **Metadata:** Target audience, word count, and revision status",
+- **Metadata:** Target audience, word count, and revision status"
+            }
         }
     }
 }
@@ -533,7 +736,9 @@ pub fn detect_category(description: &str) -> RoleCategory {
             .count();
 
         if score > best_score
-            || (score == best_score && score > 0 && category.privilege_order() < best_category.privilege_order())
+            || (score == best_score
+                && score > 0
+                && category.privilege_order() < best_category.privilege_order())
         {
             best_score = score;
             best_category = *category;
@@ -958,11 +1163,15 @@ mod tests {
     #[test]
     fn test_detect_category_development() {
         assert_eq!(
-            detect_category("Backend developer for building REST APIs with Node.js and database integration"),
+            detect_category(
+                "Backend developer for building REST APIs with Node.js and database integration"
+            ),
             RoleCategory::Development
         );
         assert_eq!(
-            detect_category("Fullstack developer to implement and refactor the frontend React components"),
+            detect_category(
+                "Fullstack developer to implement and refactor the frontend React components"
+            ),
             RoleCategory::Development
         );
     }
@@ -970,7 +1179,9 @@ mod tests {
     #[test]
     fn test_detect_category_research() {
         assert_eq!(
-            detect_category("OSINT researcher for reconnaissance and CVE analysis of target infrastructure"),
+            detect_category(
+                "OSINT researcher for reconnaissance and CVE analysis of target infrastructure"
+            ),
             RoleCategory::Research
         );
     }
@@ -986,13 +1197,21 @@ mod tests {
     #[test]
     fn test_detect_category_empty_fallback() {
         assert_eq!(detect_category(""), RoleCategory::Development);
-        assert_eq!(detect_category("some random unrelated text with no keywords"), RoleCategory::Development);
+        assert_eq!(
+            detect_category("some random unrelated text with no keywords"),
+            RoleCategory::Development
+        );
     }
 
     #[test]
     fn test_generate_role_yaml_has_required_fields() {
-        let yaml = generate_role_yaml("test_scanner", "Automated security scanner", RoleCategory::Offensive);
-        let value: serde_yml::Value = serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
+        let yaml = generate_role_yaml(
+            "test_scanner",
+            "Automated security scanner",
+            RoleCategory::Offensive,
+        );
+        let value: serde_yml::Value =
+            serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
 
         assert_eq!(value["name"].as_str().unwrap(), "test scanner");
         assert_eq!(value["id"].as_str().unwrap(), "test_scanner");
@@ -1009,41 +1228,95 @@ mod tests {
 
     #[test]
     fn test_generate_role_yaml_no_permissions_for_research() {
-        let yaml = generate_role_yaml("intel_analyst", "Research intelligence analyst", RoleCategory::Research);
-        let value: serde_yml::Value = serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
-        assert!(value["permissions"].is_null(), "Research roles should not have a permissions block");
+        let yaml = generate_role_yaml(
+            "intel_analyst",
+            "Research intelligence analyst",
+            RoleCategory::Research,
+        );
+        let value: serde_yml::Value =
+            serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
+        assert!(
+            value["permissions"].is_null(),
+            "Research roles should not have a permissions block"
+        );
     }
 
     #[test]
     fn test_generate_role_yaml_has_permissions_for_development() {
-        let yaml = generate_role_yaml("rust_dev", "Rust backend developer", RoleCategory::Development);
-        let value: serde_yml::Value = serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
-        assert!(value["permissions"]["bash_patterns"].as_sequence().is_some(), "Development roles should have bash_patterns");
+        let yaml = generate_role_yaml(
+            "rust_dev",
+            "Rust backend developer",
+            RoleCategory::Development,
+        );
+        let value: serde_yml::Value =
+            serde_yml::from_str(&yaml).expect("Generated YAML should be valid");
+        assert!(
+            value["permissions"]["bash_patterns"]
+                .as_sequence()
+                .is_some(),
+            "Development roles should have bash_patterns"
+        );
     }
 
     #[test]
     fn test_generate_role_prompt_has_5_sections() {
-        let prompt = generate_role_prompt("test_role", "A test role for validation", RoleCategory::Development);
+        let prompt = generate_role_prompt(
+            "test_role",
+            "A test role for validation",
+            RoleCategory::Development,
+        );
         assert!(prompt.contains("# Test Role"), "Should have title");
-        assert!(prompt.contains("## Core Responsibilities"), "Should have Core Responsibilities section");
-        assert!(prompt.contains("## Methodology"), "Should have Methodology section");
-        assert!(prompt.contains("## Escalation"), "Should have Escalation section");
-        assert!(prompt.contains("## Output Format"), "Should have Output Format section");
-        assert!(prompt.contains("## Boundaries"), "Should have Boundaries section");
+        assert!(
+            prompt.contains("## Core Responsibilities"),
+            "Should have Core Responsibilities section"
+        );
+        assert!(
+            prompt.contains("## Methodology"),
+            "Should have Methodology section"
+        );
+        assert!(
+            prompt.contains("## Escalation"),
+            "Should have Escalation section"
+        );
+        assert!(
+            prompt.contains("## Output Format"),
+            "Should have Output Format section"
+        );
+        assert!(
+            prompt.contains("## Boundaries"),
+            "Should have Boundaries section"
+        );
     }
 
     #[test]
     fn test_generate_role_prompt_no_todos_or_comments() {
         let categories = [
-            RoleCategory::Offensive, RoleCategory::Defensive, RoleCategory::Compliance,
-            RoleCategory::Architecture, RoleCategory::Research, RoleCategory::Development,
-            RoleCategory::Operations, RoleCategory::Creative,
+            RoleCategory::Offensive,
+            RoleCategory::Defensive,
+            RoleCategory::Compliance,
+            RoleCategory::Architecture,
+            RoleCategory::Research,
+            RoleCategory::Development,
+            RoleCategory::Operations,
+            RoleCategory::Creative,
         ];
         for cat in &categories {
             let prompt = generate_role_prompt("test_role", "A test role", *cat);
-            assert!(!prompt.contains("TODO"), "Prompt for {:?} should not contain TODO", cat);
-            assert!(!prompt.contains("customize"), "Prompt for {:?} should not contain 'customize'", cat);
-            assert!(!prompt.contains("<!--"), "Prompt for {:?} should not contain HTML comments", cat);
+            assert!(
+                !prompt.contains("TODO"),
+                "Prompt for {:?} should not contain TODO",
+                cat
+            );
+            assert!(
+                !prompt.contains("customize"),
+                "Prompt for {:?} should not contain 'customize'",
+                cat
+            );
+            assert!(
+                !prompt.contains("<!--"),
+                "Prompt for {:?} should not contain HTML comments",
+                cat
+            );
         }
     }
 
@@ -1051,24 +1324,45 @@ mod tests {
     fn test_infer_specializations_bounds() {
         // Minimal description — should still return 3-8
         let specs = infer_specializations("a role", RoleCategory::Development);
-        assert!(specs.len() >= 3, "Should return at least 3 specializations, got {}", specs.len());
-        assert!(specs.len() <= 8, "Should return at most 8 specializations, got {}", specs.len());
+        assert!(
+            specs.len() >= 3,
+            "Should return at least 3 specializations, got {}",
+            specs.len()
+        );
+        assert!(
+            specs.len() <= 8,
+            "Should return at most 8 specializations, got {}",
+            specs.len()
+        );
 
         // Rich description — should still cap at 8
         let specs = infer_specializations(
             "frontend backend api database test ci refactor react node rust python security deploy",
             RoleCategory::Development,
         );
-        assert!(specs.len() <= 8, "Should return at most 8 specializations, got {}", specs.len());
-        assert!(specs.len() >= 3, "Should return at least 3 specializations, got {}", specs.len());
+        assert!(
+            specs.len() <= 8,
+            "Should return at most 8 specializations, got {}",
+            specs.len()
+        );
+        assert!(
+            specs.len() >= 3,
+            "Should return at least 3 specializations, got {}",
+            specs.len()
+        );
     }
 
     #[test]
     fn test_category_display_and_from_str() {
         let categories = [
-            RoleCategory::Offensive, RoleCategory::Defensive, RoleCategory::Compliance,
-            RoleCategory::Architecture, RoleCategory::Research, RoleCategory::Development,
-            RoleCategory::Operations, RoleCategory::Creative,
+            RoleCategory::Offensive,
+            RoleCategory::Defensive,
+            RoleCategory::Compliance,
+            RoleCategory::Architecture,
+            RoleCategory::Research,
+            RoleCategory::Development,
+            RoleCategory::Operations,
+            RoleCategory::Creative,
         ];
         for cat in &categories {
             let display = cat.to_string();
@@ -1080,7 +1374,9 @@ mod tests {
     #[test]
     fn test_detect_category_defensive() {
         assert_eq!(
-            detect_category("SOC analyst for incident response and threat detection with SIEM monitoring"),
+            detect_category(
+                "SOC analyst for incident response and threat detection with SIEM monitoring"
+            ),
             RoleCategory::Defensive
         );
     }
@@ -1096,7 +1392,9 @@ mod tests {
     #[test]
     fn test_detect_category_operations() {
         assert_eq!(
-            detect_category("SRE engineer managing Kubernetes infrastructure on AWS with Terraform"),
+            detect_category(
+                "SRE engineer managing Kubernetes infrastructure on AWS with Terraform"
+            ),
             RoleCategory::Operations
         );
     }
@@ -1104,7 +1402,9 @@ mod tests {
     #[test]
     fn test_detect_category_creative() {
         assert_eq!(
-            detect_category("Technical writer creating tutorials, guides, and documentation content"),
+            detect_category(
+                "Technical writer creating tutorials, guides, and documentation content"
+            ),
             RoleCategory::Creative
         );
     }
@@ -1120,21 +1420,35 @@ mod tests {
     #[test]
     fn test_all_categories_have_unique_icons() {
         let categories = [
-            RoleCategory::Offensive, RoleCategory::Defensive, RoleCategory::Compliance,
-            RoleCategory::Architecture, RoleCategory::Research, RoleCategory::Development,
-            RoleCategory::Operations, RoleCategory::Creative,
+            RoleCategory::Offensive,
+            RoleCategory::Defensive,
+            RoleCategory::Compliance,
+            RoleCategory::Architecture,
+            RoleCategory::Research,
+            RoleCategory::Development,
+            RoleCategory::Operations,
+            RoleCategory::Creative,
         ];
         let icons: Vec<&str> = categories.iter().map(|c| c.icon()).collect();
         let unique: std::collections::HashSet<&&str> = icons.iter().collect();
-        assert_eq!(icons.len(), unique.len(), "All categories should have unique icons");
+        assert_eq!(
+            icons.len(),
+            unique.len(),
+            "All categories should have unique icons"
+        );
     }
 
     #[test]
     fn test_all_categories_have_5_methodology_phases() {
         let categories = [
-            RoleCategory::Offensive, RoleCategory::Defensive, RoleCategory::Compliance,
-            RoleCategory::Architecture, RoleCategory::Research, RoleCategory::Development,
-            RoleCategory::Operations, RoleCategory::Creative,
+            RoleCategory::Offensive,
+            RoleCategory::Defensive,
+            RoleCategory::Compliance,
+            RoleCategory::Architecture,
+            RoleCategory::Research,
+            RoleCategory::Development,
+            RoleCategory::Operations,
+            RoleCategory::Creative,
         ];
         for cat in &categories {
             let phases = cat.methodology_phases();

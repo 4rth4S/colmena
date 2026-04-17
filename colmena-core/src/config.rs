@@ -109,7 +109,11 @@ pub type CompiledPatterns = HashMap<String, Regex>;
 /// Compile regex patterns (bash_pattern) for a slice of rules into the patterns map.
 /// Keys are formatted as `"{tier_prefix}[{index}]"` matching the format used by `check_rules`.
 /// Returns an error if any pattern is invalid, naming the exact rule.
-pub fn compile_rules(rules: &[Rule], tier_prefix: &str, patterns: &mut CompiledPatterns) -> Result<()> {
+pub fn compile_rules(
+    rules: &[Rule],
+    tier_prefix: &str,
+    patterns: &mut CompiledPatterns,
+) -> Result<()> {
     for (i, rule) in rules.iter().enumerate() {
         if let Some(ref cond) = rule.conditions {
             if let Some(ref pat) = cond.bash_pattern {
@@ -140,12 +144,30 @@ pub fn compile_config(config: &FirewallConfig) -> Result<CompiledPatterns> {
 
 /// Known Claude Code tool names. MCP tools (mcp__*) are always valid.
 const KNOWN_TOOLS: &[&str] = &[
-    "Agent", "Bash", "Edit", "Glob", "Grep", "Read", "Write",
-    "WebFetch", "WebSearch", "NotebookEdit",
-    "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
-    "EnterWorktree", "ExitWorktree",
-    "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
-    "SendMessage", "Skill", "ToolSearch",
+    "Agent",
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "Read",
+    "Write",
+    "WebFetch",
+    "WebSearch",
+    "NotebookEdit",
+    "AskUserQuestion",
+    "EnterPlanMode",
+    "ExitPlanMode",
+    "EnterWorktree",
+    "ExitWorktree",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "SendMessage",
+    "Skill",
+    "ToolSearch",
 ];
 
 /// Check all tool names in the config against known tools.
@@ -180,7 +202,10 @@ pub fn validate_tool_names(config: &FirewallConfig) -> Vec<String> {
 /// Validate a single tool name. Returns warnings if unknown.
 pub fn validate_tool_name_single(tool: &str) -> Vec<String> {
     if !tool.starts_with("mcp__") && !KNOWN_TOOLS.contains(&tool) {
-        vec![format!("Unknown tool '{}' — known tools: {:?}", tool, KNOWN_TOOLS)]
+        vec![format!(
+            "Unknown tool '{}' — known tools: {:?}",
+            tool, KNOWN_TOOLS
+        )]
     } else {
         vec![]
     }
@@ -296,7 +321,8 @@ action: auto-approve
 
     #[test]
     fn test_load_config_from_file() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/Users/test/project").unwrap();
 
         assert_eq!(config.version, 1);
@@ -310,7 +336,9 @@ action: auto-approve
     fn test_compile_config_rejects_bad_regex() {
         let config = FirewallConfig {
             version: 1,
-            defaults: Defaults { action: Action::Ask },
+            defaults: Defaults {
+                action: Action::Ask,
+            },
             trust_circle: vec![],
             restricted: vec![],
             blocked: vec![Rule {
@@ -337,7 +365,9 @@ action: auto-approve
     fn test_validate_tool_names_catches_typos() {
         let config = FirewallConfig {
             version: 1,
-            defaults: Defaults { action: Action::Ask },
+            defaults: Defaults {
+                action: Action::Ask,
+            },
             trust_circle: vec![Rule {
                 tools: vec!["Raed".to_string()],
                 conditions: None,
@@ -359,7 +389,9 @@ action: auto-approve
     fn test_validate_tool_names_accepts_known() {
         let config = FirewallConfig {
             version: 1,
-            defaults: Defaults { action: Action::Ask },
+            defaults: Defaults {
+                action: Action::Ask,
+            },
             trust_circle: vec![Rule {
                 tools: vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()],
                 conditions: None,
@@ -380,7 +412,9 @@ action: auto-approve
     fn test_validate_tool_names_allows_mcp_prefix() {
         let config = FirewallConfig {
             version: 1,
-            defaults: Defaults { action: Action::Ask },
+            defaults: Defaults {
+                action: Action::Ask,
+            },
             trust_circle: vec![],
             restricted: vec![Rule {
                 tools: vec!["mcp__claude_ai_Slack__slack_send_message".to_string()],
@@ -401,7 +435,8 @@ action: auto-approve
 
     #[test]
     fn test_cwd_root_rejected() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         // "/" has 0 normal components — must be rejected to prevent PROJECT_DIR injection
         let result = load_config(&config_path, "/");
         assert!(result.is_err(), "cwd '/' must be rejected");
@@ -409,7 +444,8 @@ action: auto-approve
 
     #[test]
     fn test_cwd_shallow_rejected() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         // "/tmp" has 1 normal component — must be rejected
         let result = load_config(&config_path, "/tmp");
         assert!(result.is_err(), "cwd '/tmp' must be rejected");
@@ -417,15 +453,21 @@ action: auto-approve
 
     #[test]
     fn test_cwd_valid_accepted() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         // "/home/edgar" has 2 normal components — must be accepted
         let result = load_config(&config_path, "/home/edgar");
-        assert!(result.is_ok(), "cwd '/home/edgar' must be accepted: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "cwd '/home/edgar' must be accepted: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn test_project_dir_resolution() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/Users/test/myproject").unwrap();
 
         // Find the Write/Edit rule with path_within
@@ -477,7 +519,10 @@ defaults:
   action: ask
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
-        assert!(!config.enforce_missions, "enforce_missions should default to false");
+        assert!(
+            !config.enforce_missions,
+            "enforce_missions should default to false"
+        );
     }
 
     #[test]
@@ -489,13 +534,20 @@ defaults:
 enforce_missions: true
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
-        assert!(config.enforce_missions, "enforce_missions should parse as true");
+        assert!(
+            config.enforce_missions,
+            "enforce_missions should parse as true"
+        );
     }
 
     #[test]
     fn test_enforce_missions_from_real_config() {
-        let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/home/test/project").unwrap();
-        assert!(!config.enforce_missions, "Real config should have enforce_missions=false");
+        assert!(
+            !config.enforce_missions,
+            "Real config should have enforce_missions=false"
+        );
     }
 }

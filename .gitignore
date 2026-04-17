@@ -6,11 +6,29 @@ colmena-errors.log
 config/audit.log
 config/queue/pending/
 config/queue/processed/
+config/queue/completed/
 config/missions/
 
-# Security — local reference only
+# Runtime state (ephemeral)
+config/runtime-delegations.json
+config/revoked-missions.json
+config/elo/
+config/findings/
+config/reviews/
+config/alerts.json
+config/filter-stats.jsonl
+config/.runtime-delegations.lock
+
+# RRA / threat model exports
+RRA_*.csv
+RRA_Summary_*.md
 docs/security/
 docs/dark-corners*.md
 
 # OS files
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.env
+*.env.local
