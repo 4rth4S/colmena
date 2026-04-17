@@ -11,13 +11,14 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 
 - **Build:** `cargo build --workspace --release`
 - **Test:** `cargo test --workspace` (single crate: `cargo test -p colmena-core`)
-- **Lint:** `cargo clippy --workspace -- -W warnings`
+- **Lint:** `cargo clippy --workspace -- -D warnings` (CI enforces `-D` since PR #25)
+- **Fmt:** `cargo fmt --all --check` (CI-enforced)
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
 - **Version:** 0.11.1 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
-- **CI:** GitHub Actions — `ci.yml` (test+clippy+build on PRs), `release.yml` (tag-triggered releases)
+- **CI:** GitHub Actions — `ci.yml` (fmt + test + clippy `-D warnings` + build + audit + deny on PRs), `release.yml` (tag-triggered releases), dependabot weekly for cargo + github-actions
 - **Repo:** `git@github.com:4rth4S/colmena.git`
 
 ## Architecture
@@ -34,7 +35,7 @@ Five CC integration points:
 2. **PostToolUse Hook (reactive):** filters Bash outputs via colmena-filter pipeline before CC processes them
 3. **PermissionRequest Hook (reactive):** intercepts CC permission prompts, auto-approves tools in role's `tools_allowed` via session rules
 4. **SubagentStop Hook (reactive):** blocks mission workers from stopping without calling `review_submit` — auditor role exempt
-5. **MCP (proactive):** CC calls 25 colmena tools natively — firewall, library, review, ELO, findings, alerts, calibration, stats
+5. **MCP (proactive):** CC calls 27 colmena tools natively — firewall, library, review, ELO, findings, alerts, calibration, stats
 
 PreToolUse precedence: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`
 PermissionRequest precedence: `role delegation exists + tool in tools_allowed → allow + teach CC session rules`
@@ -167,8 +168,10 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - `map_topology_roles()` maps real roles to topology slots by SlotRoleType preference + mission keyword scoring. No duplicates.
 - SlotRoleType: Lead, Offensive, Defensive, Research, Worker, Judge — each with preferred role list
 - Auditor QPC framework: Quality + Precision + Comprehensiveness (1-10 each) — role-agnostic evaluation
-- Inter-agent directive (`INTER_AGENT_DIRECTIVE`) injected into multi-agent missions (2+ agents) by `generate_mission()`
+- Inter-agent directive (`INTER_AGENT_DIRECTIVE`, `selector.rs:42`) injected into multi-agent missions (2+ agents) by `generate_mission()`
 - Inter-agent protocol: facts only, path:line references, no prose — code/commands never compressed
+- Inspired by [caveman](https://github.com/JuliusBrussee/caveman) (OSS, token-saving compressed communication between agents). Colmena's adaptation is narrower: only inter-agent prose is compressed; code and commands stay verbatim to avoid correctness drift.
+- Future CLI: `colmena prompt-inject --mode terse` to emit the directive as a standalone block the user can paste into any Agent spawn outside of `mission_spawn` (planned in M7.3 scope).
 - `spawn_mission()` is the one-step pipeline: select → auto-create → map_topology_roles → generate_mission with markers
 - `MISSION_MARKER_PREFIX` (`<!-- colmena:mission_id=...-->`) embedded in agent prompts for Mission Gate validation
 - Mission Gate (`enforce_missions: bool`): opt-in, default false, "ask" not "deny" — human always overrides
@@ -186,6 +189,26 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 - Setup detects repo mode (Cargo.toml nearby) vs standalone mode (release binary) automatically
 - Setup merge strategy: new defaults copied, custom files preserved (new defaults saved to `.defaults/` for reference)
 - `~/.mcp.json` is the global MCP registration target — setup writes absolute path to colmena-mcp binary
+- **Install Mode B** (validated with 4 power users, 2026-04-16): a user can point their own CC at this repo (SSH or clone) and let it bootstrap everything — `colmena setup`, MCP registration, first delegations — without reading CLAUDE.md directly. CLAUDE.md + library YAMLs + prompts are structured for agent consumption, so an oriented CC bootstraps the user. M7.6 will promote Mode B to first-class in README alongside the binary install (Mode A).
+
+### Missions & Agent Identity (the ELO recipe)
+
+Every active mission must feed per-agent ELO. Six mechanisms keep the cycle closed end-to-end:
+
+1. **Subagent file name = delegation agent_id**: every role used in a mission must have `~/.claude/agents/<role_id>.md` with `name: <role_id>` in frontmatter. CC propagates `name` as the subagent identity to Colmena hooks. Without this match, ELO tracks a random session ID instead of the role.
+2. **Review MCP tools in `tools:` frontmatter AND delegated**: the subagent `.md` must list `mcp__colmena__review_submit` (workers) / `mcp__colmena__review_evaluate` (reviewers), and a matching delegation must exist. Review tools live in `restricted` tier — without both, CC asks the human each call and the cycle breaks.
+3. **Mission marker in every spawn prompt**: every Agent spawn in a mission must start with `<!-- colmena:mission_id=<id> -->`. Mission Gate validates it; ELO events tag reviews with this mission for later analysis.
+4. **SubagentStop + reviewer gates active**: with `enforce_missions: true`, workers cannot Stop without `review_submit`, reviewers cannot Stop without `review_evaluate`. ELO cannot escape being updated.
+5. **Auditor `role_type: auditor` exempt from worker review**: centralized auditor evaluates others without submitting its own work review. Must be set in library YAML, not inferred.
+6. **Scope-explicit prompts with `review_submit` pre-filled**: each squad prompt states the files it owns + the exact `review_submit` call (mission_id, artifact_paths, reviewer_role, role) to issue before Stop. Agents do not improvise the protocol.
+
+**Pitfall from prior missions:** if an agent spawns with an ad-hoc `name` like `squad-a` not matching any delegation, or the role YAML's `tools_allowed` omits review MCP tools, ELO stays flat. See memory: `project_elo_success_recipe.md` (working case) vs `project_tm_pattern_learnings.md` (failing case).
+
+**Reviewer pool selection:** `submit_review` picks randomly from `available_roles` passed by the caller, filtered by author != reviewer and no reciprocal pairs (`review.rs`). To force a centralized auditor today, pass `available_roles: ["auditor"]`. Ad-hoc broad pools land on whichever non-author role is alive — not always what the mission intended.
+
+**Future (M7.3):** `mission_spawn` will auto-generate subagent files, bundle review delegations, pre-fill prompt protocol blocks, auto-activate Mission Gate when `source: role` delegations are present, and expose `colmena prompt-inject --mode terse` to emit `INTER_AGENT_DIRECTIVE` standalone.
+
+**Future (M7.7):** multi-perspective reviewer diversification — as more Researcher and Reviewer roles with distinct viewpoints (software engineering, security architect, project manager, SRE, compliance) coexist, reviewer selection will favor complementary `EloConfig.categories` instead of pure random. Every ELO event should reflect a cross-viewpoint judgement, not same-tribe approval.
 
 ### Testing
 
@@ -290,12 +313,19 @@ Operations:
 - **M7** Generic roles + patterns + topology mapping — 4 dev roles, 3 dev patterns, map_topology_roles, QPC auditor framework, inter-agent directive (done)
 - **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (done)
 - **M7.2** Mission Sizing / colmena suggest — complexity analysis, recommends Colmena vs vanilla CC, min 3-agent enforcement (done)
+- **M7.3** ELO cycle auto-closure — formalize the 6 mechanisms that closed the ELO loop in the public-release-prep mission. Primary goal: every active mission must feed ELO, no more manual workarounds. Scope: (a) `mission_spawn` auto-generates `~/.claude/agents/<role_id>.md` with name matching agent_id; (b) mission delegations include `review_submit`/`review_evaluate`/`findings_query` + role-specific Bash patterns bundled; (c) generated prompts include mission marker + scope block + review_submit params pre-filled + "don't Stop if review_submit fails"; (d) Mission Gate auto-activates when `source: role` delegations exist in session; (e) `colmena prompt-inject --mode terse` CLI to emit the `INTER_AGENT_DIRECTIVE` standalone for Agent spawns outside `mission_spawn`. See `project_elo_success_recipe.md` in memory for the full recipe and contrast with the TM pattern failure case. Reviewer diversification is intentionally scoped out — tracked separately in M7.7.
+- **M7.4** Role creation ergonomics — lower the one friction point reported by the 4 validated users. Scope: `colmena role clone <existing> --as <new_id>` (copy-as-template), `colmena role inherit --from <base> --specializations X,Y --name <new>` (seeded scaffolding), `colmena role doctor <id>` (validate YAML + suggest categoria/bash_patterns/tools_allowed per specialization), editable prompt templates with role-category hints.
+- **M7.5** DevOps/SRE role expansion — explicit user ask from the 4 validated power users. Scope: create `devops_engineer`, `sre`, `platform_engineer` roles with bash_patterns for `kubectl`, `helm`, `terraform`, `aws/gcloud`, `docker`, `ansible`; include matching prompts; add `ops-runbook` and `incident-response` patterns if the topology makes sense.
+- **M7.6** Install Mode B as first-class — document and polish the onboarding path where the user's own CC reads the Colmena repo (SSH or clone) and self-configures. Validated with the 4 power users. Scope: README section at top level, CLAUDE.md structured for agent consumption, copy-pasteable commands, explicit naming conventions. Do not replace Mode A, add B alongside it.
+- **M7.7** Multi-perspective reviewer diversification — near-future need flagged explicitly by Coco. As Colmena grows, many Researcher and Reviewer roles will coexist with distinct viewpoints (software engineering, security architect, project manager, SRE, compliance, etc.). Reviewer selection must reflect that diversity instead of pure random from the pool. Scope: (a) `submit_review` accepts an optional `preferred_categories` hint from callers; (b) when unhinted, reviewer selection scores candidates by complementarity — if author's strongest `EloConfig.categories` is X, prefer a reviewer whose strongest category is *not* X; (c) track "perspective balance" per mission — avoid the same reviewer category evaluating N consecutive artifacts; (d) expose `colmena review perspectives <mission>` showing which viewpoints reviewed what; (e) when a mission spawns many Researchers, pair each with a reviewer from a contrasting category (pentester ↔ software_engineer, developer ↔ security_architect, devops ↔ architect). Goal: every ELO event reflects a genuinely cross-viewpoint judgement, not same-tribe approval.
 
-## Current State (2026-04-15)
+## Current State (2026-04-16)
 
-**Branch:** `main` (v0.11.1)
-**Done:** M0, M0.5, M1, RRA hardening, M2, M2.5, M3, M3.5, M3.6 (security hardening), M4, M4.1, M5, M6 (intelligent role creation), M6.1 (security hardening — STRIDE/DREAD fixes), M6.2 (P0+P1 fixes — MCP precision, delegate hardening, collusion prevention), M6.3 (role tools_allowed firewall — PermissionRequest auto-approve + mission revocation), M6.4 (enforced peer review — SubagentStop hook + centralized auditor + alerts), M7 (generic roles + patterns + topology mapping), M7.1 (mission spawn + mission gate), M7.2 (mission sizing + colmena suggest), v0.11.1 (review cycle hardening — reviewer evaluation enforcement, stale review auto-invalidation)
-**Next:** Post-launch hardening, real-world testing
+**Branch:** `chore/public-release-prep` — PR #25 open, awaiting manual merge by Coco.
+**Done:** M0–M7.2 plus v0.11.1 review cycle hardening plus public-release-prep (LICENSE, CI audit/deny/fmt/MSRV, dependabot, SECURITY/COC/CONTRIBUTORS, GitHub templates, runtime file untracking, privacy scrub).
+**Validated users (2026-04-16):** 4 active power users (pentester, developer, devops, SRE) — primary hook is Y-approval reduction; explicit ask is more devops roles; onboarding happens via Install Mode B (user's own CC reads repo).
+**ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep). Recipe documented in memory; must be formalized in M7.3 so every mission closes the cycle automatically.
+**Next:** M7.3 → M7.5 prioritized (ELO auto-closure, role ergonomics, devops roles). M7.6 in parallel (docs work).
 
 ## Key Docs
 
