@@ -3,6 +3,7 @@ use std::panic;
 use crate::config::FilterConfig;
 use crate::filters::ansi::AnsiStripFilter;
 use crate::filters::dedup::DedupFilter;
+use crate::filters::prompt_injection::{PromptInjectionConfig, PromptInjectionFilter};
 use crate::filters::stderr_only::StderrOnlyFilter;
 use crate::filters::truncate::TruncateFilter;
 use crate::filters::OutputFilter;
@@ -29,7 +30,12 @@ pub struct FilterPipeline {
 
 impl FilterPipeline {
     /// Build a pipeline from config.
-    /// Order: ANSI → StderrOnly → Dedup → Truncate
+    /// Order: ANSI → StderrOnly → Dedup → PromptInjection → Truncate
+    ///
+    /// PromptInjection sits after the cleaning filters so it scans already
+    /// ANSI-stripped / deduped content (real text an agent would see), and
+    /// before Truncate so the warning banner is always visible even when
+    /// the output gets capped.
     pub fn from_config(config: &FilterConfig) -> Self {
         let mut filters: Vec<Box<dyn OutputFilter>> = Vec::new();
 
@@ -42,6 +48,9 @@ impl FilterPipeline {
         }
 
         filters.push(Box::new(DedupFilter::new(config.dedup_threshold)));
+        filters.push(Box::new(PromptInjectionFilter::new(
+            PromptInjectionConfig::default(),
+        )));
         filters.push(Box::new(TruncateFilter::new(
             config.max_output_lines,
             config.max_output_chars,
@@ -121,7 +130,8 @@ mod tests {
     fn test_pipeline_from_default_config() {
         let config = FilterConfig::default();
         let pipeline = FilterPipeline::from_config(&config);
-        assert_eq!(pipeline.filters.len(), 4);
+        // ANSI + StderrOnly + Dedup + PromptInjection + Truncate
+        assert_eq!(pipeline.filters.len(), 5);
     }
 
     #[test]
@@ -174,8 +184,8 @@ mod tests {
             ..FilterConfig::default()
         };
         let pipeline = FilterPipeline::from_config(&config);
-        // Only dedup + truncate
-        assert_eq!(pipeline.filters.len(), 2);
+        // Dedup + PromptInjection + Truncate
+        assert_eq!(pipeline.filters.len(), 3);
     }
 
     #[test]
