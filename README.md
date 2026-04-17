@@ -293,7 +293,7 @@ colmena stats                         # Session statistics
 
 ## License
 
-Private — not yet licensed for distribution.
+Released under the [MIT License](./LICENSE). See [LICENSE](./LICENSE) for the full text.
 
 ## Contributors
 
