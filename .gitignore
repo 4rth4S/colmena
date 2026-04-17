@@ -25,6 +25,11 @@ RRA_Summary_*.md
 docs/security/
 docs/dark-corners*.md
 
+# Internal working docs (not part of the public surface)
+docs/superpowers/
+docs/specs/
+docs/plans/
+
 # OS files
 .DS_Store
 Thumbs.db
