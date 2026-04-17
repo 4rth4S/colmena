@@ -8,13 +8,17 @@
   <img src="docs/colmena-banner.png" alt="Colmena — the hive defends the colony" width="400">
 </p>
 
-<p align="center"><strong>Be the sharpest knife.</strong></p>
+<p align="center"><strong>Deterministic governance for multi-agent Claude Code.</strong></p>
 
-<p align="center">Force multiplier for solo-operators who orchestrate AI agents with trust and accountability.<br>Designed for the one-person-army.</p>
+<p align="center">YAML rules + audit.log for every tool call. Multi-agent missions with peer review. ELO-calibrated trust per role.<br>Built for pentesters, developers, devops, and SRE working where auditability matters.</p>
 
 ---
 
-Colmena intercepts every tool call your agents make and evaluates it against your rules — auto-approve the safe stuff, ask about the risky stuff, block the dangerous stuff. No more babysitting agents. No more 100 permission prompts per session.
+Colmena is a local-first governance layer for Claude Code. Every tool call is evaluated against YAML rules — zero LLM calls, zero per-call cost, every decision written to `audit.log` and explainable by rule ID.
+
+Beyond single-agent allow/deny, Colmena orchestrates multi-agent missions: agents spawn with mission markers, submit their work through `review_submit`, a centralized auditor evaluates with QPC scores (Quality + Precision + Comprehensiveness), and ELO tracks per-role competence over time. Roles that earn elevated ELO get broader auto-approve; roles that underperform get restricted. Trust is calibrated from observed behavior, not declared up front.
+
+No cloud classifier, no opaque scoring, no network dependency in the hot path. The rules are yours, the log is yours, the agents' history is yours.
 
 ```
                        ┌──────────────────┐
@@ -43,6 +47,30 @@ Colmena intercepts every tool call your agents make and evaluates it against you
 - **Blocks the truly dangerous.** `git push --force`, `rm -rf /` — blocked outright. No agent can execute these, even with delegation.
 
 - **Orchestrates multi-agent missions.** Spawn a documentation squad, a code review cycle, or a refactoring team. Each agent gets scoped permissions, peer review enforcement, and ELO-based trust that evolves over time.
+
+## How it compares to Claude Code auto-mode
+
+Anthropic's `--enable-auto-mode` (research preview) and Colmena solve different layers of the same problem. They are complementary, not competing.
+
+| Dimension            | Claude Code auto-mode        | Colmena                                       |
+| -------------------- | ---------------------------- | --------------------------------------------- |
+| Decision model       | Probabilistic (LLM classifier) | Deterministic (YAML rules + regex)          |
+| Per-call cost        | Model tokens per classification | Zero — no network, no LLM call             |
+| Explainability       | Opaque classifier output     | `audit.log` line with the matching rule ID    |
+| Scope                | Single-agent intent detection | Single + multi-agent with peer review        |
+| Accountability       | Per tool call                | Per agent + per role, ELO over time           |
+| Storage              | Cloud-side                   | Local filesystem (YAML / JSON / JSONL)        |
+
+Auto-mode is strong at catching semantic intent — prompt injection attempts, mass-delete nudges, context the agent couldn't have known. Colmena is strong at deterministic policy enforcement, multi-agent accountability, and a tamper-evident local audit trail.
+
+**They solve different layers. Use them together.**
+
+## Install
+
+Two ways to install Colmena:
+
+- **Mode A — binary + setup.** Clone the repo, `cargo build --workspace --release`, then `./target/release/colmena setup`. See [Quick Start](#quick-start) below.
+- **Mode B — point your Claude Code at this repo.** Let your own CC read the repo and bootstrap everything for you. See [docs/install-mode-b.md](docs/install-mode-b.md). Validated with 4 power users (2026-04-16).
 
 ## Quick Start
 
