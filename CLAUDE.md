@@ -330,31 +330,25 @@ Operations:
 - **M7.4** Role creation ergonomics — lower the one friction point reported by the 4 validated users. Scope: `colmena role clone <existing> --as <new_id>` (copy-as-template), `colmena role inherit --from <base> --specializations X,Y --name <new>` (seeded scaffolding), `colmena role doctor <id>` (validate YAML + suggest categoria/bash_patterns/tools_allowed per specialization), editable prompt templates with role-category hints.
 - **M7.5** DevOps/SRE role expansion — explicit user ask from the 4 validated power users. Scope: create `devops_engineer`, `sre`, `platform_engineer` roles with bash_patterns for `kubectl`, `helm`, `terraform`, `aws/gcloud`, `docker`, `ansible`; include matching prompts; add `ops-runbook` and `incident-response` patterns if the topology makes sense.
 - **M7.6** Install Mode B as first-class — document and polish the onboarding path where the user's own CC reads the Colmena repo (SSH or clone) and self-configures. Validated with the 4 power users. Scope: README section at top level, CLAUDE.md structured for agent consumption, copy-pasteable commands, explicit naming conventions. Do not replace Mode A, add B alongside it.
+- **M7.3.1** Anti-reciprocal invariant scope fix (discovered during Wave A parallel spawn 2026-04-17) — `submit_review` in `review.rs:141-147` currently filters reviewer candidates against the full reviews store (all missions), blocking legitimate cross-mission reviewer reuse. Scope the filter to `existing.mission == current.mission` so reciprocity is a per-collaboration property, not career-long exclusion. Audit other cross-mission leaks (e.g. stale-review auto-invalidation) for the same assumption. See memory: `project_review_reciprocal_cross_mission_bug.md`. Belongs folded into M7.3 as a required sub-task.
 - **M7.7** Multi-perspective reviewer diversification — near-future need flagged explicitly by Coco. As Colmena grows, many Researcher and Reviewer roles will coexist with distinct viewpoints (software engineering, security architect, project manager, SRE, compliance, etc.). Reviewer selection must reflect that diversity instead of pure random from the pool. Scope: (a) `submit_review` accepts an optional `preferred_categories` hint from callers; (b) when unhinted, reviewer selection scores candidates by complementarity — if author's strongest `EloConfig.categories` is X, prefer a reviewer whose strongest category is *not* X; (c) track "perspective balance" per mission — avoid the same reviewer category evaluating N consecutive artifacts; (d) expose `colmena review perspectives <mission>` showing which viewpoints reviewed what; (e) when a mission spawns many Researchers, pair each with a reviewer from a contrasting category (pentester ↔ software_engineer, developer ↔ security_architect, devops ↔ architect). Goal: every ELO event reflects a genuinely cross-viewpoint judgement, not same-tribe approval.
 
-## Current State (2026-04-16)
+## Current State (2026-04-17)
 
-**Branch:** `chore/public-release-prep` — PR #25 open, awaiting manual merge by Coco.
-**Done:** M0–M7.2 plus v0.11.1 review cycle hardening plus public-release-prep (LICENSE, CI audit/deny/fmt/MSRV, dependabot, SECURITY/COC/CONTRIBUTORS, GitHub templates, runtime file untracking, privacy scrub).
+**Branch:** `main` @ `709997f` — post Wave A parallel wave (M7.5 + M7.6 + M7.8 + M7.9 all merged).
+**Done:** M0–M7.2 + v0.11.1 (review cycle hardening) + public-release-prep (PR #25: LICENSE, CI audit/deny/fmt/MSRV, dependabot, SECURITY/COC/CONTRIBUTORS, GitHub templates, runtime-file untracking, privacy scrub) + Wave A 2026-04-17 (PRs #28 #29 #30 #31: devops/SRE/platform_engineer roles, cross-platform release workflow + `cargo publish` + checksums, repositioning vs Claude Code auto-mode + Install Mode B docs, static prompt injection filter).
 **Validated users (2026-04-16):** 4 active power users (pentester, developer, devops, SRE) — primary hook is Y-approval reduction; explicit ask is more devops roles; onboarding happens via Install Mode B (user's own CC reads repo).
-**ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep). Recipe documented in memory; must be formalized in M7.3 so every mission closes the cycle automatically.
-**Next:** M7.3 → M7.5 prioritized (ELO auto-closure, role ergonomics, devops roles). M7.6 in parallel (docs work).
+**ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep 2026-04-16). Recipe documented in memory; must be formalized in M7.3 so every mission closes the cycle automatically.
+**Next:** M7.3 + M7.3.1 (ELO cycle auto-closure + anti-reciprocal scope fix) → M7.7 (multi-perspective reviewers) → M7.4 (role ergonomics CLI). Post-launch: `serde_yml → serde_yaml_ng` migration, RUSTSEC-2026-0097 rand upgrade when patched.
 
 ## Key Docs
 
-- `docs/specs/2026-03-29-hivemind-design.md` — Full design spec (M0-M3)
-- `docs/plans/2026-03-29-full-roadmap.md` — Full roadmap with MCP integration
-- `docs/dark-corners.md` — M0 edge case analysis
-- `docs/dark-corners-m1.md` — M1 edge case analysis
-- `docs/security/` — STRIDE+DREAD threat model reports (gitignored, local reference only)
+- `docs/user/getting-started.md` — Zero-to-running in 5 minutes
+- `docs/user/use-cases.md` — Concrete workflows Colmena enables
+- `docs/dev/architecture.md` — Full system walkthrough for contributors
+- `docs/dev/contributing.md` — How to set up, build, test, submit changes
+- `docs/dev/internals.md` — Edge cases, safety contracts, gotchas
 - `docs/guide.md` — User guide with payments API audit walkthrough
+- `docs/install-mode-b.md` — "Point your Claude Code at this repo" onboarding
 - `docs/presentation.html` — Overview deck (open in browser)
-- `docs/superpowers/specs/2026-04-02-mission-bridge-design.md` — Mission bridge spec (agent spawn → review → ELO)
-- `docs/superpowers/specs/2026-04-02-mentor-prompt-refinement-design.md` — M4 spec (debate pattern for prompt improvement)
-- `docs/caido-pentester-roles-plan.md` — M4.1 plan (Caido-native web_pentester + api_pentester roles)
-- `docs/superpowers/specs/2026-04-02-colmena-setup-design.md` — M5 spec (colmena setup onboarding command)
-- `docs/superpowers/specs/2026-04-02-intelligent-role-creation-design.md` — M6 spec (intelligent role + pattern creation)
-- `docs/superpowers/specs/2026-04-13-enforced-peer-review-design.md` — M6.4 spec (SubagentStop + centralized auditor + alerts)
-- `docs/superpowers/specs/2026-04-14-m7-generic-roles-patterns-design.md` — M7 spec (dev roles + patterns + topology mapping + QPC + inter-agent)
-- `docs/superpowers/specs/2026-04-14-m71-mission-spawn-gate-design.md` — M7.1 spec (mission_spawn + Mission Gate)
-- `docs/superpowers/specs/2026-04-14-m72-mission-sizing-suggest-design.md` — M7.2 spec (mission sizing + colmena suggest)
+- `docs/security/` — STRIDE+DREAD threat model reports (gitignored, local reference only)
