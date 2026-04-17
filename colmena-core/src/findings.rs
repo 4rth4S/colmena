@@ -192,7 +192,7 @@ pub fn load_findings(findings_dir: &Path, filter: &FindingsFilter) -> Result<Vec
     }
 
     // Sort by timestamp descending
-    records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    records.sort_by_key(|r| std::cmp::Reverse(r.timestamp));
 
     // Apply limit
     if let Some(limit) = filter.limit {

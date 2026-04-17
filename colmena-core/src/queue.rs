@@ -148,7 +148,7 @@ pub fn list_pending(config_dir: &Path) -> Result<Vec<QueueEntry>> {
         }
     }
 
-    entries.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    entries.sort_by_key(|e| e.timestamp);
     Ok(entries)
 }
 

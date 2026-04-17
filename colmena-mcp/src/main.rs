@@ -1813,7 +1813,7 @@ impl ColmenaServer {
             .collect();
 
         // Sort by evaluated_at descending (most recent first)
-        auditor_reviews.sort_by(|a, b| b.evaluated_at.cmp(&a.evaluated_at));
+        auditor_reviews.sort_by_key(|r| std::cmp::Reverse(r.evaluated_at));
 
         // Take last N
         let selected: Vec<_> = auditor_reviews.into_iter().take(last_n).collect();
