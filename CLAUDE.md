@@ -21,6 +21,18 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **CI:** GitHub Actions — `ci.yml` (fmt + test + clippy `-D warnings` + build + audit + deny on PRs), `release.yml` (tag-triggered releases), dependabot weekly for cargo + github-actions
 - **Repo:** `git@github.com:4rth4S/colmena.git`
 
+## Positioning
+
+**Who it's for (ICP).** Pentesters, dev teams, devops, and SRE working in contexts where compliance and auditability matter, or where running many parallel sub-agents requires governance. Validated (2026-04-16) with 4 power users across these profiles.
+
+**Three differentiators.**
+
+1. **Deterministic governance.** Every tool call is evaluated against YAML rules with compiled regexes. Zero LLM calls in the hot path, zero per-call cost, `<15ms` hook latency. Every decision is written to `config/audit.log` with the matching rule ID — any auditor can replay the log and explain why a call was allowed, asked, or blocked.
+2. **Multi-agent governance with peer review.** Missions spawn agents with mission markers (`<!-- colmena:mission_id=... -->`); workers submit artifacts through `review_submit`, a centralized auditor evaluates with the QPC framework (Quality + Precision + Comprehensiveness, 1–10 each), and `SubagentStop` gates block workers and reviewers from stopping until the cycle closes. Accountability is per-agent and per-role, not per-call.
+3. **ELO-calibrated trust progression.** Role trust is not declared — it's earned. Review outcomes feed a per-role ELO log with temporal decay. Roles climb from Uncalibrated → Standard → Elevated (auto-approve role-scoped tools) or drop to Restricted / Probation. ELO overrides live in a separate file so config stays human-readable, and YAML overrides always win (human authority > ELO).
+
+**Relationship to Claude Code auto-mode.** Anthropic's `--enable-auto-mode` (research preview, 2026-03-24) does semantic intent detection with an LLM classifier — it catches things a rule can't, like prompt injection attempts or context the agent didn't have. Colmena does deterministic rule-based governance plus multi-agent accountability and a local, tamper-evident audit trail. They solve different layers of the same problem and are intended to be used together, not as alternatives. Auto-mode handles "is this request aligned with user intent?", Colmena handles "is this action allowed by the policy I wrote, and who on my team is accountable for the outcome?".
+
 ## Architecture
 
 Rust workspace with 4 crates:
