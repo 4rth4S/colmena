@@ -4,6 +4,7 @@ pub mod calibrate;
 pub mod config;
 pub mod delegate;
 pub mod elo;
+pub mod emitters;
 pub mod findings;
 pub mod firewall;
 pub mod library;
