@@ -997,11 +997,13 @@ impl ColmenaServer {
         let existing_pairs: Vec<(String, String, String)> = existing
             .iter()
             .filter(|r| r.state != colmena_core::review::ReviewState::Invalidated)
-            .map(|r| (
-                r.reviewer_role.clone(),
-                r.author_role.clone(),
-                r.mission.clone(),
-            ))
+            .map(|r| {
+                (
+                    r.reviewer_role.clone(),
+                    r.author_role.clone(),
+                    r.mission.clone(),
+                )
+            })
             .collect();
 
         let entry = colmena_core::review::submit_review(

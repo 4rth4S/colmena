@@ -145,11 +145,11 @@ pub fn submit_review(
     // Only consider pairs from the SAME mission. Reciprocity is a property of a
     // specific collaboration cycle, not a career-long prohibition.
     candidates.retain(|candidate| {
-        !existing_reviews.iter().any(|(reviewer, author, pair_mission)| {
-            reviewer == candidate.as_str()
-                && author == author_role
-                && pair_mission == mission
-        })
+        !existing_reviews
+            .iter()
+            .any(|(reviewer, author, pair_mission)| {
+                reviewer == candidate.as_str() && author == author_role && pair_mission == mission
+            })
     });
 
     if candidates.is_empty() {
