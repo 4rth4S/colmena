@@ -8,6 +8,7 @@ pub mod emitters;
 pub mod findings;
 pub mod firewall;
 pub mod library;
+pub mod mission_manifest;
 pub mod models;
 pub mod paths;
 pub mod pattern_scaffold;
