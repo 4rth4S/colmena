@@ -229,6 +229,36 @@ enum MissionAction {
         #[arg(long)]
         id: String,
     },
+    /// Spawn a mission with auto-generated delegations + enriched prompts.
+    Spawn {
+        /// Path to a mission manifest YAML.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Shortcut: mission description when no manifest.
+        #[arg(long)]
+        mission: Option<String>,
+        /// Shortcut: pattern id.
+        #[arg(long)]
+        pattern: Option<String>,
+        /// Shortcut: role name. Repeatable.
+        #[arg(long = "role", value_name = "ROLE")]
+        roles: Vec<String>,
+        /// Shortcut: scope "owns" (comma-separated) — applies to the last --role.
+        #[arg(long = "scope", value_name = "FILES", requires = "roles")]
+        scopes: Vec<String>,
+        /// Shortcut: role task — applies to the last --role.
+        #[arg(long = "task", value_name = "TASK", requires = "roles")]
+        tasks: Vec<String>,
+        /// TTL for generated delegations in hours. Default 8, max 24.
+        #[arg(long, default_value_t = 8)]
+        mission_ttl: i64,
+        /// Simulate: print what would be done, do not write.
+        #[arg(long)]
+        dry_run: bool,
+        /// Overwrite existing delegations whose TTL is shorter than mission end.
+        #[arg(long)]
+        extend_existing: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -288,6 +318,13 @@ fn main() {
         Commands::Mission { action } => match action {
             MissionAction::List => run_mission_list(),
             MissionAction::Deactivate { id } => run_mission_deactivate(id),
+            MissionAction::Spawn {
+                from, mission, pattern, roles, scopes, tasks,
+                mission_ttl, dry_run, extend_existing,
+            } => run_mission_spawn(
+                from, mission, pattern, roles, scopes, tasks,
+                mission_ttl, dry_run, extend_existing,
+            ),
         },
         Commands::Calibrate { action } => match action {
             CalibrateAction::Run => run_calibrate(),
@@ -1843,6 +1880,144 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
             },
         );
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_mission_spawn(
+    from: Option<PathBuf>,
+    mission: Option<String>,
+    pattern: Option<String>,
+    roles_arg: Vec<String>,
+    scopes_arg: Vec<String>,
+    tasks_arg: Vec<String>,
+    mission_ttl: i64,
+    dry_run: bool,
+    extend_existing: bool,
+) -> Result<()> {
+    use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
+
+    let manifest: MissionManifest = if let Some(path) = from {
+        MissionManifest::from_path(&path)?
+    } else {
+        // Shortcut path: build a manifest from flags
+        let mission_text = mission.ok_or_else(|| {
+            anyhow::anyhow!("--mission <string> required when --from not provided")
+        })?;
+        let pattern_id = pattern.ok_or_else(|| {
+            anyhow::anyhow!("--pattern <id> required when --from not provided")
+        })?;
+        if roles_arg.is_empty() {
+            anyhow::bail!("at least one --role required when --from not provided");
+        }
+        let roles: Vec<ManifestRole> = roles_arg
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ManifestRole {
+                name: name.clone(),
+                scope: ManifestScope {
+                    owns: scopes_arg
+                        .get(i)
+                        .map(|csv| {
+                            csv.split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    forbidden: Vec::new(),
+                },
+                task: tasks_arg.get(i).cloned().unwrap_or_default(),
+            })
+            .collect();
+        let m = MissionManifest {
+            id: mission_text.clone(),
+            pattern: pattern_id,
+            mission_ttl_hours: mission_ttl,
+            roles,
+        };
+        m.validate()?;
+        m
+    };
+
+    let library_dir = colmena_core::library::default_library_dir();
+    let all_roles = colmena_core::library::load_roles(&library_dir)
+        .context("failed to load roles")?;
+    let all_patterns = colmena_core::library::load_patterns(&library_dir)
+        .context("failed to load patterns")?;
+
+    // Validate all roles referenced by the manifest exist in the library.
+    for r in &manifest.roles {
+        if !all_roles.iter().any(|lr| lr.id == r.name) {
+            anyhow::bail!(
+                "Role '{}' referenced in manifest but not found in library. \
+                 Create it first with: colmena library create-role --id {} --description \"...\"",
+                r.name, r.name
+            );
+        }
+    }
+
+    let config_dir = colmena_core::paths::default_config_dir();
+    let runtime_delegations_path = config_dir.join("runtime-delegations.json");
+    let missions_dir = config_dir.join("missions");
+
+    let result = colmena_core::selector::spawn_mission(
+        &manifest.id,
+        Some(&manifest),
+        &all_roles,
+        &all_patterns,
+        &library_dir,
+        &missions_dir,
+        &runtime_delegations_path,
+        None, // session_id
+        &[],  // elo_ratings — calibrate lookup deferred for CLI simplicity
+        Some(&config_dir),
+        extend_existing,
+        dry_run,
+    )?;
+
+    // Emit summary
+    println!();
+    println!("Mission spawned: {}", result.mission_name);
+    println!("  OK {} subagent prompts composed", result.agent_prompts.len());
+    if dry_run {
+        println!(
+            "  (dry-run) {} delegations WOULD be created",
+            result.delegations_created.len()
+        );
+    } else {
+        println!(
+            "  OK {} delegations created",
+            result.delegations_created.len()
+        );
+    }
+    if !result.delegations_skipped.is_empty() {
+        println!(
+            "  WARN {} delegations preserved (already exist with sufficient TTL)",
+            result.delegations_skipped.len()
+        );
+        for (d, exp) in &result.delegations_skipped {
+            println!(
+                "       - {}/{} (expires {})",
+                d.tool,
+                d.agent_id.clone().unwrap_or_default(),
+                exp.to_rfc3339()
+            );
+        }
+    }
+    if !result.role_gaps.is_empty() {
+        println!("  INFO role gaps detected: {}", result.role_gaps.join(", "));
+    }
+    println!();
+    println!("Next steps:");
+    for ap in &result.agent_prompts {
+        println!(
+            "  spawn agent '{}' with prompt at: {}",
+            ap.role_id,
+            ap.claude_md_path.display()
+        );
+    }
+
     Ok(())
 }
 
