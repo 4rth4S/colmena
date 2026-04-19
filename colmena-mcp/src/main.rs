@@ -990,13 +990,20 @@ impl ColmenaServer {
             );
         }
 
-        // Load existing reviews, filter out Invalidated so freed reviewer slots are available
+        // Load existing reviews, filter out Invalidated so freed reviewer slots are available.
+        // M7.3.1: include mission in each tuple so the anti-reciprocal filter can scope per-mission.
         let existing = colmena_core::review::list_reviews(&review_dir, None)
             .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
-        let existing_pairs: Vec<(String, String)> = existing
+        let existing_pairs: Vec<(String, String, String)> = existing
             .iter()
             .filter(|r| r.state != colmena_core::review::ReviewState::Invalidated)
-            .map(|r| (r.reviewer_role.clone(), r.author_role.clone()))
+            .map(|r| {
+                (
+                    r.reviewer_role.clone(),
+                    r.author_role.clone(),
+                    r.mission.clone(),
+                )
+            })
             .collect();
 
         let entry = colmena_core::review::submit_review(

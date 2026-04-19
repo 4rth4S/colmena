@@ -349,7 +349,7 @@ fn test_hook_respects_colmena_home() {
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
 
-    std::fs::copy(&config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
+    std::fs::copy(config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
 
     let payload = make_payload("Read", json!({"file_path": "/tmp/foo.txt"}));
     let input = serde_json::to_string(&payload).unwrap();
@@ -402,7 +402,7 @@ fn make_colmena_home() -> tempfile::TempDir {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
-    std::fs::copy(&config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
+    std::fs::copy(config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
 
     let src_library = std::path::Path::new(&workspace_root()).join("config/library");
     copy_dir_recursive(&src_library, &config_dir.join("library"));
@@ -865,6 +865,32 @@ fn make_colmena_home_with_enforce_missions() -> tempfile::TempDir {
     tmp
 }
 
+/// Build a colmena home with a minimal trust-firewall.yaml containing
+/// `enforce_missions: false` explicitly. Does NOT copy the workspace YAML —
+/// guarantees independence from any global default the workspace may carry.
+fn make_colmena_home_no_enforce() -> tempfile::TempDir {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
+
+    // Minimal YAML: enforce_missions explicitly false, no rules beyond defaults.
+    // Any hook-path evaluation will fall through to safe defaults ("ask").
+    let minimal_yaml = r#"version: 1
+enforce_missions: false
+defaults:
+  action: ask
+trust_circle: []
+restricted: []
+blocked: []
+"#;
+    std::fs::write(config_dir.join("trust-firewall.yaml"), minimal_yaml).unwrap();
+
+    let src_library = std::path::Path::new(&workspace_root()).join("config/library");
+    copy_dir_recursive(&src_library, &config_dir.join("library"));
+
+    tmp
+}
+
 #[test]
 fn test_mission_gate_blocks_bare_agent_when_enforced() {
     let tmp = make_colmena_home_with_enforce_missions();
@@ -928,8 +954,9 @@ fn test_mission_gate_allows_agent_with_marker() {
 
 #[test]
 fn test_mission_gate_inactive_when_not_enforced() {
-    // Use default config (enforce_missions: false)
-    let tmp = make_colmena_home();
+    // Uses an inline config with enforce_missions: false explicit — does NOT depend
+    // on whatever default the workspace YAML carries at the time.
+    let tmp = make_colmena_home_no_enforce();
     let payload = json!({
         "session_id": "gate-test",
         "hook_event_name": "PreToolUse",
