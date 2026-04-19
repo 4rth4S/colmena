@@ -6,6 +6,32 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-04-19
+
+### Added
+
+- **M7.3 core — mission_spawn auto-closure (safe subset)**:
+  - New `colmena mission spawn` subcommand with `--from <manifest.yaml>` and shortcut flags (`--mission/--pattern/--role/--scope/--task`).
+  - Manifest-driven `[Scope]`, `[Task]`, and `[Review Protocol]` sections injected into generated CLAUDE.md files. `review_submit` params are pre-filled.
+  - Delegations now persist directly to `runtime-delegations.json` (no more CLI command strings) — fixes the `--bash-pattern` flag bug from the TM pattern mission.
+  - Idempotency via new `decide_merge` helper in `delegate`: insert / skip-respected (existing TTL covers mission end) / abort (TTL too short). `--extend-existing` flag overwrites short-TTL delegations; `--dry-run` plans without writing.
+  - Reviewer role YAMLs (auditor, code_reviewer, architect) now list `mcp__colmena__review_evaluate` in `tools_allowed` so `generate_role_delegations` bundles the evaluation delegation automatically. (`security-architect` already had it.)
+- New module `colmena-core/src/emitters/claude_code.rs` with pure prompt-composition helpers. PR 3 will extend it with the `~/.claude/agents/` writer.
+- New module `colmena-core/src/mission_manifest.rs` with `MissionManifest` / `ManifestRole` / `ManifestScope` types and YAML parser + validator.
+
+### Fixed
+
+- `spawn_mission` now honors `manifest.pattern` via exact-id lookup (previously only did score-based selection on the mission text).
+- `spawn_mission` now honors `manifest.roles` as the canonical squad composition (previously the pattern's topology always won, ignoring the caller's explicit role list).
+- `run_mission_spawn` (CLI) now exits non-zero on validation errors (unknown role, TTL overflow, malformed manifest) instead of falling through to the hook-path `ask` fallback.
+- Delegations emitted by `mission_spawn` no longer reference the non-existent `--bash-pattern` CLI flag (persist directly to `runtime-delegations.json`).
+
+### Changed
+
+- **Internal API:** `colmena_core::selector::spawn_mission` signature grew — new args `manifest`, `runtime_delegations_path`, `extend_existing`, `dry_run`. Callers in `colmena-mcp` updated in-PR.
+- `SpawnResult` no longer exposes `delegation_commands: Vec<String>`. New fields: `delegations_created`, `delegations_skipped`, `delegations_aborted`.
+- `generate_mission` now accepts `manifest: Option<&MissionManifest>`.
+
 ## [0.12.0] - 2026-04-19
 
 ### Fixed
