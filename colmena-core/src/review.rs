@@ -107,9 +107,12 @@ pub fn hash_artifact(path: &Path) -> Result<String> {
 ///
 /// Invariants enforced:
 /// 1. Author cannot review their own work (author != reviewer).
-/// 2. Anti-reciprocal: if reviewer already reviewed author, skip that pairing.
+/// 2. Anti-reciprocal (per-mission, M7.3.1): if reviewer already reviewed author
+///    within the SAME mission, skip that pairing. Pairs from other missions do
+///    not block — reciprocity is scoped to a single collaboration cycle.
 /// 3. Max pending per (author, mission) — STRIDE TM Finding #24 (DREAD 5.4).
 ///
+/// `existing_reviews` is a slice of `(reviewer_role, author_role, mission)` tuples.
 /// Returns the created `ReviewEntry` in Pending state.
 pub fn submit_review(
     review_dir: &Path,
@@ -117,7 +120,7 @@ pub fn submit_review(
     author_role: &str,
     mission: &str,
     available_roles: &[String],
-    existing_reviews: &[(String, String)],
+    existing_reviews: &[(String, String, String)],
 ) -> Result<ReviewEntry> {
     // STRIDE TM Finding #24: limit pending reviews per (author, mission)
     let pending_count = count_pending_for_author(review_dir, author_role, mission);
@@ -138,12 +141,15 @@ pub fn submit_review(
         .filter(|r| r.as_str() != author_role)
         .collect();
 
-    // Filter out reciprocal pairs (invariant 2):
-    // If (candidate, author) exists in existing_reviews, skip that candidate
+    // Filter out reciprocal pairs (invariant 2) SCOPED per-mission (M7.3.1):
+    // Only consider pairs from the SAME mission. Reciprocity is a property of a
+    // specific collaboration cycle, not a career-long prohibition.
     candidates.retain(|candidate| {
-        !existing_reviews
-            .iter()
-            .any(|(reviewer, author)| reviewer == candidate.as_str() && author == author_role)
+        !existing_reviews.iter().any(|(reviewer, author, pair_mission)| {
+            reviewer == candidate.as_str()
+                && author == author_role
+                && pair_mission == mission
+        })
     });
 
     if candidates.is_empty() {
@@ -603,7 +609,7 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -642,7 +648,7 @@ mod tests {
 
         // Only the author's role is available
         let roles = vec!["coder".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let result = submit_review(
             &review_dir,
@@ -673,7 +679,11 @@ mod tests {
         ];
 
         // pentester already reviewed coder → pentester is excluded
-        let existing = vec![("pentester".to_string(), "coder".to_string())];
+        let existing = vec![(
+            "pentester".to_string(),
+            "coder".to_string(),
+            "audit-payments".to_string(),
+        )];
 
         let entry = submit_review(
             &review_dir,
@@ -690,13 +700,51 @@ mod tests {
     }
 
     #[test]
+    fn test_submit_cross_mission_reciprocal_allowed() {
+        // REGRESSION (M7.3.1 bug, 2026-04-17): anti-reciprocal filter must be per-mission.
+        // If pentester already reviewed coder in mission-A, the pair (pentester, coder) should
+        // NOT be blocked when coder submits a new artifact in mission-B.
+        // Before fix: "No eligible reviewer" (global filter). After fix: pentester picked.
+        let tmp = TempDir::new().unwrap();
+        let review_dir = tmp.path().join("reviews");
+        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+
+        let roles = vec!["coder".to_string(), "pentester".to_string()];
+
+        // Pentester already reviewed coder in mission-A (prior mission).
+        // After the fix the third tuple element is the mission of that prior review.
+        let existing = vec![(
+            "pentester".to_string(),
+            "coder".to_string(),
+            "mission-a".to_string(),
+        )];
+
+        // Coder submits in mission-b. Pentester must be eligible because mission differs.
+        let entry = submit_review(
+            &review_dir,
+            &artifact,
+            "coder",
+            "mission-b",
+            &roles,
+            &existing,
+        )
+        .expect("cross-mission submit must succeed");
+
+        assert_eq!(
+            entry.reviewer_role, "pentester",
+            "pentester must be eligible in mission-b despite prior mission-a pair"
+        );
+        assert_eq!(entry.mission, "mission-b");
+    }
+
+    #[test]
     fn test_evaluate_review_valid() {
         let tmp = TempDir::new().unwrap();
         let review_dir = tmp.path().join("reviews");
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -753,7 +801,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -796,7 +844,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -865,7 +913,7 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         // Submit two reviews (need slight delay for unique IDs)
         let _e1 = submit_review(
@@ -917,7 +965,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -963,7 +1011,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -1004,7 +1052,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let _entry = submit_review(
             &review_dir,
@@ -1040,7 +1088,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let _entry = submit_review(
             &review_dir,
@@ -1067,7 +1115,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -1121,7 +1169,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -1158,7 +1206,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         submit_review(
             &review_dir,
@@ -1183,7 +1231,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -1228,7 +1276,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         let entry = submit_review(
             &review_dir,
@@ -1279,7 +1327,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         submit_review(
             &review_dir,
@@ -1312,7 +1360,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         submit_review(
             &review_dir,
@@ -1346,7 +1394,7 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         submit_review(
             &review_dir,
@@ -1396,7 +1444,7 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         // Coder submits a review
         submit_review(
@@ -1452,7 +1500,7 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         // Submit MAX_PENDING_PER_AUTHOR reviews (should succeed)
         for i in 0..MAX_PENDING_PER_AUTHOR {
@@ -1505,7 +1553,7 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String)> = vec![];
+        let existing: Vec<(String, String, String)> = vec![];
 
         // Fill up mission A
         for i in 0..MAX_PENDING_PER_AUTHOR {
