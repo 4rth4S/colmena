@@ -1079,8 +1079,8 @@ fn test_delegation_injection_source_role_without_mission_dir() {
 #[test]
 fn test_mission_spawn_dry_run_with_manifest() {
     let tmp = make_colmena_home();
-    let fixture = std::path::Path::new(&workspace_root())
-        .join("tests/fixtures/missions/peer-2-roles.yaml");
+    let fixture =
+        std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
         .args(["mission", "spawn", "--from"])
@@ -1164,8 +1164,8 @@ roles:
 #[test]
 fn test_mission_spawn_persists_delegations_when_not_dry_run() {
     let tmp = make_colmena_home();
-    let fixture = std::path::Path::new(&workspace_root())
-        .join("tests/fixtures/missions/peer-2-roles.yaml");
+    let fixture =
+        std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
         .args(["mission", "spawn", "--from"])
@@ -1182,9 +1182,21 @@ fn test_mission_spawn_persists_delegations_when_not_dry_run() {
 
     // Delegations file exists and contains role-source delegations
     let delegations_path = tmp.path().join("config/runtime-delegations.json");
-    assert!(delegations_path.exists(), "delegations file must exist after real spawn");
+    assert!(
+        delegations_path.exists(),
+        "delegations file must exist after real spawn"
+    );
     let content = std::fs::read_to_string(&delegations_path).unwrap();
-    assert!(content.contains("\"source\": \"role\""), "must have role-source delegations: {content}");
-    assert!(content.contains("\"developer\""), "must have developer delegations: {content}");
-    assert!(content.contains("mcp__colmena__review_submit"), "must bundle review_submit: {content}");
+    assert!(
+        content.contains("\"source\": \"role\""),
+        "must have role-source delegations: {content}"
+    );
+    assert!(
+        content.contains("\"developer\""),
+        "must have developer delegations: {content}"
+    );
+    assert!(
+        content.contains("mcp__colmena__review_submit"),
+        "must bundle review_submit: {content}"
+    );
 }

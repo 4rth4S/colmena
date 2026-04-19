@@ -1446,8 +1446,7 @@ pub fn spawn_mission(
     // pattern was selected or auto-created.
     if let Some(m) = manifest {
         if !m.roles.is_empty() {
-            let role_map: HashMap<&str, &Role> =
-                roles.iter().map(|r| (r.id.as_str(), r)).collect();
+            let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
             let manifest_assignments: Vec<RoleAssignment> = m
                 .roles
                 .iter()

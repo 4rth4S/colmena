@@ -319,11 +319,25 @@ fn main() {
             MissionAction::List => run_mission_list(),
             MissionAction::Deactivate { id } => run_mission_deactivate(id),
             MissionAction::Spawn {
-                from, mission, pattern, roles, scopes, tasks,
-                mission_ttl, dry_run, extend_existing,
+                from,
+                mission,
+                pattern,
+                roles,
+                scopes,
+                tasks,
+                mission_ttl,
+                dry_run,
+                extend_existing,
             } => run_mission_spawn(
-                from, mission, pattern, roles, scopes, tasks,
-                mission_ttl, dry_run, extend_existing,
+                from,
+                mission,
+                pattern,
+                roles,
+                scopes,
+                tasks,
+                mission_ttl,
+                dry_run,
+                extend_existing,
             ),
         },
         Commands::Calibrate { action } => match action {
@@ -1910,9 +1924,8 @@ fn run_mission_spawn(
         let mission_text = mission.ok_or_else(|| {
             anyhow::anyhow!("--mission <string> required when --from not provided")
         })?;
-        let pattern_id = pattern.ok_or_else(|| {
-            anyhow::anyhow!("--pattern <id> required when --from not provided")
-        })?;
+        let pattern_id = pattern
+            .ok_or_else(|| anyhow::anyhow!("--pattern <id> required when --from not provided"))?;
         if roles_arg.is_empty() {
             anyhow::bail!("at least one --role required when --from not provided");
         }
@@ -1950,10 +1963,10 @@ fn run_mission_spawn(
     };
 
     let library_dir = colmena_core::library::default_library_dir();
-    let all_roles = colmena_core::library::load_roles(&library_dir)
-        .context("failed to load roles")?;
-    let all_patterns = colmena_core::library::load_patterns(&library_dir)
-        .context("failed to load patterns")?;
+    let all_roles =
+        colmena_core::library::load_roles(&library_dir).context("failed to load roles")?;
+    let all_patterns =
+        colmena_core::library::load_patterns(&library_dir).context("failed to load patterns")?;
 
     // Validate all roles referenced by the manifest exist in the library.
     for r in &manifest.roles {
@@ -1989,7 +2002,10 @@ fn run_mission_spawn(
     // Emit summary
     println!();
     println!("Mission spawned: {}", result.mission_name);
-    println!("  OK {} subagent prompts composed", result.agent_prompts.len());
+    println!(
+        "  OK {} subagent prompts composed",
+        result.agent_prompts.len()
+    );
     if dry_run {
         println!(
             "  (dry-run) {} delegations WOULD be created",
