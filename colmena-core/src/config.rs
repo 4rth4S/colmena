@@ -60,10 +60,12 @@ pub struct FirewallConfig {
     #[serde(default)]
     pub agent_overrides: HashMap<String, Vec<Rule>>,
     pub notifications: Option<NotificationsConfig>,
-    /// When true, Agent tool calls without a Colmena mission marker trigger "ask".
-    /// Off by default — opt-in enforcement.
+    /// Mission Gate policy:
+    /// - `None` (unset in YAML) → auto-activate when mission delegations are live (M7.3)
+    /// - `Some(true)` → always active
+    /// - `Some(false)` → explicit opt-out (operator decision, respected always)
     #[serde(default)]
-    pub enforce_missions: bool,
+    pub enforce_missions: Option<bool>,
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -268,6 +270,26 @@ pub fn check_config_permissions(_config_dir: &std::path::Path) -> Vec<String> {
     Vec::new()
 }
 
+impl FirewallConfig {
+    /// Decide whether the Mission Gate applies to this call, given the live
+    /// runtime delegations.
+    ///
+    /// Rules (M7.3):
+    /// - If `enforce_missions` is explicit (`Some`), honor it literally.
+    /// - If unset (`None`), auto-activate when there is at least one
+    ///   delegation with `source: "role"` — i.e., a mission is live.
+    /// - Otherwise (unset + no mission delegations), the gate is inactive.
+    pub fn is_mission_gate_active(
+        &self,
+        delegations: &[crate::delegate::RuntimeDelegation],
+    ) -> bool {
+        match self.enforce_missions {
+            Some(v) => v,
+            None => delegations.iter().any(|d| d.source.as_deref() == Some("role")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,7 +375,7 @@ action: auto-approve
             }],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -378,7 +400,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -402,7 +424,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -425,7 +447,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -512,7 +534,7 @@ action: auto-approve
     // ── enforce_missions tests ──────────────────────────────────────────────
 
     #[test]
-    fn test_enforce_missions_default_false() {
+    fn test_enforce_missions_default_none() {
         let yaml = r#"
 version: 1
 defaults:
@@ -520,8 +542,8 @@ defaults:
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
         assert!(
-            !config.enforce_missions,
-            "enforce_missions should default to false"
+            config.enforce_missions.is_none(),
+            "enforce_missions should default to None (unset)"
         );
     }
 
@@ -534,9 +556,10 @@ defaults:
 enforce_missions: true
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
-        assert!(
+        assert_eq!(
             config.enforce_missions,
-            "enforce_missions should parse as true"
+            Some(true),
+            "enforce_missions should parse as Some(true)"
         );
     }
 
@@ -545,9 +568,71 @@ enforce_missions: true
         let config_path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/home/test/project").unwrap();
-        assert!(
-            !config.enforce_missions,
-            "Real config should have enforce_missions=false"
+        // Real config has `enforce_missions: false` explicitly set
+        assert_eq!(
+            config.enforce_missions,
+            Some(false),
+            "Real config should have enforce_missions=Some(false)"
         );
+    }
+
+    // ── is_mission_gate_active tests ────────────────────────────────────────
+
+    fn make_role_delegation() -> crate::delegate::RuntimeDelegation {
+        crate::delegate::RuntimeDelegation {
+            tool: "Read".to_string(),
+            agent_id: Some("developer".to_string()),
+            action: crate::config::Action::AutoApprove,
+            created_at: chrono::Utc::now(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            session_id: None,
+            source: Some("role".to_string()),
+            mission_id: Some("m-42".to_string()),
+            conditions: None,
+        }
+    }
+
+    fn make_firewall_config(enforce: Option<bool>) -> FirewallConfig {
+        FirewallConfig {
+            version: 1,
+            defaults: Defaults {
+                action: Action::Ask,
+            },
+            trust_circle: vec![],
+            restricted: vec![],
+            blocked: vec![],
+            agent_overrides: HashMap::new(),
+            notifications: None,
+            enforce_missions: enforce,
+        }
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_explicit_true() {
+        let config = make_firewall_config(Some(true));
+        assert!(config.is_mission_gate_active(&[]));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_explicit_false_respected() {
+        let config = make_firewall_config(Some(false));
+        let d = make_role_delegation();
+        assert!(
+            !config.is_mission_gate_active(&[d]),
+            "explicit false honored even when role delegation is live"
+        );
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_unset_activates_with_role_delegation() {
+        let config = make_firewall_config(None);
+        let d = make_role_delegation();
+        assert!(config.is_mission_gate_active(&[d]));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_unset_inactive_without_delegations() {
+        let config = make_firewall_config(None);
+        assert!(!config.is_mission_gate_active(&[]));
     }
 }

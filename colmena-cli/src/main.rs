@@ -570,7 +570,10 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     );
 
     // 4c. Mission Gate: if enforce_missions and tool is Agent, check for mission marker
-    let decision = if cfg.enforce_missions
+    // M7.3 live-surface: gate active if explicit or if mission delegations are live.
+    let gate_active = cfg.is_mission_gate_active(&delegations);
+
+    let decision = if gate_active
         && eval_input.tool_name == "Agent"
         && decision.action != Action::Block
     {
