@@ -97,6 +97,10 @@ pub struct AgentConfig {
     pub role_id: String,
     pub role_name: String,
     pub claude_md_path: PathBuf,
+    /// The CLAUDE.md content. Always populated so callers can use it
+    /// without a disk read (important under `dry_run`, where
+    /// `claude_md_path` points at a file that was NOT persisted).
+    pub claude_md_content: String,
 }
 
 /// Reviewer lead assignment based on ELO
@@ -303,6 +307,7 @@ pub fn generate_mission(
     elo_ratings: &[AgentRating],
     config_dir: Option<&Path>,
     manifest: Option<&crate::mission_manifest::MissionManifest>,
+    dry_run: bool,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
@@ -337,8 +342,10 @@ pub fn generate_mission(
     let mission_dir = missions_dir.join(&mission_name);
     let agents_dir = mission_dir.join("agents");
 
-    std::fs::create_dir_all(&agents_dir)
-        .with_context(|| format!("Failed to create mission dir: {}", mission_dir.display()))?;
+    if !dry_run {
+        std::fs::create_dir_all(&agents_dir)
+            .with_context(|| format!("Failed to create mission dir: {}", mission_dir.display()))?;
+    }
 
     // Write mission.yaml
     let mission_yaml = format!(
@@ -354,17 +361,26 @@ pub fn generate_mission(
             .collect::<Vec<_>>()
             .join("\n")
     );
-    std::fs::write(mission_dir.join("mission.yaml"), &mission_yaml)?;
+    if !dry_run {
+        std::fs::write(mission_dir.join("mission.yaml"), &mission_yaml)?;
+    }
 
     // Generate CLAUDE.md per agent + role-bound delegations
     let mut agent_configs = Vec::new();
     let mut delegations = Vec::new();
     let now = Utc::now();
-    let ttl = chrono::Duration::hours(DEFAULT_MISSION_TTL_HOURS);
+    // M7.3 fix: honour manifest.mission_ttl_hours for delegation TTL so that
+    // generated delegations expire with the mission, not at the hardcoded default.
+    let ttl_hours = manifest
+        .map(|m| m.mission_ttl_hours)
+        .unwrap_or(DEFAULT_MISSION_TTL_HOURS);
+    let ttl = chrono::Duration::hours(ttl_hours);
 
     for assignment in &recommendation.role_assignments {
         let agent_dir = agents_dir.join(&assignment.role_id);
-        std::fs::create_dir_all(&agent_dir)?;
+        if !dry_run {
+            std::fs::create_dir_all(&agent_dir)?;
+        }
 
         let role = role_map.get(assignment.role_id.as_str())
             .ok_or_else(|| anyhow::anyhow!(
@@ -419,11 +435,13 @@ pub fn generate_mission(
                 .filter(|a| a.role_id != assignment.role_id)
                 .map(|a| a.role_id.clone())
                 .collect();
-            let mission_id_for_review = manifest
-                .map(|m| m.id.clone())
-                .unwrap_or_else(|| mission_slug.clone());
+            // M7.3 fix: the mission_id passed to review_submit MUST match the
+            // mission_id stamped onto delegations and the Mission Gate marker.
+            // All three use `mission_name` (date-prefixed slug), so the prompt
+            // follows suit — otherwise review_submit() lands under an id that
+            // matches no delegation and the ELO cycle silently breaks.
             crate::emitters::claude_code::review_protocol_block(
-                &mission_id_for_review,
+                &mission_name,
                 &assignment.role_id,
                 &all_other_roles,
             )
@@ -488,12 +506,15 @@ pub fn generate_mission(
         );
 
         let claude_md_path = agent_dir.join("CLAUDE.md");
-        std::fs::write(&claude_md_path, &claude_md)?;
+        if !dry_run {
+            std::fs::write(&claude_md_path, &claude_md)?;
+        }
 
         agent_configs.push(AgentConfig {
             role_id: assignment.role_id.clone(),
             role_name: assignment.role_name.clone(),
             claude_md_path,
+            claude_md_content: claude_md,
         });
     }
 
@@ -1471,8 +1492,10 @@ pub fn spawn_mission(
     // Detect role gaps
     let role_gaps = detect_role_gaps(mission, roles);
 
-    // 3. Generate mission (creates CLAUDE.md + delegations)
-    // Need patterns for generate_mission — use auto-created if applicable
+    // 3. Generate mission (creates CLAUDE.md + delegations).
+    //    Honour `dry_run`: when true, generate_mission composes prompts in
+    //    memory but does NOT create directories or write mission.yaml /
+    //    per-agent CLAUDE.md files.
     let mission_config = generate_mission(
         mission,
         &recommendation,
@@ -1483,6 +1506,7 @@ pub fn spawn_mission(
         elo_ratings,
         config_dir,
         manifest,
+        dry_run,
     )?;
 
     let mission_name = mission_config
@@ -1497,10 +1521,9 @@ pub fn spawn_mission(
     let mut agent_prompts = Vec::new();
 
     for agent_cfg in &mission_config.agent_configs {
-        let claude_md_content = std::fs::read_to_string(&agent_cfg.claude_md_path)
-            .with_context(|| format!("Failed to read CLAUDE.md for {}", agent_cfg.role_id))?;
-
-        let prompt = format!("{}\n{}", mission_marker, claude_md_content);
+        // Use the in-memory content so dry_run works — the CLAUDE.md file
+        // may not exist on disk when generate_mission was called with dry_run.
+        let prompt = format!("{}\n{}", mission_marker, agent_cfg.claude_md_content);
 
         agent_prompts.push(AgentPrompt {
             role_id: agent_cfg.role_id.clone(),
@@ -1898,9 +1921,10 @@ mod tests {
             &library_dir,
             &missions_dir,
             None,
-            &[],  // no ELO ratings — uncalibrated
-            None, // no config_dir — no prompt review detection
-            None, // no manifest
+            &[],   // no ELO ratings — uncalibrated
+            None,  // no config_dir — no prompt review detection
+            None,  // no manifest
+            false, // dry_run: test writes to disk
         )
         .expect("generate_mission should succeed");
 
@@ -2367,6 +2391,7 @@ mod tests {
             &[],
             Some(config_dir),
             None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2444,6 +2469,7 @@ mod tests {
             &[],
             Some(config_dir),
             None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2662,6 +2688,7 @@ mod tests {
             &[],
             None,
             None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2723,6 +2750,7 @@ mod tests {
             &[],
             None,
             None,
+            false,
         )
         .expect("generate_mission should succeed");
 

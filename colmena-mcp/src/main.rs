@@ -761,7 +761,8 @@ impl ColmenaServer {
             None, // session_id: MCP context doesn't have session binding
             &elo_ratings,
             Some(&self.config_dir),
-            None, // manifest: MCP doesn't expose manifest yet
+            None,  // manifest: MCP doesn't expose manifest yet
+            false, // dry_run: MCP always persists
         )
         .map_err(|e| sanitize_error(&format!("Mission generation failed: {e}")))?;
 

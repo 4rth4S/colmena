@@ -1106,6 +1106,20 @@ fn test_mission_spawn_dry_run_with_manifest() {
             || std::fs::read_to_string(&delegations_path).unwrap().trim() == "[]",
         "dry-run must not persist delegations"
     );
+
+    // M7.3 dry-run contract: nothing persisted to disk
+    let mission_dir = tmp.path().join("config/missions/test-peer-mission");
+    let date_prefixed = tmp
+        .path()
+        .join("config/missions")
+        .read_dir()
+        .ok()
+        .and_then(|mut it| it.next().and_then(|e| e.ok()))
+        .map(|e| e.path());
+    assert!(
+        !mission_dir.exists() && date_prefixed.is_none(),
+        "dry-run must not create mission directories"
+    );
 }
 
 #[test]
