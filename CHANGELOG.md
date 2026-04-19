@@ -6,6 +6,34 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-04-19
+
+### Fixed
+
+- **M7.3.1 — anti-reciprocal per-mission scope** (`review.rs`): the
+  `submit_review` anti-reciprocal filter now scopes pair exclusion to the
+  current mission. Previously a `(reviewer, author)` pair recorded in any
+  prior mission would globally block that pair, which broke the centralized
+  auditor pattern (M6.4) once the auditor had reviewed the same author
+  before. Discovered during Wave A parallel spawn (2026-04-17). Regression
+  covered by `test_submit_cross_mission_reciprocal_allowed`.
+
+### Changed
+
+- **Breaking (internal API):** `colmena_core::review::submit_review` now takes
+  `existing_reviews: &[(String, String, String)]` (reviewer, author, mission).
+  External MCP tool signature unchanged. Only caller in the workspace
+  (`colmena-mcp`) updated in this release.
+- `test_mission_gate_inactive_when_not_enforced` now uses a minimal inline
+  `trust-firewall.yaml` instead of copying the workspace config — keeps the
+  test resilient to workspace default changes across milestones.
+
+### Chore
+
+- Resolved clippy 1.95 lints (`cloned_ref_to_slice_refs`,
+  `needless_borrows_for_generic_args`) in test code paths so CI
+  (`clippy -D warnings`) stays green.
+
 ## [0.11.1] - 2026-04-16
 
 ### Added
