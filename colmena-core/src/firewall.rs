@@ -772,7 +772,12 @@ mod tests {
         // Payload from same session → should match
         let mut payload_a = make_payload("Bash", json!({"command": "rm -r /tmp/foo"}));
         payload_a.session_id = "sess_A".to_string();
-        let decision = evaluate(&config, &patterns, &[delegation.clone()], &payload_a);
+        let decision = evaluate(
+            &config,
+            &patterns,
+            std::slice::from_ref(&delegation),
+            &payload_a,
+        );
         assert_eq!(
             decision.action,
             Action::AutoApprove,

@@ -349,7 +349,7 @@ fn test_hook_respects_colmena_home() {
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
 
-    std::fs::copy(&config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
+    std::fs::copy(config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
 
     let payload = make_payload("Read", json!({"file_path": "/tmp/foo.txt"}));
     let input = serde_json::to_string(&payload).unwrap();
@@ -402,7 +402,7 @@ fn make_colmena_home() -> tempfile::TempDir {
     let tmp = tempfile::TempDir::new().unwrap();
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(config_dir.join("queue/pending")).unwrap();
-    std::fs::copy(&config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
+    std::fs::copy(config_path(), config_dir.join("trust-firewall.yaml")).unwrap();
 
     let src_library = std::path::Path::new(&workspace_root()).join("config/library");
     copy_dir_recursive(&src_library, &config_dir.join("library"));
