@@ -27,9 +27,6 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - `test_mission_gate_inactive_when_not_enforced` now uses a minimal inline
   `trust-firewall.yaml` instead of copying the workspace config — keeps the
   test resilient to workspace default changes across milestones.
-
-### Chore
-
 - Resolved clippy 1.95 lints (`cloned_ref_to_slice_refs`,
   `needless_borrows_for_generic_args`) in test code paths so CI
   (`clippy -D warnings`) stays green.
