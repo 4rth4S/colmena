@@ -991,9 +991,7 @@ pub enum MergeDecision {
     /// No matching existing delegation — safe to insert.
     Insert,
     /// Existing delegation covers this one with TTL ≥ mission_end. Skip insert.
-    SkipRespected {
-        existing_expires_at: DateTime<Utc>,
-    },
+    SkipRespected { existing_expires_at: DateTime<Utc> },
     /// Existing delegation expires BEFORE mission_end. Caller must decide
     /// to abort (default) or extend via `--extend-existing`.
     TtlTooShort {

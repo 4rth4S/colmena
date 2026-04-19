@@ -59,7 +59,15 @@ pub struct SpawnResult {
     pub pattern_id: String,
     pub pattern_auto_created: bool,
     pub agent_prompts: Vec<AgentPrompt>,
-    pub delegation_commands: Vec<String>,
+    /// Delegations that were newly persisted to `runtime-delegations.json`.
+    pub delegations_created: Vec<RuntimeDelegation>,
+    /// Delegations skipped because an existing one covers them with TTL ≥ mission end.
+    /// Tuple is (candidate, existing_expires_at) for human-readable reporting.
+    pub delegations_skipped: Vec<(RuntimeDelegation, chrono::DateTime<chrono::Utc>)>,
+    /// Delegations that would have conflicted with shorter-lived existing entries.
+    /// Empty when `spawn_mission` returns Ok (the function `bail!`s on aborted merges
+    /// unless `--extend-existing` was passed).
+    pub delegations_aborted: Vec<RuntimeDelegation>,
     pub role_gaps: Vec<String>,
     pub mission_config: MissionConfig,
 }
@@ -282,6 +290,8 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 /// If `elo_ratings` is provided, the highest-ELO agent is assigned as reviewer lead.
 /// If `config_dir` is provided and mission text matches prompt review keywords,
 /// the prompt review context is injected into all agents' CLAUDE.md files.
+/// If `manifest` is provided, per-role scope, task, and review protocol sections
+/// are appended to every generated CLAUDE.md using `emitters::claude_code` helpers.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_mission(
     mission: &str,
@@ -292,6 +302,7 @@ pub fn generate_mission(
     session_id: Option<&str>,
     elo_ratings: &[AgentRating],
     config_dir: Option<&Path>,
+    manifest: Option<&crate::mission_manifest::MissionManifest>,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
@@ -392,13 +403,41 @@ pub fn generate_mission(
             String::new()
         };
 
-        // Build CLAUDE.md combining role prompt + mission context + permissions + review
-        let claude_md = if review_context_section.is_empty() {
+        // Manifest-driven sections (M7.3): scope + task + review protocol.
+        // Empty strings if no manifest — the existing prompt structure is preserved.
+        let manifest_role = manifest.and_then(|m| m.role(&assignment.role_id));
+        let scope_section = manifest_role
+            .map(|r| crate::emitters::claude_code::scope_block(&r.scope.owns, &r.scope.forbidden))
+            .unwrap_or_default();
+        let task_section = manifest_role
+            .map(|r| crate::emitters::claude_code::task_block(&r.task))
+            .unwrap_or_default();
+        let review_protocol_section = if manifest.is_some() {
+            let all_other_roles: Vec<String> = recommendation
+                .role_assignments
+                .iter()
+                .filter(|a| a.role_id != assignment.role_id)
+                .map(|a| a.role_id.clone())
+                .collect();
+            let mission_id_for_review = manifest
+                .map(|m| m.id.clone())
+                .unwrap_or_else(|| mission_slug.clone());
+            crate::emitters::claude_code::review_protocol_block(
+                &mission_id_for_review,
+                &assignment.role_id,
+                &all_other_roles,
+            )
+        } else {
+            String::new()
+        };
+
+        // Compose base CLAUDE.md (existing structure, unchanged semantics)
+        let base_md = if review_context_section.is_empty() {
             format!(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -421,7 +460,7 @@ pub fn generate_mission(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n\n---\n\n{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n\n---\n\n{}",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -441,6 +480,12 @@ pub fn generate_mission(
                 review_context_section,
             )
         };
+
+        // Append manifest sections after base (empty strings when no manifest).
+        let claude_md = format!(
+            "{}\n{}{}{}\n",
+            base_md, scope_section, task_section, review_protocol_section
+        );
 
         let claude_md_path = agent_dir.join("CLAUDE.md");
         std::fs::write(&claude_md_path, &claude_md)?;
@@ -1260,28 +1305,37 @@ pub fn suggest_mission_size(
 // ── Mission Spawn — One-Step Pipeline ────────────────────────────────────────
 
 /// One-step mission creation: select pattern → auto-create if needed → map roles →
-/// generate mission with markers → return everything ready to use.
+/// generate mission with markers → persist delegations.
 ///
 /// Pipeline:
 /// 1. `select_patterns()` to find best matching pattern
 /// 2. If no match: `suggest_pattern_for_mission()` → `scaffold_pattern()` to auto-create
-/// 3. `generate_mission()` to create CLAUDE.md files with mission markers
+/// 3. `generate_mission()` to create CLAUDE.md files with mission markers + manifest sections
 /// 4. Read generated CLAUDE.md files to build AgentPrompt with mission marker prefix
-/// 5. Format delegation commands for CLI execution
+/// 5. Persist delegations directly to `runtime_delegations_path` with idempotent merge:
+///    - `decide_merge` picks Insert / SkipRespected / TtlTooShort per candidate.
+///    - TtlTooShort without `extend_existing` aborts the spawn with a descriptive error.
+///    - `dry_run` plans without writing to disk.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_mission(
     mission: &str,
+    manifest: Option<&crate::mission_manifest::MissionManifest>,
     roles: &[Role],
     patterns: &[Pattern],
     library_dir: &Path,
     missions_dir: &Path,
+    runtime_delegations_path: &Path,
     session_id: Option<&str>,
     elo_ratings: &[AgentRating],
     config_dir: Option<&Path>,
+    extend_existing: bool,
+    dry_run: bool,
 ) -> Result<SpawnResult> {
     if roles.is_empty() {
         anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
     }
+
+    let now = Utc::now();
 
     // 1. Select best pattern
     let mut recommendations = select_patterns(mission, patterns, roles);
@@ -1372,6 +1426,7 @@ pub fn spawn_mission(
         session_id,
         elo_ratings,
         config_dir,
+        manifest,
     )?;
 
     let mission_name = mission_config
@@ -1399,30 +1454,67 @@ pub fn spawn_mission(
         });
     }
 
-    // 5. Format delegation CLI commands
-    let delegation_commands: Vec<String> = mission_config
-        .delegations
-        .iter()
-        .map(|d| {
-            let mut cmd = format!("colmena delegate add --tool {}", d.tool);
-            if let Some(ref agent) = d.agent_id {
-                cmd.push_str(&format!(" --agent {}", agent));
+    // 5. Persist delegations directly to runtime-delegations.json with idempotency.
+    //    Replaces the old `delegation_commands: Vec<String>` which emitted a
+    //    non-existent `--bash-pattern` CLI flag.
+    let ttl_hours = manifest
+        .map(|m| m.mission_ttl_hours)
+        .unwrap_or(DEFAULT_MISSION_TTL_HOURS);
+    let mission_end_at = now + chrono::Duration::hours(ttl_hours);
+
+    let existing_delegations = crate::delegate::load_delegations(runtime_delegations_path);
+
+    let mut delegations_to_insert: Vec<RuntimeDelegation> = Vec::new();
+    let mut delegations_skipped: Vec<(RuntimeDelegation, chrono::DateTime<Utc>)> = Vec::new();
+    let mut delegations_aborted: Vec<RuntimeDelegation> = Vec::new();
+
+    for candidate in &mission_config.delegations {
+        use crate::delegate::{decide_merge, MergeDecision};
+        match decide_merge(candidate, &existing_delegations, mission_end_at) {
+            MergeDecision::Insert => {
+                delegations_to_insert.push(candidate.clone());
             }
-            if let Some(ref conds) = d.conditions {
-                if let Some(ref bp) = conds.bash_pattern {
-                    cmd.push_str(&format!(" --bash-pattern '{}'", bp));
+            MergeDecision::SkipRespected {
+                existing_expires_at,
+            } => {
+                delegations_skipped.push((candidate.clone(), existing_expires_at));
+            }
+            MergeDecision::TtlTooShort { .. } => {
+                if extend_existing {
+                    delegations_to_insert.push(candidate.clone());
+                } else {
+                    delegations_aborted.push(candidate.clone());
                 }
             }
-            cmd.push_str(" --ttl 8");
-            if let Some(ref sid) = session_id
-                .map(|s| s.to_string())
-                .or_else(|| d.session_id.clone())
-            {
-                cmd.push_str(&format!(" --session {}", sid));
-            }
-            cmd
-        })
-        .collect();
+        }
+    }
+
+    if !delegations_aborted.is_empty() {
+        anyhow::bail!(
+            "{} delegation(s) have TTL shorter than mission end. Re-run with --extend-existing to replace them, or revoke them manually first. Affected: {}",
+            delegations_aborted.len(),
+            delegations_aborted
+                .iter()
+                .map(|d| format!("{}/{}", d.tool, d.agent_id.clone().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if !dry_run && !delegations_to_insert.is_empty() {
+        // Merge: drop existing entries whose (tool, agent_id) is being replaced
+        // (only meaningful when --extend-existing upgraded a TtlTooShort), then append.
+        let mut merged: Vec<RuntimeDelegation> = existing_delegations
+            .into_iter()
+            .filter(|e| {
+                !delegations_to_insert
+                    .iter()
+                    .any(|c| c.tool == e.tool && c.agent_id == e.agent_id)
+            })
+            .collect();
+        merged.extend(delegations_to_insert.iter().cloned());
+        crate::delegate::save_delegations(runtime_delegations_path, &merged)?;
+    }
 
     // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
     let _ = &auto_created_pattern; // suppress unused warning
@@ -1432,7 +1524,9 @@ pub fn spawn_mission(
         pattern_id: recommendation.pattern_id,
         pattern_auto_created,
         agent_prompts,
-        delegation_commands,
+        delegations_created: delegations_to_insert,
+        delegations_skipped,
+        delegations_aborted: Vec::new(), // empty when we reach here (bail'd otherwise)
         role_gaps,
         mission_config,
     })
@@ -1750,6 +1844,7 @@ mod tests {
             None,
             &[],  // no ELO ratings — uncalibrated
             None, // no config_dir — no prompt review detection
+            None, // no manifest
         )
         .expect("generate_mission should succeed");
 
@@ -2215,6 +2310,7 @@ mod tests {
             None,
             &[],
             Some(config_dir),
+            None,
         )
         .expect("generate_mission should succeed");
 
@@ -2291,6 +2387,7 @@ mod tests {
             None,
             &[],
             Some(config_dir),
+            None,
         )
         .expect("generate_mission should succeed");
 
@@ -2508,6 +2605,7 @@ mod tests {
             None,
             &[],
             None,
+            None,
         )
         .expect("generate_mission should succeed");
 
@@ -2568,6 +2666,7 @@ mod tests {
             None,
             &[],
             None,
+            None,
         )
         .expect("generate_mission should succeed");
 
@@ -2624,15 +2723,20 @@ mod tests {
             vec![("agent", "developer"), ("critic", "auditor")],
         )];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
         let result = spawn_mission(
             "implement feature with code review",
+            None, // manifest
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -2648,7 +2752,11 @@ mod tests {
                 ap.role_id
             );
         }
-        assert!(!spawn.delegation_commands.is_empty());
+        // Delegations should have been persisted (either created or skipped — non-empty for this role set).
+        assert!(
+            !spawn.delegations_created.is_empty() || !spawn.delegations_skipped.is_empty(),
+            "should have created or skipped delegations"
+        );
     }
 
     // ── 20. spawn_mission — auto-creates pattern ────────────────────────────
@@ -2669,15 +2777,20 @@ mod tests {
         // Empty patterns — will auto-create
         let patterns: Vec<Pattern> = vec![];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
         let result = spawn_mission(
             "do something completely unique",
+            None, // manifest
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
         );
         assert!(
             result.is_ok(),
@@ -2700,15 +2813,20 @@ mod tests {
         std::fs::create_dir_all(&library_dir).unwrap();
         std::fs::create_dir_all(&missions_dir).unwrap();
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
         let result = spawn_mission(
             "some mission",
+            None, // manifest
             &[],
             &[],
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
         );
         assert!(
             result.is_err(),
@@ -2725,10 +2843,10 @@ mod tests {
         assert!(MISSION_MARKER_PREFIX.contains("colmena:mission_id="));
     }
 
-    // ── 23. spawn_mission — delegation commands ─────────────────────────────
+    // ── 23. spawn_mission — delegations persisted to runtime-delegations.json ──
 
     #[test]
-    fn test_spawn_mission_includes_delegation_commands() {
+    fn test_spawn_mission_persists_delegations() {
         let tmp = tempfile::tempdir().unwrap();
         let library_dir = tmp.path().join("library");
         let missions_dir = tmp.path().join("missions");
@@ -2741,6 +2859,13 @@ mod tests {
 
         let mut dev = make_role("developer", "Developer", vec!["code_writing"]);
         dev.tools_allowed = vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()];
+        // Bash delegations require a scope condition — give the dev a bash_pattern
+        // so `save_delegations` accepts the generated entry.
+        dev.permissions = Some(crate::library::RolePermissions {
+            bash_patterns: vec!["^cargo (test|build|check)".to_string()],
+            path_within: vec![],
+            path_not_match: vec![],
+        });
         let roles = vec![dev, make_role("auditor", "Auditor", vec!["audit"])];
 
         let patterns = vec![make_pattern(
@@ -2751,30 +2876,102 @@ mod tests {
             vec![("agent", "developer"), ("critic", "auditor")],
         )];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
         let result = spawn_mission(
             "implement feature with code review",
+            None, // manifest
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
         )
         .unwrap();
 
+        // Delegations should have been created (fresh store — no existing delegations).
         assert!(
-            !result.delegation_commands.is_empty(),
-            "should have delegation commands"
+            !result.delegations_created.is_empty(),
+            "should have created delegations"
         );
-        // Commands should reference `colmena delegate add`
-        for cmd in &result.delegation_commands {
-            assert!(
-                cmd.starts_with("colmena delegate add"),
-                "cmd should start with delegate add: {}",
-                cmd
-            );
-        }
+        assert!(
+            result.delegations_skipped.is_empty(),
+            "nothing to skip on a fresh store"
+        );
+        assert!(result.delegations_aborted.is_empty(), "no aborts when Ok");
+
+        // Verify the runtime-delegations.json file was actually written.
+        assert!(
+            runtime_delegations_path.exists(),
+            "runtime-delegations.json should have been persisted"
+        );
+        let persisted = crate::delegate::load_delegations(&runtime_delegations_path);
+        assert!(
+            !persisted.is_empty(),
+            "persisted delegations should be non-empty"
+        );
+        // Sanity: created delegations match what we persisted.
+        assert_eq!(
+            persisted.len(),
+            result.delegations_created.len(),
+            "persisted count should equal delegations_created count on a fresh store"
+        );
+    }
+
+    // ── 23b. spawn_mission — dry_run does not write to disk ─────────────────
+
+    #[test]
+    fn test_spawn_mission_dry_run_skips_persistence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let result = spawn_mission(
+            "implement feature with code review",
+            None,
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            None,
+            &[],
+            None,
+            false, // extend_existing
+            true,  // dry_run
+        )
+        .unwrap();
+
+        // Plan still computed (we know which delegations would be inserted)…
+        assert!(!result.delegations_created.is_empty());
+        // …but no file was written.
+        assert!(
+            !runtime_delegations_path.exists(),
+            "dry_run must NOT write to disk"
+        );
     }
 
     // ── 24. suggest_mission_size — trivial ──────────────────────────────────
