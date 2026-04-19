@@ -1337,12 +1337,40 @@ pub fn spawn_mission(
 
     let now = Utc::now();
 
-    // 1. Select best pattern
-    let mut recommendations = select_patterns(mission, patterns, roles);
+    // 1. Select best pattern.
+    // If a manifest provides an explicit pattern id, try to find it in the
+    // library first (exact id match) before falling back to score-based selection.
+    let manifest_pattern_id = manifest.map(|m| m.pattern.as_str());
+    let mut recommendations = if let Some(pid) = manifest_pattern_id {
+        let exact: Vec<Recommendation> = patterns
+            .iter()
+            .filter(|p| p.id == pid)
+            .map(|p| {
+                let role_map: HashMap<&str, &Role> =
+                    roles.iter().map(|r| (r.id.as_str(), r)).collect();
+                let role_assignments = build_role_assignments(&p.roles_suggested, &role_map);
+                Recommendation {
+                    pattern_id: p.id.clone(),
+                    pattern_name: p.name.clone(),
+                    score: 100.0,
+                    matched_criteria: vec!["Manifest-specified pattern".to_string()],
+                    anti_matched: vec![],
+                    role_assignments,
+                }
+            })
+            .collect();
+        if exact.is_empty() {
+            select_patterns(mission, patterns, roles)
+        } else {
+            exact
+        }
+    } else {
+        select_patterns(mission, patterns, roles)
+    };
     let mut pattern_auto_created = false;
     let mut auto_created_pattern: Option<crate::library::Pattern> = None;
 
-    let recommendation = if recommendations.is_empty() {
+    let mut recommendation = if recommendations.is_empty() {
         // 2. No match — auto-create a pattern
         let suggestion = suggest_pattern_for_mission(mission);
         let pattern_path = scaffold_pattern(
@@ -1411,6 +1439,35 @@ pub fn spawn_mission(
     } else {
         recommendations.remove(0)
     };
+
+    // 2b. If a manifest provides explicit roles, override the pattern's role
+    // assignments with the manifest's ordered list. This ensures manifest-driven
+    // spawn honours the exact squad the caller specified, regardless of which
+    // pattern was selected or auto-created.
+    if let Some(m) = manifest {
+        if !m.roles.is_empty() {
+            let role_map: HashMap<&str, &Role> =
+                roles.iter().map(|r| (r.id.as_str(), r)).collect();
+            let manifest_assignments: Vec<RoleAssignment> = m
+                .roles
+                .iter()
+                .enumerate()
+                .map(|(i, mr)| {
+                    let (name, icon) = role_map
+                        .get(mr.name.as_str())
+                        .map(|r| (r.name.clone(), r.icon.clone()))
+                        .unwrap_or_else(|| (mr.name.clone(), "?".to_string()));
+                    RoleAssignment {
+                        slot: format!("slot_{}", i + 1),
+                        role_id: mr.name.clone(),
+                        role_name: name,
+                        icon,
+                    }
+                })
+                .collect();
+            recommendation.role_assignments = manifest_assignments;
+        }
+    }
 
     // Detect role gaps
     let role_gaps = detect_role_gaps(mission, roles);

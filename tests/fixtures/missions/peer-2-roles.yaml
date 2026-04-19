@@ -1,0 +1,14 @@
+id: test-peer-mission
+pattern: peer
+mission_ttl_hours: 4
+roles:
+  - name: developer
+    scope:
+      owns: ["src/lib.rs"]
+      forbidden: ["tests/**"]
+    task: "Implement feature X"
+  - name: auditor
+    scope:
+      owns: []
+      forbidden: []
+    task: "Evaluate developer artifacts with QPC"

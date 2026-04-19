@@ -1898,7 +1898,13 @@ fn run_mission_spawn(
     use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
 
     let manifest: MissionManifest = if let Some(path) = from {
-        MissionManifest::from_path(&path)?
+        match MissionManifest::from_path(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                std::process::exit(1);
+            }
+        }
     } else {
         // Shortcut path: build a manifest from flags
         let mission_text = mission.ok_or_else(|| {
@@ -1936,7 +1942,10 @@ fn run_mission_spawn(
             mission_ttl_hours: mission_ttl,
             roles,
         };
-        m.validate()?;
+        if let Err(e) = m.validate() {
+            eprintln!("ERROR: {e}");
+            std::process::exit(1);
+        }
         m
     };
 
@@ -1949,11 +1958,12 @@ fn run_mission_spawn(
     // Validate all roles referenced by the manifest exist in the library.
     for r in &manifest.roles {
         if !all_roles.iter().any(|lr| lr.id == r.name) {
-            anyhow::bail!(
-                "Role '{}' referenced in manifest but not found in library. \
+            eprintln!(
+                "ERROR: Role '{}' referenced in manifest but not found in library. \
                  Create it first with: colmena library create-role --id {} --description \"...\"",
                 r.name, r.name
             );
+            std::process::exit(1);
         }
     }
 

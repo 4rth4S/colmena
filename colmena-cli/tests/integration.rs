@@ -1073,3 +1073,118 @@ fn test_delegation_injection_source_role_without_mission_dir() {
         "Injected delegation should be filtered; no session rules taught. Got: {stdout}"
     );
 }
+
+// ── M7.3 mission spawn tests ─────────────────────────────────────────────
+
+#[test]
+fn test_mission_spawn_dry_run_with_manifest() {
+    let tmp = make_colmena_home();
+    let fixture = std::path::Path::new(&workspace_root())
+        .join("tests/fixtures/missions/peer-2-roles.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .arg("--dry-run")
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "dry-run should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("test-peer-mission"), "stdout: {stdout}");
+    assert!(stdout.contains("(dry-run)"), "must mark dry-run: {stdout}");
+
+    // No delegations written
+    let delegations_path = tmp.path().join("config/runtime-delegations.json");
+    assert!(
+        !delegations_path.exists()
+            || std::fs::read_to_string(&delegations_path).unwrap().trim() == "[]",
+        "dry-run must not persist delegations"
+    );
+}
+
+#[test]
+fn test_mission_spawn_rejects_nonexistent_role() {
+    let tmp = make_colmena_home();
+    let fixture = std::path::Path::new(&workspace_root())
+        .join("tests/fixtures/missions/invalid-nonexistent-role.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(!output.status.success(), "must fail for unknown role");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nonexistent_role_xyz"),
+        "error must mention the unknown role: {stderr}"
+    );
+    assert!(
+        stderr.contains("create-role"),
+        "error must suggest colmena library create-role: {stderr}"
+    );
+}
+
+#[test]
+fn test_mission_spawn_rejects_ttl_over_max() {
+    let tmp = make_colmena_home();
+
+    // Write a temp manifest with ttl = 25 (> MAX_TTL_HOURS = 24)
+    let manifest_content = r#"
+id: ttl-overflow
+pattern: peer
+mission_ttl_hours: 25
+roles:
+  - name: developer
+    task: "x"
+"#;
+    let manifest_path = tmp.path().join("bad-ttl.yaml");
+    std::fs::write(&manifest_path, manifest_content).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("MAX_TTL_HOURS"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_mission_spawn_persists_delegations_when_not_dry_run() {
+    let tmp = make_colmena_home();
+    let fixture = std::path::Path::new(&workspace_root())
+        .join("tests/fixtures/missions/peer-2-roles.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "real spawn should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Delegations file exists and contains role-source delegations
+    let delegations_path = tmp.path().join("config/runtime-delegations.json");
+    assert!(delegations_path.exists(), "delegations file must exist after real spawn");
+    let content = std::fs::read_to_string(&delegations_path).unwrap();
+    assert!(content.contains("\"source\": \"role\""), "must have role-source delegations: {content}");
+    assert!(content.contains("\"developer\""), "must have developer delegations: {content}");
+    assert!(content.contains("mcp__colmena__review_submit"), "must bundle review_submit: {content}");
+}
