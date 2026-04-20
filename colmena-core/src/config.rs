@@ -14,6 +14,15 @@ pub enum Action {
     Block,
 }
 
+/// Sentinel structure persisted to `<config_dir>/session-gate.json` when the
+/// operator passes `--session-gate` to `mission spawn`. Honored by
+/// `is_mission_gate_active` as a runtime override when
+/// `enforce_missions: Some(false)` is explicit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionGateOverride {
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Conditions that must all be satisfied for a rule to match.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Conditions {
@@ -282,7 +291,11 @@ impl FirewallConfig {
     pub fn is_mission_gate_active(
         &self,
         delegations: &[crate::delegate::RuntimeDelegation],
+        session_override: bool,
     ) -> bool {
+        if session_override {
+            return true;
+        }
         match self.enforce_missions {
             Some(v) => v,
             None => delegations
@@ -290,6 +303,51 @@ impl FirewallConfig {
                 .any(|d| d.source.as_deref() == Some("role")),
         }
     }
+}
+
+/// Check whether a live session-gate override sentinel exists and hasn't expired.
+/// Reads `<config_dir>/session-gate.json`. Returns false on any error (safe fallback).
+pub fn session_gate_override_active(config_dir: &std::path::Path) -> bool {
+    let path = config_dir.join("session-gate.json");
+    if !path.exists() {
+        return false;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let sentinel: SessionGateOverride = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    sentinel.expires_at > chrono::Utc::now()
+}
+
+/// Write the session-gate override sentinel. Called by CLI when `--session-gate`
+/// is passed. Atomic via temp+rename.
+pub fn write_session_gate_override(
+    config_dir: &std::path::Path,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    let path = config_dir.join("session-gate.json");
+    let sentinel = SessionGateOverride { expires_at };
+    let json = serde_json::to_string_pretty(&sentinel).context("serializing sentinel")?;
+    std::fs::create_dir_all(config_dir)
+        .with_context(|| format!("creating config dir {}", config_dir.display()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json).with_context(|| format!("writing temp {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("renaming to {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the session-gate override sentinel. No-op if absent.
+pub fn clear_session_gate_override(config_dir: &std::path::Path) -> anyhow::Result<()> {
+    let path = config_dir.join("session-gate.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("removing sentinel {}", path.display()))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -612,7 +670,7 @@ enforce_missions: true
     #[test]
     fn test_is_mission_gate_active_explicit_true() {
         let config = make_firewall_config(Some(true));
-        assert!(config.is_mission_gate_active(&[]));
+        assert!(config.is_mission_gate_active(&[], false));
     }
 
     #[test]
@@ -620,7 +678,7 @@ enforce_missions: true
         let config = make_firewall_config(Some(false));
         let d = make_role_delegation();
         assert!(
-            !config.is_mission_gate_active(&[d]),
+            !config.is_mission_gate_active(&[d], false),
             "explicit false honored even when role delegation is live"
         );
     }
@@ -629,12 +687,64 @@ enforce_missions: true
     fn test_is_mission_gate_active_unset_activates_with_role_delegation() {
         let config = make_firewall_config(None);
         let d = make_role_delegation();
-        assert!(config.is_mission_gate_active(&[d]));
+        assert!(config.is_mission_gate_active(&[d], false));
     }
 
     #[test]
     fn test_is_mission_gate_active_unset_inactive_without_delegations() {
         let config = make_firewall_config(None);
-        assert!(!config.is_mission_gate_active(&[]));
+        assert!(!config.is_mission_gate_active(&[], false));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_session_override_wins_over_explicit_false() {
+        let config = make_firewall_config(Some(false));
+        let d = make_role_delegation();
+        // session_override: true should flip gate ON even when YAML says Some(false)
+        assert!(
+            config.is_mission_gate_active(&[d], true),
+            "--session-gate must activate gate despite explicit false"
+        );
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_session_override_with_unset_still_true() {
+        let config = make_firewall_config(None);
+        // No delegations, but override true → gate on
+        assert!(config.is_mission_gate_active(&[], true));
+    }
+
+    // ── session-gate sentinel helper tests ───────────────────────────────────
+
+    #[test]
+    fn test_session_gate_override_absent_when_no_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(!session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_session_gate_override_active_when_unexpired() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expires).unwrap();
+        assert!(session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_session_gate_override_inactive_when_expired() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expired = chrono::Utc::now() - chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expired).unwrap();
+        assert!(!session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_clear_session_gate_override_removes_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expires).unwrap();
+        assert!(tmp.path().join("session-gate.json").exists());
+        clear_session_gate_override(tmp.path()).unwrap();
+        assert!(!tmp.path().join("session-gate.json").exists());
     }
 }

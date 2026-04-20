@@ -1251,17 +1251,17 @@ fn test_mission_prompt_inject_unsupported_mode() {
         .env("COLMENA_HOME", tmp.path())
         .output()
         .expect("binary should run");
-    // The CLI error handler converts all Err results to exit 0 (safe fallback for hooks).
-    // For unsupported modes the error text is surfaced in stdout as JSON reason.
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "CLI always exits 0 (hook safe-fallback)"
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Non-hook CLI path: unsupported mode must exit non-zero with a stderr message,
+    // consistent with the border-case abort (PR 3 Fix I1).
     assert!(
-        stdout.contains("unsupported mode"),
-        "unsupported mode error should appear in stdout JSON; got: {stdout}"
+        !output.status.success(),
+        "unsupported mode must exit non-zero, got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported mode"),
+        "unsupported mode error should appear in stderr; got: {stderr}"
     );
 }
 
@@ -1424,5 +1424,18 @@ roles:
         output.status.success(),
         "--session-gate must allow spawn, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+
+    // PR 3 Fix C1: --session-gate must write a sentinel at config/session-gate.json
+    // AND the announcement must accurately reflect the override is active.
+    let sentinel = tmp.path().join("config/session-gate.json");
+    assert!(
+        sentinel.exists(),
+        "--session-gate must write session-gate.json sentinel"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Mission Gate: ON (--session-gate override active)"),
+        "announcement must reflect the override: {stdout}"
     );
 }

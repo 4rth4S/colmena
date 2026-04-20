@@ -594,8 +594,10 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     );
 
     // 4c. Mission Gate: if enforce_missions and tool is Agent, check for mission marker
-    // M7.3 live-surface: gate active if explicit or if mission delegations are live.
-    let gate_active = cfg.is_mission_gate_active(&delegations);
+    // M7.3 live-surface: gate active if explicit, if mission delegations are live,
+    // or if a --session-gate sentinel is present and unexpired.
+    let session_override = colmena_core::config::session_gate_override_active(config_dir);
+    let gate_active = cfg.is_mission_gate_active(&delegations, session_override);
 
     let decision =
         if gate_active && eval_input.tool_name == "Agent" && decision.action != Action::Block {
@@ -1970,6 +1972,15 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
         );
     }
 
+    // M7.3 live-surface: clear session-gate override when mission is deactivated.
+    // Safe no-op if the sentinel doesn't exist or TTL already expired it.
+    if let Err(e) = colmena_core::config::clear_session_gate_override(&config_dir) {
+        eprintln!(
+            "[colmena] WARNING: failed to clear session-gate override: {}",
+            e
+        );
+    }
+
     Ok(())
 }
 
@@ -2092,6 +2103,13 @@ fn run_mission_spawn(
         std::process::exit(1);
     }
 
+    // M7.3 live-surface: if the operator passed --session-gate, write a sentinel
+    // that makes is_mission_gate_active return true for the mission's lifetime.
+    if session_gate {
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(manifest.mission_ttl_hours);
+        colmena_core::config::write_session_gate_override(&config_dir, expires_at)?;
+    }
+
     let agents_dir = colmena_core::paths::default_agents_dir()?;
 
     let result = colmena_core::selector::spawn_mission(
@@ -2160,16 +2178,25 @@ fn run_mission_spawn(
     }
 
     let updated_delegations = colmena_core::delegate::load_delegations(&runtime_delegations_path);
-    let will_be_active = cfg.is_mission_gate_active(&updated_delegations);
-    match (cfg.enforce_missions, will_be_active) {
-        (Some(true), _) => println!("  INFO Mission Gate: ON (explicit in YAML)"),
-        (Some(false), _) => {
+    let session_override_active = colmena_core::config::session_gate_override_active(&config_dir);
+    let will_be_active = cfg.is_mission_gate_active(&updated_delegations, session_override_active);
+
+    match (
+        cfg.enforce_missions,
+        session_override_active,
+        will_be_active,
+    ) {
+        (Some(true), _, _) => println!("  INFO Mission Gate: ON (explicit in YAML)"),
+        (Some(false), true, _) => {
+            println!("  INFO Mission Gate: ON (--session-gate override active)")
+        }
+        (Some(false), false, _) => {
             println!("  INFO Mission Gate: OFF (explicit in YAML, operator choice)")
         }
-        (None, true) => println!(
+        (None, _, true) => println!(
             "  INFO Mission Gate: auto-activated (enforce_missions unset, role delegations live)"
         ),
-        (None, false) => println!("  INFO Mission Gate: OFF (no live role delegations)"),
+        (None, _, false) => println!("  INFO Mission Gate: OFF (no live role delegations)"),
     }
 
     println!();
@@ -2192,7 +2219,8 @@ fn run_mission_prompt_inject(mode: &str) -> Result<()> {
             println!("{}", colmena_core::selector::INTER_AGENT_DIRECTIVE);
         }
         other => {
-            anyhow::bail!("unsupported mode '{}'. Supported: terse", other);
+            eprintln!("unsupported mode '{}'. Supported: terse", other);
+            std::process::exit(1);
         }
     }
     Ok(())
