@@ -1,0 +1,150 @@
+id: m73-docs-overhaul
+pattern: peer
+mission_ttl_hours: 6
+roles:
+  - name: developer
+    scope:
+      owns:
+        - README.md
+        - docs/user/getting-started.md
+        - docs/user/use-cases.md
+        - docs/install-mode-b.md
+      forbidden:
+        - docs/dev
+        - docs/guide.md
+        - docs/presentation.html
+        - docs/security
+        - colmena-core
+        - colmena-cli
+        - colmena-mcp
+        - colmena-filter
+        - config
+        - Cargo.toml
+    task: |
+      Rewrite README.md + docs/user/** + docs/install-mode-b.md for first-time users.
+
+      Target audience: 4 power-user personas — pentester, developer, devops, SRE.
+      Each should find a "this is for me" moment within 30 seconds of opening README.
+
+      Structure goals:
+      1. README top: one-paragraph value prop ("what is Colmena, why should you care"), then
+         a "Which fits you?" block with 4 personas × 1-line hooks each.
+      2. Quickstart in <2 minutes — install binary OR Install Mode B (point-your-CC-at-repo).
+      3. First real mission spawn (one command, visible payoff).
+      4. 3-4 use case vignettes: pentest engagement, dev team code review, devops kubectl
+         ops, SRE runbook. Each ~100 words, concrete, shows the Colmena benefit.
+      5. Links into docs/user/getting-started.md and docs/user/use-cases.md for depth.
+      6. Footer: license, contributing, security, repo badges.
+
+      docs/user/getting-started.md: zero-to-running in 5 min (unchanged goal, tighter prose).
+      docs/user/use-cases.md: expand the 3-4 vignettes into full tutorials (10-15 min each).
+      docs/install-mode-b.md: polish the "point your CC at repo" onboarding — keep it
+      first-class alongside the binary install.
+
+      Tone: technical but warm. No emojis unless the existing file already uses them. No
+      marketing fluff. "Built with ❤️‍🔥 by AppSec" signature at the bottom of README only.
+      Language: English.
+
+      Do NOT modify docs/dev/** (architect's territory), docs/guide.md (architect's),
+      docs/presentation.html (out of scope, has separate owner), any source code, any
+      config files, or Cargo.toml.
+
+      Evidence of success: a developer/pentester/devops/SRE can go from landing on the
+      repo to running a first `colmena mission spawn` in <5 minutes without reading source.
+
+  - name: architect
+    scope:
+      owns:
+        - docs/dev/architecture.md
+        - docs/dev/contributing.md
+        - docs/dev/internals.md
+        - docs/guide.md
+      forbidden:
+        - README.md
+        - docs/user
+        - docs/install-mode-b.md
+        - docs/presentation.html
+        - docs/security
+        - colmena-core
+        - colmena-cli
+        - colmena-mcp
+        - colmena-filter
+        - config
+        - Cargo.toml
+    task: |
+      Revise docs/dev/** + docs/guide.md for maintainability and contributor onboarding.
+
+      Target audience: contributors — people who need to navigate 4-crate Rust workspace,
+      understand the 5 CC integration points, and submit a PR without 2 days of reading.
+
+      Structure goals per file:
+
+      docs/dev/architecture.md: the canonical system walkthrough. Update for M7.3 state —
+      mission_spawn writes subagent .md + persists delegations + auto-activates Gate.
+      Include a flow diagram (ASCII or mermaid-in-markdown) of a mission spawn → review
+      cycle. Name the 5 integration points (PreToolUse, PostToolUse, PermissionRequest,
+      SubagentStop, MCP) and one paragraph per.
+
+      docs/dev/contributing.md: concrete setup — how to build, test, submit PR. Branch
+      protection rules (required checks, approvals). Commit message conventions (fix/chore/
+      feat). Pointers to tests in each crate. Missing-for-now: a TL;DR first-PR path.
+
+      docs/dev/internals.md: edge cases, safety contracts, gotchas that aren't obvious.
+      Update for M7.3: MissionManifest validation, decide_merge semantics, session-gate
+      sentinel lifecycle, the "operator always wins" principle across hooks and config.
+
+      docs/guide.md: the walking-example doc (payments API audit). Keep the example but
+      reframe around M7.3 — use `colmena mission spawn --from manifest.yaml` instead of
+      the historic manual flow. Show the generated subagent files. Show the ELO cycle
+      closing. Make it the "I-saw-it-work" artifact.
+
+      Tone: precise, no marketing. Cross-reference developer's README for feature-level
+      "why", focus here on "how it's built and how to extend it". English.
+
+      Do NOT modify README.md, docs/user/**, docs/install-mode-b.md, source code, config,
+      or Cargo.toml.
+
+      Evidence of success: a new contributor reads these 4 files and can submit a useful
+      PR within a day, without reading source.
+
+  - name: auditor
+    scope:
+      owns: []
+      forbidden:
+        - README.md
+        - docs/user
+        - docs/dev
+        - docs/guide.md
+        - docs/install-mode-b.md
+        - colmena-core
+        - colmena-cli
+        - colmena-mcp
+        - colmena-filter
+    task: |
+      Evaluate developer and architect artifacts with the QPC framework
+      (Quality + Precision + Comprehensiveness, 1-10 each).
+
+      Specific areas to check:
+      1. Cross-consistency: terminology between README (user-facing) and docs/dev/**
+         (contributor-facing) matches. If README says "Mission Gate" and internals.md
+         says "mission_gate", flag it.
+      2. Links: every `docs/...` link in README resolves to a real file. Every
+         cross-doc reference in docs/dev/** resolves. No broken anchors.
+      3. Persona coverage: does the README genuinely serve all 4 personas (pentester,
+         developer, devops, SRE)? Or is one underserved?
+      4. Onboarding claim: README promises "<5 minutes from landing to first spawn".
+         Is that actually true given the commands shown? Count the steps.
+      5. Hidden assumptions: does docs/dev/architecture.md assume the reader knows
+         the 5 CC integration points? Does it explain them, or just name them?
+      6. M7.3 accuracy: do all docs reflect the post-M7.3 reality (mission_spawn
+         bundles delegations, writes subagent .md, auto-activates Gate)? Any stale
+         references to pre-M7.3 manual flows need updating or flagging.
+
+      Output: a review_submit artifact per role (developer, architect) with:
+      - QPC scores (1-10 each)
+      - Findings list (format: category + severity + description + recommendation)
+      - evaluation_narrative: 3-5 sentences summarizing the artifact's fitness.
+
+      Do NOT write code or edit docs. Read-only role. If a finding is severe enough
+      to block merge, mark it severity: critical and the trust gate will route to
+      human review.
