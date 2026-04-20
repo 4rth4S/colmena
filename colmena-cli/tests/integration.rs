@@ -1338,3 +1338,91 @@ fn test_mission_deactivate_removes_auto_generated_subagent_files() {
     // Manual file: preserved
     assert!(manual_path.exists(), "manual file must be preserved");
 }
+
+// ── M7.3 live-surface: border case enforce_missions=false + 3+ roles ──────────
+
+#[test]
+fn test_mission_spawn_aborts_on_false_enforce_with_3_roles() {
+    let tmp = make_colmena_home_no_enforce(); // enforce_missions: false explicit
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    // 3-role manifest triggers the border case
+    let manifest = r#"
+id: border-case-mission
+pattern: peer
+mission_ttl_hours: 2
+roles:
+  - name: developer
+    task: "x"
+  - name: auditor
+    task: "y"
+  - name: code_reviewer
+    task: "z"
+"#;
+    let manifest_path = tmp.path().join("border.yaml");
+    std::fs::write(&manifest_path, manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        !output.status.success(),
+        "must abort without --session-gate or --no-gate-confirmed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("enforce_missions: false is explicit"),
+        "stderr must mention the explicit flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("--session-gate"),
+        "stderr must list option 1: {stderr}"
+    );
+    assert!(
+        stderr.contains("--no-gate-confirmed"),
+        "stderr must list option 3: {stderr}"
+    );
+}
+
+#[test]
+fn test_mission_spawn_proceeds_with_session_gate() {
+    let tmp = make_colmena_home_no_enforce();
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    let manifest = r#"
+id: session-gate-mission
+pattern: peer
+mission_ttl_hours: 2
+roles:
+  - name: developer
+    task: "x"
+  - name: auditor
+    task: "y"
+  - name: code_reviewer
+    task: "z"
+"#;
+    let manifest_path = tmp.path().join("sess.yaml");
+    std::fs::write(&manifest_path, manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .arg("--session-gate")
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "--session-gate must allow spawn, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
