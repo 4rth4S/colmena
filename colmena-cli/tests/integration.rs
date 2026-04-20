@@ -1222,3 +1222,45 @@ fn test_mission_spawn_persists_delegations_when_not_dry_run() {
         "must bundle review_submit: {content}"
     );
 }
+
+// ── prompt-inject integration tests ──────────────────────────────────────────
+
+#[test]
+fn test_mission_prompt_inject_terse() {
+    let tmp = make_colmena_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "prompt-inject", "--mode", "terse"])
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+    assert!(
+        output.status.success(),
+        "prompt-inject terse should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("INTER-AGENT PROTOCOL"));
+    assert!(stdout.contains("Facts only"));
+}
+
+#[test]
+fn test_mission_prompt_inject_unsupported_mode() {
+    let tmp = make_colmena_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "prompt-inject", "--mode", "verbose"])
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+    // The CLI error handler converts all Err results to exit 0 (safe fallback for hooks).
+    // For unsupported modes the error text is surfaced in stdout as JSON reason.
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "CLI always exits 0 (hook safe-fallback)"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("unsupported mode"),
+        "unsupported mode error should appear in stdout JSON; got: {stdout}"
+    );
+}

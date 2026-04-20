@@ -270,6 +270,12 @@ enum MissionAction {
         #[arg(long)]
         no_gate_confirmed: bool,
     },
+    /// Emit the INTER_AGENT_DIRECTIVE as a standalone block for manual Agent spawns.
+    PromptInject {
+        /// Output mode. Currently only `terse` is implemented.
+        #[arg(long, default_value = "terse")]
+        mode: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -356,6 +362,7 @@ fn main() {
                 session_gate,
                 no_gate_confirmed,
             ),
+            MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
         },
         Commands::Calibrate { action } => match action {
             CalibrateAction::Run => run_calibrate(),
@@ -2125,6 +2132,19 @@ fn run_mission_spawn(
         );
     }
 
+    Ok(())
+}
+
+fn run_mission_prompt_inject(mode: &str) -> Result<()> {
+    match mode {
+        "terse" => {
+            println!("<!-- INTER-AGENT PROTOCOL -->");
+            println!("{}", colmena_core::selector::INTER_AGENT_DIRECTIVE);
+        }
+        other => {
+            anyhow::bail!("unsupported mode '{}'. Supported: terse", other);
+        }
+    }
     Ok(())
 }
 
