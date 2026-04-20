@@ -54,7 +54,7 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
-    /// Register colmena hook in ~/.claude/settings.json
+    /// Register colmena hook in CC settings.json (honors $CLAUDE_CONFIG_DIR, defaults to ~/.claude)
     Install,
     /// Wisdom library: roles, patterns, and orchestration selection
     Library {
@@ -1732,12 +1732,7 @@ fn check_hook_integrity() {
         Err(_) => return,
     };
 
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-
-    let settings_path = PathBuf::from(&home).join(".claude/settings.json");
+    let settings_path = install::settings_json_path();
     let contents = match std::fs::read_to_string(&settings_path) {
         Ok(c) => c,
         Err(_) => return,
