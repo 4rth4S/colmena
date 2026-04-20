@@ -45,7 +45,9 @@ pub fn default_agents_dir() -> anyhow::Result<std::path::PathBuf> {
     let home = std::env::var("HOME").map_err(|_| {
         anyhow::anyhow!("HOME env var not set — cannot resolve subagents directory")
     })?;
-    Ok(std::path::PathBuf::from(home).join(".claude").join("agents"))
+    Ok(std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("agents"))
 }
 
 #[cfg(test)]

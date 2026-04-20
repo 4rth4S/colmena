@@ -258,6 +258,17 @@ enum MissionAction {
         /// Overwrite existing delegations whose TTL is shorter than mission end.
         #[arg(long)]
         extend_existing: bool,
+        /// Overwrite existing subagent .md files that fail minimums check.
+        #[arg(long)]
+        overwrite: bool,
+        /// Activate Mission Gate only for this session, bypassing an
+        /// explicit `enforce_missions: false` in trust-firewall.yaml.
+        #[arg(long)]
+        session_gate: bool,
+        /// Proceed without Mission Gate (modo observación). Required when
+        /// YAML `enforce_missions: false` is explicit and mission has ≥3 roles.
+        #[arg(long)]
+        no_gate_confirmed: bool,
     },
 }
 
@@ -328,6 +339,9 @@ fn main() {
                 mission_ttl,
                 dry_run,
                 extend_existing,
+                overwrite,
+                session_gate,
+                no_gate_confirmed,
             } => run_mission_spawn(
                 from,
                 mission,
@@ -338,6 +352,9 @@ fn main() {
                 mission_ttl,
                 dry_run,
                 extend_existing,
+                overwrite,
+                session_gate,
+                no_gate_confirmed,
             ),
         },
         Commands::Calibrate { action } => match action {
@@ -573,41 +590,39 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     // M7.3 live-surface: gate active if explicit or if mission delegations are live.
     let gate_active = cfg.is_mission_gate_active(&delegations);
 
-    let decision = if gate_active
-        && eval_input.tool_name == "Agent"
-        && decision.action != Action::Block
-    {
-        // Check if the Agent prompt contains a mission marker
-        let prompt = eval_input
-            .tool_input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
-            // Log Mission Gate event
-            let _ = colmena_core::audit::log_event(
-                &audit_path,
-                &colmena_core::audit::AuditEvent::MissionGate {
-                    session_id: &eval_input.session_id,
-                    agent_id: eval_input.agent_id.as_deref(),
-                },
-            );
-            colmena_core::firewall::Decision {
-                action: Action::Ask,
-                reason: "Mission gate: this Agent call has no Colmena mission binding. \
+    let decision =
+        if gate_active && eval_input.tool_name == "Agent" && decision.action != Action::Block {
+            // Check if the Agent prompt contains a mission marker
+            let prompt = eval_input
+                .tool_input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
+                // Log Mission Gate event
+                let _ = colmena_core::audit::log_event(
+                    &audit_path,
+                    &colmena_core::audit::AuditEvent::MissionGate {
+                        session_id: &eval_input.session_id,
+                        agent_id: eval_input.agent_id.as_deref(),
+                    },
+                );
+                colmena_core::firewall::Decision {
+                    action: Action::Ask,
+                    reason: "Mission gate: this Agent call has no Colmena mission binding. \
                          Use mcp__colmena__mission_suggest to check if you need a mission, \
                          or mcp__colmena__mission_spawn to create one directly. \
                          Approve manually to proceed without mission binding."
-                    .to_string(),
-                matched_rule: Some("mission_gate".to_string()),
-                priority: colmena_core::firewall::Priority::Medium,
+                        .to_string(),
+                    matched_rule: Some("mission_gate".to_string()),
+                    priority: colmena_core::firewall::Priority::Medium,
+                }
+            } else {
+                decision
             }
         } else {
             decision
-        }
-    } else {
-        decision
-    };
+        };
 
     // 5. If Ask → enqueue pending
     if decision.action == Action::Ask {
@@ -1912,6 +1927,9 @@ fn run_mission_spawn(
     mission_ttl: i64,
     dry_run: bool,
     extend_existing: bool,
+    overwrite: bool,
+    session_gate: bool,
+    no_gate_confirmed: bool,
 ) -> Result<()> {
     use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
 
@@ -1988,6 +2006,37 @@ fn run_mission_spawn(
     let runtime_delegations_path = config_dir.join("runtime-delegations.json");
     let missions_dir = config_dir.join("missions");
 
+    // M7.3 live-surface: border case check.
+    //   enforce_missions: false (explicit in YAML) + mission with >= 3 roles
+    //   → abort with 3 escape flags unless one was already passed.
+    let firewall_yaml = config_dir.join("trust-firewall.yaml");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd_str = cwd.to_string_lossy();
+    let cfg = colmena_core::config::load_config(&firewall_yaml, &cwd_str)?;
+
+    if matches!(cfg.enforce_missions, Some(false))
+        && manifest.roles.len() >= 3
+        && !session_gate
+        && !no_gate_confirmed
+    {
+        eprintln!(
+            "\nenforce_missions: false is explicit in trust-firewall.yaml.\n\
+             About to spawn {} agents with source: role. Without Mission Gate:\n  \
+             - Workers can Stop without review_submit\n  \
+             - Reviewers can Stop without review_evaluate\n  \
+             - The ELO cycle will not close for this mission\n\n\
+             Options:\n  \
+             [1] Re-run with --session-gate (activate gate for this session only)\n  \
+             [2] Edit trust-firewall.yaml and set enforce_missions: true\n  \
+             [3] Re-run with --no-gate-confirmed (observation mode, no audit-of-closure)\n\n\
+             Aborting by default.",
+            manifest.roles.len()
+        );
+        std::process::exit(1);
+    }
+
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+
     let result = colmena_core::selector::spawn_mission(
         &manifest.id,
         Some(&manifest),
@@ -1996,11 +2045,13 @@ fn run_mission_spawn(
         &library_dir,
         &missions_dir,
         &runtime_delegations_path,
+        &agents_dir,
         None, // session_id
         &[],  // elo_ratings — calibrate lookup deferred for CLI simplicity
         Some(&config_dir),
         extend_existing,
         dry_run,
+        overwrite,
     )?;
 
     // Emit summary
@@ -2038,6 +2089,32 @@ fn run_mission_spawn(
     if !result.role_gaps.is_empty() {
         println!("  INFO role gaps detected: {}", result.role_gaps.join(", "));
     }
+
+    // M7.3 live-surface: subagent file reporting + Mission Gate state.
+    println!(
+        "  OK {} subagent files written",
+        result.subagent_files_written.len()
+    );
+    if !result.subagent_files_respected.is_empty() {
+        println!(
+            "  INFO {} subagent files respected (already valid)",
+            result.subagent_files_respected.len()
+        );
+    }
+
+    let updated_delegations = colmena_core::delegate::load_delegations(&runtime_delegations_path);
+    let will_be_active = cfg.is_mission_gate_active(&updated_delegations);
+    match (cfg.enforce_missions, will_be_active) {
+        (Some(true), _) => println!("  INFO Mission Gate: ON (explicit in YAML)"),
+        (Some(false), _) => {
+            println!("  INFO Mission Gate: OFF (explicit in YAML, operator choice)")
+        }
+        (None, true) => println!(
+            "  INFO Mission Gate: auto-activated (enforce_missions unset, role delegations live)"
+        ),
+        (None, false) => println!("  INFO Mission Gate: OFF (no live role delegations)"),
+    }
+
     println!();
     println!("Next steps:");
     for ap in &result.agent_prompts {

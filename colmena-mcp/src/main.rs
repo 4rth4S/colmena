@@ -1434,6 +1434,8 @@ impl ColmenaServer {
         let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
 
         let runtime_delegations_path = self.config_dir.join("runtime-delegations.json");
+        let agents_dir = colmena_core::paths::default_agents_dir()
+            .map_err(|e| sanitize_error(&format!("Failed to resolve agents dir: {e}")))?;
         let spawn_result = colmena_core::selector::spawn_mission(
             &input.mission,
             None, // manifest: MCP doesn't expose manifest yet
@@ -1442,11 +1444,13 @@ impl ColmenaServer {
             &library_dir,
             &missions_dir,
             &runtime_delegations_path,
+            &agents_dir,
             None, // session_id
             &elo_ratings,
             Some(&self.config_dir),
             false, // extend_existing — safe default; humans can rerun via CLI if needed
             false, // dry_run
+            false, // overwrite_subagents — MCP never overwrites; human-only via CLI
         )
         .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
 

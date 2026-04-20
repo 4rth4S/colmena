@@ -1079,6 +1079,7 @@ fn test_delegation_injection_source_role_without_mission_dir() {
 #[test]
 fn test_mission_spawn_dry_run_with_manifest() {
     let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
     let fixture =
         std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
 
@@ -1087,6 +1088,7 @@ fn test_mission_spawn_dry_run_with_manifest() {
         .arg(&fixture)
         .arg("--dry-run")
         .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
         .output()
         .expect("binary should run");
 
@@ -1125,6 +1127,7 @@ fn test_mission_spawn_dry_run_with_manifest() {
 #[test]
 fn test_mission_spawn_rejects_nonexistent_role() {
     let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
     let fixture = std::path::Path::new(&workspace_root())
         .join("tests/fixtures/missions/invalid-nonexistent-role.yaml");
 
@@ -1132,6 +1135,7 @@ fn test_mission_spawn_rejects_nonexistent_role() {
         .args(["mission", "spawn", "--from"])
         .arg(&fixture)
         .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
         .output()
         .expect("binary should run");
 
@@ -1162,11 +1166,13 @@ roles:
 "#;
     let manifest_path = tmp.path().join("bad-ttl.yaml");
     std::fs::write(&manifest_path, manifest_content).unwrap();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
         .args(["mission", "spawn", "--from"])
         .arg(&manifest_path)
         .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
         .output()
         .expect("binary should run");
 
@@ -1178,6 +1184,7 @@ roles:
 #[test]
 fn test_mission_spawn_persists_delegations_when_not_dry_run() {
     let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
     let fixture =
         std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
 
@@ -1185,6 +1192,7 @@ fn test_mission_spawn_persists_delegations_when_not_dry_run() {
         .args(["mission", "spawn", "--from"])
         .arg(&fixture)
         .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
         .output()
         .expect("binary should run");
 

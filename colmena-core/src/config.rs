@@ -285,7 +285,9 @@ impl FirewallConfig {
     ) -> bool {
         match self.enforce_missions {
             Some(v) => v,
-            None => delegations.iter().any(|d| d.source.as_deref() == Some("role")),
+            None => delegations
+                .iter()
+                .any(|d| d.source.as_deref() == Some("role")),
         }
     }
 }
