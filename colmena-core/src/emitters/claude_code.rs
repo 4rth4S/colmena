@@ -38,14 +38,71 @@ pub enum MinimumsCheck {
 }
 
 /// Parsed subset of subagent .md frontmatter (enough to evaluate minimums).
+///
+/// `tools` accepts BOTH the Claude Code idiomatic comma-separated string format
+/// (`tools: Read, Write, Edit`) and the YAML list format (`tools:\n  - Read\n  - Write`).
+/// CC subagent files in the wild use comma-separated; our writer emits the same
+/// for compatibility.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SubagentFrontmatter {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_tools")]
     pub tools: Vec<String>,
     #[serde(default)]
     pub colmena_auto_generated: bool,
+}
+
+/// Custom deserializer for `tools`: accepts either a comma-separated string
+/// (CC idiomatic, used by nearly every existing subagent file) OR a YAML list.
+fn deserialize_tools<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct ToolsVisitor;
+
+    impl<'de> Visitor<'de> for ToolsVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a comma-separated string or a YAML list of tool names")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            Ok(value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<String>, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut tools = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                tools.push(item);
+            }
+            Ok(tools)
+        }
+
+        // Treat YAML `null` / missing as empty (won't fire given #[serde(default)], but defensive).
+        fn visit_unit<E>(self) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_any(ToolsVisitor)
 }
 
 /// Compose the `[SCOPE]` section of a generated prompt.
@@ -209,23 +266,19 @@ pub fn write_subagent_file(
     std::fs::create_dir_all(parent)
         .with_context(|| format!("creating dir {}", parent.display()))?;
 
-    let tools_yaml = tools_allowed
-        .iter()
-        .map(|t| format!("  - {}", t))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Emit tools as comma-separated string (Claude Code idiomatic format).
+    let tools_inline = tools_allowed.join(", ");
 
     let content = format!(
         "---\n\
          name: {}\n\
          {}\n\
-         tools:\n\
-         {}\n\
+         tools: {}\n\
          ---\n\n\
          {}\n",
         role_id,
         AUTO_GENERATED_MARKER,
-        tools_yaml,
+        tools_inline,
         body.trim_start_matches('\n'),
     );
 
@@ -363,6 +416,39 @@ mod tests {
         .unwrap();
         let check = check_subagent_minimums(&path, "developer", WORKER_REQUIRED_TOOLS).unwrap();
         assert_eq!(check, MinimumsCheck::Pass);
+    }
+
+    #[test]
+    fn test_minimums_pass_on_cc_comma_separated_format() {
+        // Real-world CC subagent file format: tools as a single comma-separated string.
+        // Discovered in dogfooding (2026-04-20) — existing ~/.claude/agents/*.md files use this format.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("developer.md");
+        std::fs::write(
+            &path,
+            "---\nname: developer\ntools: Read, Write, Edit, mcp__colmena__review_submit, mcp__colmena__findings_query\n---\n\nbody\n",
+        )
+        .unwrap();
+        let check = check_subagent_minimums(&path, "developer", WORKER_REQUIRED_TOOLS).unwrap();
+        assert_eq!(check, MinimumsCheck::Pass);
+    }
+
+    #[test]
+    fn test_minimums_ignores_unknown_frontmatter_fields() {
+        // gsd-* and other ecosystem subagent files include `description`, `model`,
+        // `color`, `skills`, `hooks` — serde must ignore unknown fields (no deny_unknown).
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("gsd-mapper.md");
+        std::fs::write(
+            &path,
+            "---\nname: gsd-mapper\ndescription: \"does stuff\"\nmodel: opus\ntools: Read, Bash, Grep\ncolor: cyan\nskills:\n  - foo\n# hooks: nope\n---\n\nbody\n",
+        )
+        .unwrap();
+        // Not calling check_subagent_minimums with a real role_id here — just verifying
+        // the frontmatter parses without error. Use read_subagent_frontmatter directly.
+        let fm = read_subagent_frontmatter(&path).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("gsd-mapper"));
+        assert_eq!(fm.tools, vec!["Read", "Bash", "Grep"]);
     }
 
     #[test]
