@@ -1264,3 +1264,77 @@ fn test_mission_prompt_inject_unsupported_mode() {
         "unsupported mode error should appear in stdout JSON; got: {stdout}"
     );
 }
+
+// ── mission deactivate subagent cleanup tests ─────────────────────────────────
+
+#[test]
+fn test_mission_deactivate_removes_auto_generated_subagent_files() {
+    let tmp = make_colmena_home();
+
+    // Isolated agents dir via env var
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    // Seed: one auto-generated file, one manual file
+    let auto_path = agents_dir.join("developer.md");
+    std::fs::write(
+        &auto_path,
+        "---\nname: developer\ncolmena_auto_generated: true\ntools: []\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    let manual_path = agents_dir.join("architect.md");
+    std::fs::write(
+        &manual_path,
+        "---\nname: architect\ntools: []\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    // Seed a mission directory (required by load_delegations for source: role validation)
+    std::fs::create_dir_all(tmp.path().join("config/missions/m-x")).unwrap();
+
+    // Seed runtime-delegations.json with 2 agents under mission "m-x"
+    let delegations = serde_json::json!([
+        {
+            "tool": "Read",
+            "agent_id": "developer",
+            "action": "auto-approve",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-12-31T23:59:59Z",
+            "source": "role",
+            "mission_id": "m-x"
+        },
+        {
+            "tool": "Read",
+            "agent_id": "architect",
+            "action": "auto-approve",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-12-31T23:59:59Z",
+            "source": "role",
+            "mission_id": "m-x"
+        }
+    ]);
+    std::fs::write(
+        tmp.path().join("config/runtime-delegations.json"),
+        serde_json::to_string_pretty(&delegations).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "deactivate", "--id", "m-x"])
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "mission deactivate should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Auto-generated file: gone
+    assert!(!auto_path.exists(), "auto-generated file must be removed");
+    // Manual file: preserved
+    assert!(manual_path.exists(), "manual file must be preserved");
+}

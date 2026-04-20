@@ -1900,6 +1900,16 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
     let config_dir = default_config_dir();
     let delegations_path = config_dir.join("runtime-delegations.json");
 
+    // M7.3 live-surface: collect mission's agent_ids BEFORE revocation (so the
+    // delegation list is still populated), then remove auto-generated .md files
+    // after the delegations are revoked.
+    let all_delegations = colmena_core::delegate::load_delegations(&delegations_path);
+    let mission_agents: std::collections::HashSet<String> = all_delegations
+        .iter()
+        .filter(|d| d.mission_id.as_deref() == Some(mission_id.as_str()))
+        .filter_map(|d| d.agent_id.clone())
+        .collect();
+
     let revoked = colmena_core::delegate::revoke_by_mission(&delegations_path, &mission_id)?;
 
     if revoked == 0 {
@@ -1920,6 +1930,46 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
             },
         );
     }
+
+    // After revocation, walk the collected agent_ids and remove .md files
+    // that have the auto-generated marker.
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+    let mut removed = Vec::new();
+    let mut kept = Vec::new();
+    for agent_id in &mission_agents {
+        let path = agents_dir.join(format!("{}.md", agent_id));
+        match colmena_core::emitters::claude_code::delete_auto_generated_subagent(&path) {
+            Ok(true) => removed.push(agent_id.clone()),
+            Ok(false) => {
+                if path.exists() {
+                    kept.push(agent_id.clone());
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[colmena] WARNING: failed to check/remove {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    if !removed.is_empty() {
+        println!(
+            "Removed {} auto-generated subagent files: {}",
+            removed.len(),
+            removed.join(", ")
+        );
+    }
+    if !kept.is_empty() {
+        println!(
+            "Kept {} operator-authored subagent files: {}",
+            kept.len(),
+            kept.join(", ")
+        );
+    }
+
     Ok(())
 }
 
