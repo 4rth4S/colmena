@@ -6,6 +6,33 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-04-19
+
+### Added
+
+- **M7.3 live-surface — complete auto-closure of the ELO cycle**:
+  - `mission_spawn` now writes `~/.claude/agents/<role>.md` per role with `colmena_auto_generated: true` frontmatter marker. Respects operator-authored files that satisfy minimums check (name = role_id, required tools present); aborts loud on failed minimums with actionable message. `--overwrite` regenerates with a `.colmena-backup` of the original.
+  - Mission Gate auto-activation: `enforce_missions: None` (unset) flips to `true` when `runtime-delegations.json` has at least one `source: "role"` entry. `Some(true)` / `Some(false)` honored literally. Operator always wins — explicit `false` is respected even when mission delegations are live.
+  - Border case guard: `enforce_missions: false` explicit + mission with ≥3 roles → spawn aborts with 3 explicit options (`--session-gate`, edit YAML, `--no-gate-confirmed`). Operator decides consciously; no silent degradation.
+  - New subcommand `colmena mission prompt-inject --mode terse` emits `INTER_AGENT_DIRECTIVE` as a standalone block for manual Agent spawns.
+  - `mission_deactivate` now also removes subagent `.md` files that have the auto-generated marker AND match an agent_id tied to the mission. Operator-authored files preserved. Clean inverse of `mission_spawn`.
+- New helper `colmena_core::paths::default_agents_dir()` with `COLMENA_AGENTS_DIR` env override for tests.
+- New emitter functions: `write_subagent_file`, `check_subagent_minimums`, `read_subagent_frontmatter`, `delete_auto_generated_subagent`.
+
+### Changed
+
+- **Breaking (internal):** `FirewallConfig::enforce_missions: bool` → `Option<bool>`. New helper `FirewallConfig::is_mission_gate_active(&[RuntimeDelegation]) -> bool` encapsulates the 3-state decision (explicit true/false honored, unset auto-activates on live role delegations).
+- `spawn_mission` signature gains `agents_dir: &Path` and `overwrite_subagents: bool`. Callers (`colmena-cli`, `colmena-mcp`) updated in-PR.
+- `SpawnResult` adds `subagent_files_written` and `subagent_files_respected` fields.
+
+### Fixed
+
+- Subagent `.md` file overwrites now produce `.md.colmena-backup` instead of clobbering operator work.
+
+### With this release
+
+M7.3 + M7.3.1 complete. Every `colmena mission spawn` closes the ELO cycle by construction: delegations bundled, subagent files aligned (or respected when operator-authored), Mission Gate tracked per session, anti-reciprocal scoped per-mission. Manual setup of the 6 recipe mechanisms is eliminated.
+
 ## [0.12.1] - 2026-04-19
 
 ### Added
