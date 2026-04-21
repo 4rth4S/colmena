@@ -1,90 +1,93 @@
-# Getting Started with Colmena
+# Getting Started
 
-From zero to a working trust firewall in 5 minutes.
+Zero to a working trust firewall in 5 minutes, then your first multi-agent mission.
 
 ## Prerequisites
 
-- **Rust toolchain** (stable). Install via [rustup](https://rustup.rs/) if you don't have it.
 - **Claude Code** installed and working (`claude` command available).
+- **Rust toolchain** (stable) via [rustup](https://rustup.rs/) — only if you build from source. If you use the pre-built binary or `cargo install`, skip this.
+- A real `$HOME`. Colmena refuses to fall back to `/tmp` on purpose.
 
-## Installation
+## Install
 
-### 1. Build
+Pick one path. Both end at `colmena doctor` green.
+
+### Option A: from source (fastest while v0.12 is in flight)
 
 ```bash
 git clone https://github.com/4rth4S/colmena.git
 cd colmena
 cargo build --workspace --release
+./target/release/colmena setup
+./target/release/colmena doctor
 ```
 
-This produces two binaries:
-- `target/release/colmena` -- the hook binary + CLI
-- `target/release/colmena-mcp` -- the MCP server
-
-### 2. Setup
+### Option B: pre-built binary
 
 ```bash
-./target/release/colmena setup
+curl -LO https://github.com/4rth4S/colmena/releases/download/vX.Y.Z/colmena-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/4rth4S/colmena/releases/download/vX.Y.Z/SHA256SUMS.txt
+sha256sum -c SHA256SUMS.txt --ignore-missing
+tar xzf colmena-vX.Y.Z-*.tar.gz
+./colmena setup
+./colmena doctor
 ```
 
-This single command does everything:
+### Option C: crates.io (post v0.12.0)
 
-1. **Detects mode.** If it finds a workspace `Cargo.toml` with `colmena-core`, it runs in repo mode (config at `<project>/config/`). Otherwise, standalone mode (config at `~/.colmena/config/`).
+```bash
+cargo install colmena-cli colmena-mcp
+colmena setup
+colmena doctor
+```
 
-2. **Creates config directories.** Sets up `library/roles`, `library/patterns`, `library/prompts`, `queue/pending`, `queue/decided`.
+### Option D: let your CC do it for you
 
-3. **Writes default config files.** All defaults are embedded in the binary -- no downloads needed. Key files created:
+Point your Claude Code at this repo and ask it to install Colmena. See [Install Mode B](../install-mode-b.md).
+
+## What `colmena setup` actually does
+
+One idempotent command. You can re-run it safely — your edits are preserved, new defaults land in `.defaults/` for reference.
+
+1. **Detects mode.** Repo mode if a workspace `Cargo.toml` with `colmena-core` is nearby (config at `<project>/config/`), otherwise standalone (`~/.colmena/config/`).
+2. **Creates config directories:** `library/roles`, `library/patterns`, `library/prompts`, `queue/pending`, `queue/decided`.
+3. **Writes default config files.** All defaults embedded in the binary — no downloads.
 
    | File | Purpose |
-   |------|---------|
-   | `trust-firewall.yaml` | Firewall rules (what to allow, ask, block) |
-   | `filter-config.yaml` | Output filter settings (line limits, truncation) |
+   |---|---|
+   | `trust-firewall.yaml` | What to allow, ask, block |
+   | `filter-config.yaml` | Output filter settings |
    | `review-config.yaml` | Peer review thresholds |
-   | `library/roles/*.yaml` | 10 built-in role definitions |
-   | `library/patterns/*.yaml` | 10 orchestration patterns |
-   | `library/prompts/*.md` | System prompts for each role |
+   | `library/roles/*.yaml` | 15 built-in roles |
+   | `library/patterns/*.yaml` | 11 orchestration patterns |
+   | `library/prompts/*.md` | System prompts per role |
 
-4. **Registers hooks.** Adds four hook entries to `~/.claude/settings.json`:
-   - **PreToolUse** -- evaluates every tool call against the firewall
-   - **PostToolUse** -- filters noisy Bash output
-   - **PermissionRequest** -- auto-approves role-scoped tools
-   - **SubagentStop** -- enforces peer review before agents stop
+4. **Registers hooks** in `~/.claude/settings.json`:
+   - `PreToolUse` — evaluates every tool call
+   - `PostToolUse` — filters noisy Bash output
+   - `PermissionRequest` — auto-approves role-scoped tools
+   - `SubagentStop` — enforces peer review before agents stop
+5. **Registers MCP** in `~/.mcp.json` so CC sees the 27 Colmena tools natively.
 
-5. **Registers MCP server.** Writes `~/.mcp.json` so Claude Code can call Colmena's 27 tools natively.
+`--force` overwrites custom files. `--dry-run` previews without writing.
 
-If you've customized any config files, setup preserves your changes and saves the new defaults to a `.defaults/` directory for reference. Use `--force` to overwrite, or `--dry-run` to preview.
-
-### 3. Verify
+## Verify
 
 ```bash
 ./target/release/colmena doctor
 ```
 
-Doctor runs a full health check across 7 categories: config validity, hook registration, MCP registration, library integrity, runtime state, file permissions, and version consistency.
+Seven categories: config validity, hook registration, MCP registration, library integrity, runtime state, file permissions, version consistency. All should be green before you proceed.
 
-## Your First Run
+## First run — what the firewall feels like
 
-Start a Claude Code session. The firewall is now active. Here's what happens when Claude calls different tools:
+Open a Claude Code session in any project. The firewall is live.
 
-### A Read call (auto-approved)
+**Read call** — auto-approved. No prompt. File loads.
 
-Claude invokes `Read` on a file. Colmena evaluates it:
+**`cargo test --workspace`** — auto-approved by the `build tools` rule in `trust_circle`.
 
-1. CC sends JSON to `colmena hook` via stdin
-2. Firewall checks rules in precedence order: blocked → delegations → agent overrides → restricted → trust circle → defaults (simplified — the [full 8-step chain](../dev/architecture.md#pretooluse-tool-call-evaluation) also includes ELO overrides, chain guard, and mission revocation)
-3. `Read` matches the first trust_circle rule (safe read operations)
-4. Colmena returns `allow` -- CC proceeds without prompting you
-5. Decision logged to `config/audit.log`
-
-You never see a prompt. The file just loads.
-
-### A Bash build command (auto-approved)
-
-Claude runs `cargo test --workspace`. Colmena recognizes it from the trust_circle rule for build tools and auto-approves. No prompt.
-
-### A destructive command (asks you)
-
-Claude tries `rm -rf target/`. Colmena matches the restricted rule for destructive commands. You see:
+**`rm -rf target/`** — Colmena matches a `restricted` rule:
 
 ```
 [tool_use] Bash: rm -rf target/
@@ -92,45 +95,76 @@ ASK: Potentially destructive system command
 Allow? [y/n]
 ```
 
-### A force push (blocked)
+**`git push --force origin main`** — blocked outright, no prompt, no override:
 
-Claude tries `git push --force origin main`. Colmena matches the blocked rule. The tool call is denied immediately -- no prompt, no override.
+```
+BLOCK: Destructive operation
+```
 
-## Customizing the Firewall
+Every decision appends a line to `config/audit.log`.
 
-The firewall lives at `config/trust-firewall.yaml`. It has three sections, evaluated in order:
+## First mission — what multi-agent feels like
+
+From inside Claude Code, paste:
+
+```
+mcp__colmena__mission_suggest("review the auth module, improve test coverage, and have a reviewer check it")
+```
+
+Colmena will estimate complexity and tell you whether to use it at all. If `recommended_agents >= 3`, spawn the squad:
+
+```
+mcp__colmena__mission_spawn(mission="review the auth module, improve test coverage, and have a reviewer check it")
+```
+
+You get back:
+
+- A pattern selected (e.g. `code-review-cycle` or `plan-then-execute`)
+- Topology slots mapped to real roles (architect, developer, code_reviewer, auditor)
+- A generated `CLAUDE.md` per agent with role prompt, scope, mission marker, and the exact `review_submit` call the agent will use
+- Scoped delegations (8-hour TTL by default) bundled for each role
+- The reviewer lead assigned by ELO (highest-rated eligible role wins)
+
+Paste the generated prompts into CC `Agent` tool calls. Each agent:
+
+- Carries a mission marker `<!-- colmena:mission_id=... -->`
+- Has its role's tools auto-approved via the `PermissionRequest` hook
+- Cannot `Stop` until it calls `mcp__colmena__review_submit` (the `SubagentStop` hook blocks Stops otherwise)
+
+When the auditor evaluates with `mcp__colmena__review_evaluate`, QPC scores feed the ELO log, alerts fire if scores are low, and your findings accumulate.
+
+## Customize the firewall
+
+`config/trust-firewall.yaml` has three tiers evaluated in order:
 
 ```yaml
-# Highest priority -- always denied
-blocked:
+blocked:      # Highest priority — always denied
   - tools: [Bash]
     conditions:
       bash_pattern: '^git push.*--force'
     action: block
     reason: 'Destructive operation'
 
-# Middle priority -- human confirms
-restricted:
+restricted:   # Middle — human confirms
   - tools: [Agent]
     action: ask
     reason: 'Agent spawning requires human review'
 
-# Lowest priority -- auto-approved
-trust_circle:
+trust_circle: # Lowest — auto-approved
   - tools: [Read, Glob, Grep]
     action: auto-approve
     reason: 'Read-only operations'
 ```
 
-### Adding a rule
+Precedence is actually 8 steps: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`. Full chain in [../dev/architecture.md](../dev/architecture.md#precedence-chain-pretooluse).
 
-To auto-approve `npm install` (currently caught by the defaults `ask`):
+### Add a rule
+
+Auto-approve `npm install` (currently routed to `ask` by defaults):
 
 ```yaml
 trust_circle:
   # ... existing rules ...
-
-  # Auto-approve npm install
   - tools: [Bash]
     conditions:
       bash_pattern: '^npm install\b'
@@ -138,14 +172,12 @@ trust_circle:
     reason: 'Package installation in project context'
 ```
 
-### Tightening a rule
+### Tighten a rule
 
-To block all `curl` commands instead of just asking:
+Block `curl` outright:
 
 ```yaml
 blocked:
-  # ... existing rules ...
-
   - tools: [Bash]
     conditions:
       bash_pattern: '^curl\b'
@@ -154,8 +186,6 @@ blocked:
 ```
 
 ### Path-based rules
-
-Restrict writes to specific directories:
 
 ```yaml
 trust_circle:
@@ -167,51 +197,38 @@ trust_circle:
     reason: 'Source code writes only'
 ```
 
-`${PROJECT_DIR}` resolves to your current working directory at runtime.
+`${PROJECT_DIR}` resolves to the CC working directory.
 
-After editing, validate your config:
+### Validate
 
 ```bash
 ./target/release/colmena config check
 ```
 
-## Delegating Tools
+## Delegate temporarily
 
-Delegations let you temporarily expand permissions without editing the YAML. Every delegation has a mandatory TTL (max 24 hours).
-
-### Grant a tool to all agents for 4 hours
+Delegations expand permissions without editing YAML. Every delegation has a mandatory TTL (max 24h) and cannot override `blocked` rules.
 
 ```bash
+# All agents, 4 hours
 colmena delegate add --tool WebFetch --ttl 4
-```
 
-### Grant to a specific agent
-
-```bash
+# One agent, 8 hours
 colmena delegate add --tool Write --agent developer --ttl 8
-```
 
-### Scope to the current session
-
-```bash
+# Only this CC session
 colmena delegate add --tool Write --session sess_abc123 --ttl 2
+
+# List and revoke
+colmena delegate list
+colmena delegate revoke --tool WebFetch
 ```
 
-### View and revoke
+Bash delegations require a mandatory condition (`bash_pattern` or `path_within`). Expired delegations prune on load and emit `DELEGATE_EXPIRE` audit events.
 
-```bash
-colmena delegate list          # Show all active delegations
-colmena delegate revoke --tool WebFetch  # Revoke
-```
+## The audit log
 
-Key details:
-- Delegations **cannot override blocked rules**. Blocked is always blocked.
-- Bash delegations are blocked via the CLI -- use `trust-firewall.yaml` agent_overrides or role-based missions for scoped Bash access.
-- Expired delegations are automatically pruned on next load and logged as audit events.
-
-## Checking the Audit Log
-
-Every firewall decision is appended to `config/audit.log`:
+Every firewall decision:
 
 ```
 [2026-04-15T10:30:00Z] ALLOW session=sess_abc agent=* tool=Read key="src/main.rs" rule=trust_circle
@@ -220,18 +237,21 @@ Every firewall decision is appended to `config/audit.log`:
 [2026-04-15T10:30:10Z] BLOCK session=sess_abc agent=* tool=Bash key="git push --force origin main" rule=blocked
 ```
 
-The log auto-rotates at 10MB.
+Rotates at 10MB.
 
-To see aggregated stats for a session:
+Aggregate stats:
 
 ```bash
 colmena stats
 colmena stats --session <session-id>
 ```
 
-## What's Next
+Before ending a session, ask your CC to call `mcp__colmena__session_stats` to print the value summary (prompts saved + tokens saved).
 
-- [Use Cases](use-cases.md) -- concrete workflows for security audits, code review, pentesting, and documentation
-- [User Guide](../guide.md) -- detailed walkthrough with a payments API audit example
-- [Architecture](../dev/architecture.md) -- how the four crates work together
-- [Internals](../dev/internals.md) -- edge cases, safety contracts, and implementation details
+## Where to go next
+
+- [Use Cases](use-cases.md) — full tutorials: pentest, dev review, devops, SRE, refactor, docs-from-code
+- [Install Mode B](../install-mode-b.md) — let your CC bootstrap Colmena
+- [User Guide](../guide.md) — detailed walkthrough with a payments API audit
+- [Architecture](../dev/architecture.md) — how the four crates fit together
+- [Internals](../dev/internals.md) — edge cases, safety contracts, gotchas
