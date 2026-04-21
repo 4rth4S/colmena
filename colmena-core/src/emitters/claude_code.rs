@@ -26,6 +26,37 @@ pub const WORKER_REQUIRED_TOOLS: &[&str] = &[
     "mcp__colmena__findings_query",
 ];
 
+/// MCP tools that every mission role needs to guarantee the ELO cycle can close
+/// regardless of whether the role is assigned as author, reviewer, or both.
+///
+/// Union of [`WORKER_REQUIRED_TOOLS`] and [`REVIEWER_REQUIRED_TOOLS`]. Used by
+/// `mission_spawn` to bundle delegations and auto-generated subagent `tools:`
+/// frontmatter so a role YAML that only declares `review_submit` still gets
+/// `review_evaluate` when it participates in a mission (and vice versa).
+pub const ELO_CYCLE_TOOLS: &[&str] = &[
+    "mcp__colmena__review_submit",
+    "mcp__colmena__review_evaluate",
+    "mcp__colmena__findings_query",
+];
+
+/// Return a tool set that is the union of `role_tools` and [`ELO_CYCLE_TOOLS`],
+/// preserving original order and appending any missing cycle tools at the end.
+///
+/// Rationale: the role YAML is the operator's intent, but mission participation
+/// adds structural requirements the operator may not have thought about (a role
+/// can be selected as reviewer even if its YAML only lists author tools). This
+/// helper makes `mission_spawn`'s generated delegations + subagent files and the
+/// CLAUDE.md pre-approved-ops block consistent with that reality.
+pub fn mission_tool_set(role_tools: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = role_tools.to_vec();
+    for required in ELO_CYCLE_TOOLS {
+        if !out.iter().any(|existing| existing == required) {
+            out.push((*required).to_string());
+        }
+    }
+    out
+}
+
 /// Outcome of validating an existing subagent .md file against minimums.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MinimumsCheck {
@@ -38,14 +69,71 @@ pub enum MinimumsCheck {
 }
 
 /// Parsed subset of subagent .md frontmatter (enough to evaluate minimums).
+///
+/// `tools` accepts BOTH the Claude Code idiomatic comma-separated string format
+/// (`tools: Read, Write, Edit`) and the YAML list format (`tools:\n  - Read\n  - Write`).
+/// CC subagent files in the wild use comma-separated; our writer emits the same
+/// for compatibility.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SubagentFrontmatter {
     #[serde(default)]
     pub name: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_tools")]
     pub tools: Vec<String>,
     #[serde(default)]
     pub colmena_auto_generated: bool,
+}
+
+/// Custom deserializer for `tools`: accepts either a comma-separated string
+/// (CC idiomatic, used by nearly every existing subagent file) OR a YAML list.
+fn deserialize_tools<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct ToolsVisitor;
+
+    impl<'de> Visitor<'de> for ToolsVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a comma-separated string or a YAML list of tool names")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            Ok(value
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<String>, A::Error>
+        where
+            A: de::SeqAccess<'de>,
+        {
+            let mut tools = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                tools.push(item);
+            }
+            Ok(tools)
+        }
+
+        // Treat YAML `null` / missing as empty (won't fire given #[serde(default)], but defensive).
+        fn visit_unit<E>(self) -> Result<Vec<String>, E>
+        where
+            E: de::Error,
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    deserializer.deserialize_any(ToolsVisitor)
 }
 
 /// Compose the `[SCOPE]` section of a generated prompt.
@@ -209,23 +297,19 @@ pub fn write_subagent_file(
     std::fs::create_dir_all(parent)
         .with_context(|| format!("creating dir {}", parent.display()))?;
 
-    let tools_yaml = tools_allowed
-        .iter()
-        .map(|t| format!("  - {}", t))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Emit tools as comma-separated string (Claude Code idiomatic format).
+    let tools_inline = tools_allowed.join(", ");
 
     let content = format!(
         "---\n\
          name: {}\n\
          {}\n\
-         tools:\n\
-         {}\n\
+         tools: {}\n\
          ---\n\n\
          {}\n",
         role_id,
         AUTO_GENERATED_MARKER,
-        tools_yaml,
+        tools_inline,
         body.trim_start_matches('\n'),
     );
 
@@ -262,6 +346,53 @@ mod tests {
     #[test]
     fn test_scope_block_empty() {
         assert!(scope_block(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn test_mission_tool_set_adds_missing_elo_tools() {
+        // Mirror of Colmena's default developer.yaml: declares review_submit
+        // but not review_evaluate. mission_tool_set must fill the gap.
+        let role_tools = vec![
+            "Read".to_string(),
+            "Write".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+        ];
+        let out = mission_tool_set(&role_tools);
+        assert!(out.contains(&"mcp__colmena__review_submit".to_string()));
+        assert!(out.contains(&"mcp__colmena__review_evaluate".to_string()));
+        assert!(out.contains(&"mcp__colmena__findings_query".to_string()));
+        assert!(out.contains(&"Read".to_string()));
+        assert!(out.contains(&"Write".to_string()));
+    }
+
+    #[test]
+    fn test_mission_tool_set_preserves_order_and_dedups() {
+        let role_tools = vec![
+            "Read".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__review_evaluate".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+            "Bash".to_string(),
+        ];
+        let out = mission_tool_set(&role_tools);
+        // Same length: nothing needed to be added.
+        assert_eq!(out.len(), role_tools.len());
+        // Order preserved.
+        assert_eq!(out[0], "Read");
+        assert_eq!(out.last().unwrap(), "Bash");
+    }
+
+    #[test]
+    fn test_mission_tool_set_empty_input_returns_elo_tools() {
+        let out = mission_tool_set(&[]);
+        for required in ELO_CYCLE_TOOLS {
+            assert!(
+                out.contains(&(*required).to_string()),
+                "missing {}",
+                required
+            );
+        }
     }
 
     #[test]
@@ -363,6 +494,39 @@ mod tests {
         .unwrap();
         let check = check_subagent_minimums(&path, "developer", WORKER_REQUIRED_TOOLS).unwrap();
         assert_eq!(check, MinimumsCheck::Pass);
+    }
+
+    #[test]
+    fn test_minimums_pass_on_cc_comma_separated_format() {
+        // Real-world CC subagent file format: tools as a single comma-separated string.
+        // Discovered in dogfooding (2026-04-20) — existing ~/.claude/agents/*.md files use this format.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("developer.md");
+        std::fs::write(
+            &path,
+            "---\nname: developer\ntools: Read, Write, Edit, mcp__colmena__review_submit, mcp__colmena__findings_query\n---\n\nbody\n",
+        )
+        .unwrap();
+        let check = check_subagent_minimums(&path, "developer", WORKER_REQUIRED_TOOLS).unwrap();
+        assert_eq!(check, MinimumsCheck::Pass);
+    }
+
+    #[test]
+    fn test_minimums_ignores_unknown_frontmatter_fields() {
+        // gsd-* and other ecosystem subagent files include `description`, `model`,
+        // `color`, `skills`, `hooks` — serde must ignore unknown fields (no deny_unknown).
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("gsd-mapper.md");
+        std::fs::write(
+            &path,
+            "---\nname: gsd-mapper\ndescription: \"does stuff\"\nmodel: opus\ntools: Read, Bash, Grep\ncolor: cyan\nskills:\n  - foo\n# hooks: nope\n---\n\nbody\n",
+        )
+        .unwrap();
+        // Not calling check_subagent_minimums with a real role_id here — just verifying
+        // the frontmatter parses without error. Use read_subagent_frontmatter directly.
+        let fm = read_subagent_frontmatter(&path).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("gsd-mapper"));
+        assert_eq!(fm.tools, vec!["Read", "Bash", "Grep"]);
     }
 
     #[test]

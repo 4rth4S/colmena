@@ -107,12 +107,21 @@ pub fn hash_artifact(path: &Path) -> Result<String> {
 ///
 /// Invariants enforced:
 /// 1. Author cannot review their own work (author != reviewer).
-/// 2. Anti-reciprocal (per-mission, M7.3.1): if reviewer already reviewed author
-///    within the SAME mission, skip that pairing. Pairs from other missions do
-///    not block — reciprocity is scoped to a single collaboration cycle.
-/// 3. Max pending per (author, mission) — STRIDE TM Finding #24 (DREAD 5.4).
+/// 2. Max pending per (author, mission) — STRIDE TM Finding #24 (DREAD 5.4).
 ///
-/// `existing_reviews` is a slice of `(reviewer_role, author_role, mission)` tuples.
+/// Note: the former "anti-reciprocal" filter was removed in M7.3.2. It was
+/// both mis-implemented (blocked repeat-pairing, not reciprocal pairs) AND
+/// incompatible with the centralized-auditor invariant. In Colmena every
+/// mission has exactly one `role_type: auditor` reviewing all workers (see
+/// CLAUDE.md §Missions & Agent Identity) — so the auditor evaluating many
+/// artifacts from the same author is the intended pattern, not a bug to
+/// filter away. Perspective diversification across missions lives in M7.7
+/// (category complementarity scoring), which does not reuse this mechanism.
+///
+/// `existing_reviews` is kept in the signature for backward-compat; it is
+/// currently unused by the active logic and scheduled to be removed alongside
+/// the `ReviewerLead` cleanup in a follow-up refactor PR.
+///
 /// Returns the created `ReviewEntry` in Pending state.
 pub fn submit_review(
     review_dir: &Path,
@@ -122,6 +131,8 @@ pub fn submit_review(
     available_roles: &[String],
     existing_reviews: &[(String, String, String)],
 ) -> Result<ReviewEntry> {
+    let _ = existing_reviews; // Legacy param, see docstring.
+
     // STRIDE TM Finding #24: limit pending reviews per (author, mission)
     let pending_count = count_pending_for_author(review_dir, author_role, mission);
     if pending_count >= MAX_PENDING_PER_AUTHOR {
@@ -136,21 +147,10 @@ pub fn submit_review(
     }
 
     // Filter out the author (invariant 1: author != reviewer)
-    let mut candidates: Vec<&String> = available_roles
+    let candidates: Vec<&String> = available_roles
         .iter()
         .filter(|r| r.as_str() != author_role)
         .collect();
-
-    // Filter out reciprocal pairs (invariant 2) SCOPED per-mission (M7.3.1):
-    // Only consider pairs from the SAME mission. Reciprocity is a property of a
-    // specific collaboration cycle, not a career-long prohibition.
-    candidates.retain(|candidate| {
-        !existing_reviews
-            .iter()
-            .any(|(reviewer, author, pair_mission)| {
-                reviewer == candidate.as_str() && author == author_role && pair_mission == mission
-            })
-    });
 
     if candidates.is_empty() {
         bail!("No eligible reviewer");
@@ -667,59 +667,95 @@ mod tests {
     }
 
     #[test]
-    fn test_submit_prevents_reciprocal_review() {
+    fn test_submit_centralized_auditor_accepts_n_artifacts_from_same_author() {
+        // M7.3.2: the former "anti-reciprocal" filter wrongly blocked the
+        // auditor from evaluating more than one artifact per author in the
+        // same mission. With the filter removed, a centralized auditor
+        // reviewing many artifacts from the same worker — which is the
+        // intended pattern under the auditor-centralized invariant — must
+        // succeed consistently.
         let tmp = TempDir::new().unwrap();
         let review_dir = tmp.path().join("reviews");
-        let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
+        let a1 = create_artifact(tmp.path(), "file1.md", "# one");
+        let a2 = create_artifact(tmp.path(), "file2.md", "# two");
+        let a3 = create_artifact(tmp.path(), "file3.md", "# three");
 
-        let roles = vec![
-            "coder".to_string(),
-            "pentester".to_string(),
+        let roles = vec!["auditor".to_string()];
+
+        // Simulate the exact dogfood state: after the first submit, the
+        // reviews store records (auditor, architect, mission). The filter
+        // used to block subsequent submits; now it must not.
+        let existing_after_first = vec![(
+            "auditor".to_string(),
             "architect".to_string(),
-        ];
-
-        // pentester already reviewed coder → pentester is excluded
-        let existing = vec![(
-            "pentester".to_string(),
-            "coder".to_string(),
-            "audit-payments".to_string(),
+            "m73-docs-overhaul".to_string(),
         )];
 
-        let entry = submit_review(
+        let r1 = submit_review(
             &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
+            &a1,
+            "architect",
+            "m73-docs-overhaul",
             &roles,
-            &existing,
+            &[],
         )
-        .unwrap();
+        .expect("first submit to centralized auditor must succeed");
+        assert_eq!(r1.reviewer_role, "auditor");
 
-        // Should skip pentester and pick architect
-        assert_eq!(entry.reviewer_role, "architect");
+        let r2 = submit_review(
+            &review_dir,
+            &a2,
+            "architect",
+            "m73-docs-overhaul",
+            &roles,
+            &existing_after_first,
+        )
+        .expect("second submit to centralized auditor must succeed");
+        assert_eq!(r2.reviewer_role, "auditor");
+
+        let existing_after_second = vec![
+            (
+                "auditor".to_string(),
+                "architect".to_string(),
+                "m73-docs-overhaul".to_string(),
+            ),
+            (
+                "auditor".to_string(),
+                "architect".to_string(),
+                "m73-docs-overhaul".to_string(),
+            ),
+        ];
+
+        let r3 = submit_review(
+            &review_dir,
+            &a3,
+            "architect",
+            "m73-docs-overhaul",
+            &roles,
+            &existing_after_second,
+        )
+        .expect("third submit to centralized auditor must succeed");
+        assert_eq!(r3.reviewer_role, "auditor");
     }
 
     #[test]
-    fn test_submit_cross_mission_reciprocal_allowed() {
-        // REGRESSION (M7.3.1 bug, 2026-04-17): anti-reciprocal filter must be per-mission.
-        // If pentester already reviewed coder in mission-A, the pair (pentester, coder) should
-        // NOT be blocked when coder submits a new artifact in mission-B.
-        // Before fix: "No eligible reviewer" (global filter). After fix: pentester picked.
+    fn test_submit_cross_mission_reviewer_reuse_allowed() {
+        // REGRESSION (M7.3.2): with anti-reciprocal removed, the same
+        // reviewer is eligible across missions — cross-mission reviewer
+        // reuse is now trivially allowed. Preserved as a forward-compat
+        // check against anyone trying to reintroduce the filter.
         let tmp = TempDir::new().unwrap();
         let review_dir = tmp.path().join("reviews");
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
 
-        // Pentester already reviewed coder in mission-A (prior mission).
-        // After the fix the third tuple element is the mission of that prior review.
         let existing = vec![(
             "pentester".to_string(),
             "coder".to_string(),
             "mission-a".to_string(),
         )];
 
-        // Coder submits in mission-b. Pentester must be eligible because mission differs.
         let entry = submit_review(
             &review_dir,
             &artifact,
@@ -730,10 +766,7 @@ mod tests {
         )
         .expect("cross-mission submit must succeed");
 
-        assert_eq!(
-            entry.reviewer_role, "pentester",
-            "pentester must be eligible in mission-b despite prior mission-a pair"
-        );
+        assert_eq!(entry.reviewer_role, "pentester");
         assert_eq!(entry.mission, "mission-b");
     }
 

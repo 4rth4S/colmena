@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-/// Register colmena as PreToolUse + PostToolUse + PermissionRequest + SubagentStop hook in ~/.claude/settings.json.
+/// Register colmena as PreToolUse + PostToolUse + PermissionRequest + SubagentStop hook in the CC settings.json.
+/// Honors `CLAUDE_CONFIG_DIR` (falls back to `~/.claude`).
 /// Preserves all existing content (hooks, env, plugins, statusLine, etc).
 pub fn run_install() -> Result<()> {
     let settings_path = settings_json_path();
@@ -245,6 +246,13 @@ pub fn run_install() -> Result<()> {
 }
 
 pub(crate) fn settings_json_path() -> PathBuf {
+    // Honor CC's CLAUDE_CONFIG_DIR for users who keep a parallel CC profile
+    // (e.g. ~/.claude-personal). Falls back to ~/.claude.
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("settings.json");
+        }
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| {
         eprintln!("ERROR: HOME environment variable is not set.");
         std::process::exit(1);
