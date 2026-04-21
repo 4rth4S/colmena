@@ -14,6 +14,15 @@ pub enum Action {
     Block,
 }
 
+/// Sentinel structure persisted to `<config_dir>/session-gate.json` when the
+/// operator passes `--session-gate` to `mission spawn`. Honored by
+/// `is_mission_gate_active` as a runtime override when
+/// `enforce_missions: Some(false)` is explicit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionGateOverride {
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// Conditions that must all be satisfied for a rule to match.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Conditions {
@@ -60,10 +69,12 @@ pub struct FirewallConfig {
     #[serde(default)]
     pub agent_overrides: HashMap<String, Vec<Rule>>,
     pub notifications: Option<NotificationsConfig>,
-    /// When true, Agent tool calls without a Colmena mission marker trigger "ask".
-    /// Off by default — opt-in enforcement.
+    /// Mission Gate policy:
+    /// - `None` (unset in YAML) → auto-activate when mission delegations are live (M7.3)
+    /// - `Some(true)` → always active
+    /// - `Some(false)` → explicit opt-out (operator decision, respected always)
     #[serde(default)]
-    pub enforce_missions: bool,
+    pub enforce_missions: Option<bool>,
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -268,6 +279,77 @@ pub fn check_config_permissions(_config_dir: &std::path::Path) -> Vec<String> {
     Vec::new()
 }
 
+impl FirewallConfig {
+    /// Decide whether the Mission Gate applies to this call, given the live
+    /// runtime delegations.
+    ///
+    /// Rules (M7.3):
+    /// - If `enforce_missions` is explicit (`Some`), honor it literally.
+    /// - If unset (`None`), auto-activate when there is at least one
+    ///   delegation with `source: "role"` — i.e., a mission is live.
+    /// - Otherwise (unset + no mission delegations), the gate is inactive.
+    pub fn is_mission_gate_active(
+        &self,
+        delegations: &[crate::delegate::RuntimeDelegation],
+        session_override: bool,
+    ) -> bool {
+        if session_override {
+            return true;
+        }
+        match self.enforce_missions {
+            Some(v) => v,
+            None => delegations
+                .iter()
+                .any(|d| d.source.as_deref() == Some("role")),
+        }
+    }
+}
+
+/// Check whether a live session-gate override sentinel exists and hasn't expired.
+/// Reads `<config_dir>/session-gate.json`. Returns false on any error (safe fallback).
+pub fn session_gate_override_active(config_dir: &std::path::Path) -> bool {
+    let path = config_dir.join("session-gate.json");
+    if !path.exists() {
+        return false;
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let sentinel: SessionGateOverride = match serde_json::from_str(&content) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    sentinel.expires_at > chrono::Utc::now()
+}
+
+/// Write the session-gate override sentinel. Called by CLI when `--session-gate`
+/// is passed. Atomic via temp+rename.
+pub fn write_session_gate_override(
+    config_dir: &std::path::Path,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<()> {
+    let path = config_dir.join("session-gate.json");
+    let sentinel = SessionGateOverride { expires_at };
+    let json = serde_json::to_string_pretty(&sentinel).context("serializing sentinel")?;
+    std::fs::create_dir_all(config_dir)
+        .with_context(|| format!("creating config dir {}", config_dir.display()))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, &json).with_context(|| format!("writing temp {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).with_context(|| format!("renaming to {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the session-gate override sentinel. No-op if absent.
+pub fn clear_session_gate_override(config_dir: &std::path::Path) -> anyhow::Result<()> {
+    let path = config_dir.join("session-gate.json");
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .with_context(|| format!("removing sentinel {}", path.display()))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,7 +435,7 @@ action: auto-approve
             }],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -378,7 +460,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -402,7 +484,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -425,7 +507,7 @@ action: auto-approve
             blocked: vec![],
             agent_overrides: HashMap::new(),
             notifications: None,
-            enforce_missions: false,
+            enforce_missions: Some(false),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -512,7 +594,7 @@ action: auto-approve
     // ── enforce_missions tests ──────────────────────────────────────────────
 
     #[test]
-    fn test_enforce_missions_default_false() {
+    fn test_enforce_missions_default_none() {
         let yaml = r#"
 version: 1
 defaults:
@@ -520,8 +602,8 @@ defaults:
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
         assert!(
-            !config.enforce_missions,
-            "enforce_missions should default to false"
+            config.enforce_missions.is_none(),
+            "enforce_missions should default to None (unset)"
         );
     }
 
@@ -534,9 +616,10 @@ defaults:
 enforce_missions: true
 "#;
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
-        assert!(
+        assert_eq!(
             config.enforce_missions,
-            "enforce_missions should parse as true"
+            Some(true),
+            "enforce_missions should parse as Some(true)"
         );
     }
 
@@ -545,9 +628,123 @@ enforce_missions: true
         let config_path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
         let config = load_config(&config_path, "/home/test/project").unwrap();
-        assert!(
-            !config.enforce_missions,
-            "Real config should have enforce_missions=false"
+        // Real config has `enforce_missions: false` explicitly set
+        assert_eq!(
+            config.enforce_missions,
+            Some(false),
+            "Real config should have enforce_missions=Some(false)"
         );
+    }
+
+    // ── is_mission_gate_active tests ────────────────────────────────────────
+
+    fn make_role_delegation() -> crate::delegate::RuntimeDelegation {
+        crate::delegate::RuntimeDelegation {
+            tool: "Read".to_string(),
+            agent_id: Some("developer".to_string()),
+            action: crate::config::Action::AutoApprove,
+            created_at: chrono::Utc::now(),
+            expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            session_id: None,
+            source: Some("role".to_string()),
+            mission_id: Some("m-42".to_string()),
+            conditions: None,
+        }
+    }
+
+    fn make_firewall_config(enforce: Option<bool>) -> FirewallConfig {
+        FirewallConfig {
+            version: 1,
+            defaults: Defaults {
+                action: Action::Ask,
+            },
+            trust_circle: vec![],
+            restricted: vec![],
+            blocked: vec![],
+            agent_overrides: HashMap::new(),
+            notifications: None,
+            enforce_missions: enforce,
+        }
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_explicit_true() {
+        let config = make_firewall_config(Some(true));
+        assert!(config.is_mission_gate_active(&[], false));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_explicit_false_respected() {
+        let config = make_firewall_config(Some(false));
+        let d = make_role_delegation();
+        assert!(
+            !config.is_mission_gate_active(&[d], false),
+            "explicit false honored even when role delegation is live"
+        );
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_unset_activates_with_role_delegation() {
+        let config = make_firewall_config(None);
+        let d = make_role_delegation();
+        assert!(config.is_mission_gate_active(&[d], false));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_unset_inactive_without_delegations() {
+        let config = make_firewall_config(None);
+        assert!(!config.is_mission_gate_active(&[], false));
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_session_override_wins_over_explicit_false() {
+        let config = make_firewall_config(Some(false));
+        let d = make_role_delegation();
+        // session_override: true should flip gate ON even when YAML says Some(false)
+        assert!(
+            config.is_mission_gate_active(&[d], true),
+            "--session-gate must activate gate despite explicit false"
+        );
+    }
+
+    #[test]
+    fn test_is_mission_gate_active_session_override_with_unset_still_true() {
+        let config = make_firewall_config(None);
+        // No delegations, but override true → gate on
+        assert!(config.is_mission_gate_active(&[], true));
+    }
+
+    // ── session-gate sentinel helper tests ───────────────────────────────────
+
+    #[test]
+    fn test_session_gate_override_absent_when_no_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(!session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_session_gate_override_active_when_unexpired() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expires).unwrap();
+        assert!(session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_session_gate_override_inactive_when_expired() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expired = chrono::Utc::now() - chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expired).unwrap();
+        assert!(!session_gate_override_active(tmp.path()));
+    }
+
+    #[test]
+    fn test_clear_session_gate_override_removes_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let expires = chrono::Utc::now() + chrono::Duration::hours(1);
+        write_session_gate_override(tmp.path(), expires).unwrap();
+        assert!(tmp.path().join("session-gate.json").exists());
+        clear_session_gate_override(tmp.path()).unwrap();
+        assert!(!tmp.path().join("session-gate.json").exists());
     }
 }

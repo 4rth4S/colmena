@@ -59,9 +59,23 @@ pub struct SpawnResult {
     pub pattern_id: String,
     pub pattern_auto_created: bool,
     pub agent_prompts: Vec<AgentPrompt>,
-    pub delegation_commands: Vec<String>,
+    /// Delegations that were newly persisted to `runtime-delegations.json`.
+    pub delegations_created: Vec<RuntimeDelegation>,
+    /// Delegations skipped because an existing one covers them with TTL ≥ mission end.
+    /// Tuple is (candidate, existing_expires_at) for human-readable reporting.
+    pub delegations_skipped: Vec<(RuntimeDelegation, chrono::DateTime<chrono::Utc>)>,
+    /// Delegations that would have conflicted with shorter-lived existing entries.
+    /// Empty when `spawn_mission` returns Ok (the function `bail!`s on aborted merges
+    /// unless `--extend-existing` was passed).
+    pub delegations_aborted: Vec<RuntimeDelegation>,
     pub role_gaps: Vec<String>,
     pub mission_config: MissionConfig,
+    /// Subagent `.md` files (under `~/.claude/agents/`) that were written or
+    /// regenerated during this spawn. Empty in `dry_run`.
+    pub subagent_files_written: Vec<PathBuf>,
+    /// Existing subagent `.md` files that already satisfy the minimums check
+    /// and were respected (not overwritten).
+    pub subagent_files_respected: Vec<PathBuf>,
 }
 
 /// A ready-to-paste agent prompt with mission marker.
@@ -89,6 +103,10 @@ pub struct AgentConfig {
     pub role_id: String,
     pub role_name: String,
     pub claude_md_path: PathBuf,
+    /// The CLAUDE.md content. Always populated so callers can use it
+    /// without a disk read (important under `dry_run`, where
+    /// `claude_md_path` points at a file that was NOT persisted).
+    pub claude_md_content: String,
 }
 
 /// Reviewer lead assignment based on ELO
@@ -282,6 +300,8 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 /// If `elo_ratings` is provided, the highest-ELO agent is assigned as reviewer lead.
 /// If `config_dir` is provided and mission text matches prompt review keywords,
 /// the prompt review context is injected into all agents' CLAUDE.md files.
+/// If `manifest` is provided, per-role scope, task, and review protocol sections
+/// are appended to every generated CLAUDE.md using `emitters::claude_code` helpers.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_mission(
     mission: &str,
@@ -292,10 +312,58 @@ pub fn generate_mission(
     session_id: Option<&str>,
     elo_ratings: &[AgentRating],
     config_dir: Option<&Path>,
+    manifest: Option<&crate::mission_manifest::MissionManifest>,
+    dry_run: bool,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
-    // Assign reviewer lead: highest ELO among mission roles, or fallback to high trust level
+    // M7.3 invariant guardrail: every multi-agent mission requires exactly one
+    // role with role_type: "auditor" to centralize review. Peer-review-by-ELO
+    // is a misconception — ELO is an output of the review system (calibrated
+    // via `calibrate_auditor`), not a criterion to pick who audits. Solo
+    // missions (single role) skip this check since there is no peer review.
+    // See CLAUDE.md §Missions & Agent Identity, and the architectural memory
+    // `project_auditor_centralized_invariant.md`.
+    if recommendation.role_assignments.len() >= 2 {
+        let auditor_count = recommendation
+            .role_assignments
+            .iter()
+            .filter_map(|a| role_map.get(a.role_id.as_str()).copied())
+            .filter(|r| r.role_type.as_deref() == Some("auditor"))
+            .count();
+        if auditor_count == 0 {
+            anyhow::bail!(
+                "Mission squad has no role with `role_type: auditor`. Every multi-agent \
+                 mission requires exactly one centralized auditor role (see CLAUDE.md \
+                 §Missions & Agent Identity). Add an auditor-typed role to the pattern's \
+                 topology, or mark an existing role with `role_type: auditor` in its YAML."
+            );
+        }
+        if auditor_count > 1 {
+            anyhow::bail!(
+                "Mission squad has {} roles with `role_type: auditor`. Every mission \
+                 requires exactly one centralized auditor role — reduce to a single \
+                 auditor to keep calibration standards consistent.",
+                auditor_count
+            );
+        }
+    }
+
+    // Discover the auditor once; downstream `build_review_section` uses this
+    // to centralize review routing regardless of ELO ranking.
+    let auditor_assignment: Option<&RoleAssignment> =
+        recommendation.role_assignments.iter().find(|a| {
+            role_map
+                .get(a.role_id.as_str())
+                .map(|r| r.role_type.as_deref() == Some("auditor"))
+                .unwrap_or(false)
+        });
+    let auditor_role_id: Option<&str> = auditor_assignment.map(|a| a.role_id.as_str());
+    let auditor_role_name: Option<&str> = auditor_assignment.map(|a| a.role_name.as_str());
+
+    // Assign reviewer lead (legacy; kept for struct backward-compat, ignored by
+    // the active review routing logic). Scheduled for removal in follow-up
+    // refactor — see `project_reviewerlead_cleanup_pending.md`.
     let reviewer_lead = assign_reviewer_lead(recommendation, &role_map, elo_ratings);
 
     // Detect if this is a prompt review mission
@@ -326,8 +394,10 @@ pub fn generate_mission(
     let mission_dir = missions_dir.join(&mission_name);
     let agents_dir = mission_dir.join("agents");
 
-    std::fs::create_dir_all(&agents_dir)
-        .with_context(|| format!("Failed to create mission dir: {}", mission_dir.display()))?;
+    if !dry_run {
+        std::fs::create_dir_all(&agents_dir)
+            .with_context(|| format!("Failed to create mission dir: {}", mission_dir.display()))?;
+    }
 
     // Write mission.yaml
     let mission_yaml = format!(
@@ -343,17 +413,26 @@ pub fn generate_mission(
             .collect::<Vec<_>>()
             .join("\n")
     );
-    std::fs::write(mission_dir.join("mission.yaml"), &mission_yaml)?;
+    if !dry_run {
+        std::fs::write(mission_dir.join("mission.yaml"), &mission_yaml)?;
+    }
 
     // Generate CLAUDE.md per agent + role-bound delegations
     let mut agent_configs = Vec::new();
     let mut delegations = Vec::new();
     let now = Utc::now();
-    let ttl = chrono::Duration::hours(DEFAULT_MISSION_TTL_HOURS);
+    // M7.3 fix: honour manifest.mission_ttl_hours for delegation TTL so that
+    // generated delegations expire with the mission, not at the hardcoded default.
+    let ttl_hours = manifest
+        .map(|m| m.mission_ttl_hours)
+        .unwrap_or(DEFAULT_MISSION_TTL_HOURS);
+    let ttl = chrono::Duration::hours(ttl_hours);
 
     for assignment in &recommendation.role_assignments {
         let agent_dir = agents_dir.join(&assignment.role_id);
-        std::fs::create_dir_all(&agent_dir)?;
+        if !dry_run {
+            std::fs::create_dir_all(&agent_dir)?;
+        }
 
         let role = role_map.get(assignment.role_id.as_str())
             .ok_or_else(|| anyhow::anyhow!(
@@ -380,6 +459,8 @@ pub fn generate_mission(
             &mission_name,
             &recommendation.role_assignments,
             role.role_type.as_deref(),
+            auditor_role_id,
+            auditor_role_name,
         );
 
         // Append prompt review context if this is a prompt review mission
@@ -392,13 +473,62 @@ pub fn generate_mission(
             String::new()
         };
 
-        // Build CLAUDE.md combining role prompt + mission context + permissions + review
-        let claude_md = if review_context_section.is_empty() {
+        // Manifest-driven sections (M7.3): scope + task + review protocol.
+        // Empty strings if no manifest — the existing prompt structure is preserved.
+        let manifest_role = manifest.and_then(|m| m.role(&assignment.role_id));
+        let scope_section = manifest_role
+            .map(|r| crate::emitters::claude_code::scope_block(&r.scope.owns, &r.scope.forbidden))
+            .unwrap_or_default();
+        let task_section = manifest_role
+            .map(|r| crate::emitters::claude_code::task_block(&r.task))
+            .unwrap_or_default();
+        // M7.3 fix: role_type=auditor is exempt from submitting artifact reviews
+        // (it evaluates others via review_evaluate, it doesn't author work that
+        // needs peer review). Emitting a MANDATORY review_submit block would
+        // trap the auditor under SubagentStop with nothing valid to submit.
+        let review_protocol_section =
+            if manifest.is_some() && role.role_type.as_deref() != Some("auditor") {
+                // Identify the auditor in the squad, if any.
+                let auditor_role_id: Option<String> =
+                    recommendation.role_assignments.iter().find_map(|a| {
+                        role_map
+                            .get(a.role_id.as_str())
+                            .filter(|r| r.role_type.as_deref() == Some("auditor"))
+                            .map(|_| a.role_id.clone())
+                    });
+                // Centralize reviews to the auditor when present (matches the ELO
+                // success recipe — centralized-auditor pattern). Otherwise fall
+                // back to the full pool of non-author roles.
+                let available_roles: Vec<String> = match auditor_role_id {
+                    Some(auditor_id) if auditor_id != assignment.role_id => vec![auditor_id],
+                    _ => recommendation
+                        .role_assignments
+                        .iter()
+                        .filter(|a| a.role_id != assignment.role_id)
+                        .map(|a| a.role_id.clone())
+                        .collect(),
+                };
+                // M7.3 fix: the mission_id passed to review_submit MUST match the
+                // mission_id stamped onto delegations and the Mission Gate marker.
+                // All three use `mission_name` (date-prefixed slug), so the prompt
+                // follows suit — otherwise review_submit() lands under an id that
+                // matches no delegation and the ELO cycle silently breaks.
+                crate::emitters::claude_code::review_protocol_block(
+                    &mission_name,
+                    &assignment.role_id,
+                    &available_roles,
+                )
+            } else {
+                String::new()
+            };
+
+        // Compose base CLAUDE.md (existing structure, unchanged semantics)
+        let base_md = if review_context_section.is_empty() {
             format!(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -421,7 +551,7 @@ pub fn generate_mission(
                 "{}\n\n---\n\n## Mission\n\n{}\n\n## Your Role in This Mission\n\n\
                 You are the **{}** ({}) in a **{}** pattern.\n\
                 Your slot: **{}**\n\n\
-                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n\n---\n\n{}\n",
+                ## Team\n\n{}\n\n## Trust Level\n\n{}\n\n{}\n\n{}{}\n\n---\n\n{}",
                 system_prompt,
                 mission,
                 assignment.role_name,
@@ -442,13 +572,22 @@ pub fn generate_mission(
             )
         };
 
+        // Append manifest sections after base (empty strings when no manifest).
+        let claude_md = format!(
+            "{}\n{}{}{}\n",
+            base_md, scope_section, task_section, review_protocol_section
+        );
+
         let claude_md_path = agent_dir.join("CLAUDE.md");
-        std::fs::write(&claude_md_path, &claude_md)?;
+        if !dry_run {
+            std::fs::write(&claude_md_path, &claude_md)?;
+        }
 
         agent_configs.push(AgentConfig {
             role_id: assignment.role_id.clone(),
             role_name: assignment.role_name.clone(),
             claude_md_path,
+            claude_md_content: claude_md,
         });
     }
 
@@ -475,7 +614,12 @@ fn generate_role_delegations(
     // File-based tools that support path_within scoping
     let file_tools: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep"];
 
-    for tool in &role.tools_allowed {
+    // M7.3: bundle ELO-cycle tools (review_submit + review_evaluate + findings_query)
+    // alongside whatever the role YAML declares, so any role in a mission can act
+    // as author AND as reviewer without the operator having to update every YAML.
+    let mission_tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
+
+    for tool in &mission_tools {
         if tool == "Bash" {
             // Bash: if role has bash_patterns, create one delegation per pattern
             if let Some(ref perms) = role.permissions {
@@ -571,7 +715,11 @@ fn format_pre_approved_ops(role: &Role) -> String {
         "The following operations are pre-approved for your role in this mission:".to_string(),
     );
 
-    for tool in &role.tools_allowed {
+    // Stay consistent with generate_role_delegations: show ELO-cycle MCP tools
+    // in the brief even if the role YAML doesn't list them explicitly.
+    let mission_tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
+
+    for tool in &mission_tools {
         if tool == "Bash" {
             if let Some(ref perms) = role.permissions {
                 if !perms.bash_patterns.is_empty() {
@@ -681,46 +829,48 @@ fn assign_reviewer_lead(
 }
 
 /// Build review instructions section for a CLAUDE.md based on the agent's role.
+///
+/// M7.3 invariant: when the squad contains a `role_type: auditor`, review is
+/// centralized on that auditor — the auditor evaluates every worker via
+/// `review_evaluate`, and workers submit with `available_roles: ["auditor"]`.
+/// ELO-based `reviewer_lead` is ignored in this mode (kept in the signature
+/// for backward compat; scheduled for removal in a follow-up refactor).
+///
+/// The legacy reviewer-by-ELO path only fires for degenerate single-agent
+/// missions (no peer review) or hypothetical no-auditor squads (which the
+/// generate_mission guardrail now rejects for multi-agent cases).
+#[allow(clippy::too_many_arguments)]
 fn build_review_section(
     role_id: &str,
     reviewer_lead: &Option<ReviewerLead>,
     mission_id: &str,
     all_assignments: &[RoleAssignment],
     role_type: Option<&str>,
+    auditor_role_id: Option<&str>,
+    auditor_role_name: Option<&str>,
 ) -> String {
-    let reviewer_lead = match reviewer_lead {
-        Some(rl) => rl,
-        None => return String::new(), // Single-agent, no review section
-    };
-
-    let available_roles: Vec<String> = all_assignments
-        .iter()
-        .map(|a| format!("\"{}\"", a.role_id))
-        .collect();
-    let roles_list = available_roles.join(", ");
-
-    if role_id == reviewer_lead.role_id {
-        // This agent IS the reviewer lead
-        let base = format!(
-            "## Review Responsibility\n\n\
-            You are the designated reviewer (highest ELO in this squad, ELO: {}).\n\
-            When you receive review assignments via `mcp__colmena__review_list`:\n\
-            1. Read the artifact (diff/commit) thoroughly\n\
-            2. Call `mcp__colmena__review_evaluate` with scores and findings\n\
-            3. If score < 7.0 or any critical finding: flag for human review, do NOT auto-complete\n\
-            4. Use category `prompt_improvement` for suggestions about the agent's approach or prompt\n\
-            5. Be constructive — findings feed into ELO and help calibrate trust over time",
-            reviewer_lead.elo,
-        );
-
-        // Auditor role_type gets the evaluation protocol
-        if role_type == Some("auditor") {
-            format!(
-                "{}\n\n\
+    // M7.3 centralized-auditor path: when the squad has an auditor, route all
+    // review traffic through it. ELO ranking is irrelevant — the auditor is
+    // the single calibrated standard for evaluation.
+    if let (Some(auditor_id), Some(auditor_name)) = (auditor_role_id, auditor_role_name) {
+        if role_id == auditor_id || role_type == Some("auditor") {
+            // This agent IS the centralized auditor — emit evaluation protocol.
+            return "## Review Responsibility\n\n\
+                You are the centralized auditor for this mission. Every worker's \
+                artifact is routed to you via `mcp__colmena__review_evaluate`. \
+                Your standard (QPC: Quality + Precision + Comprehensiveness) is \
+                what the mission is judged against — stay consistent, the human \
+                calibrates your role over time via `calibrate_auditor`.\n\n\
+                When you receive review assignments via `mcp__colmena__review_list`:\n\
+                1. Read the artifact (diff/commit) thoroughly\n\
+                2. Call `mcp__colmena__review_evaluate` with scores and findings\n\
+                3. If score < 7.0 or any critical finding: flag for human review, do NOT auto-complete\n\
+                4. Use category `prompt_improvement` for suggestions about the agent's approach or prompt\n\
+                5. Be constructive — findings feed into ELO and help calibrate trust over time\n\n\
                 ## Evaluation Protocol\n\n\
                 When evaluating a worker's submission via mcp__colmena__review_evaluate:\n\
                 1. Read the artifact (diff/commit) thoroughly\n\
-                2. Score each dimension: correctness, security, completeness, methodology (1-10 each)\n\
+                2. Score each dimension: quality, precision, comprehensiveness (1-10 each)\n\
                 3. Document your reasoning for each score in the evaluation_narrative field\n\
                 4. Generate 3 alternative evaluation approaches you considered but rejected, explaining why\n\
                 5. List all findings with severity and recommendations\n\
@@ -728,15 +878,11 @@ fn build_review_section(
                 Your evaluation narrative must include:\n\
                 - WHY you assigned each score (not just the numbers)\n\
                 - 3 alternative approaches with different scoring rationale\n\
-                - Which approach you chose and why",
-                base,
-            )
-        } else {
-            base
+                - Which approach you chose and why"
+                .to_string();
         }
-    } else {
-        // This agent is a worker — should submit for review
-        format!(
+        // This agent is a worker — route submission to the auditor.
+        return format!(
             "## Post-Work Protocol\n\n\
             When your work is complete:\n\
             1. Commit all changes to your worktree branch\n\
@@ -744,14 +890,40 @@ fn build_review_section(
             \x20\x20\x20- artifact_path: your worktree branch path or the diff of your changes\n\
             \x20\x20\x20- author_role: \"{role_id}\"\n\
             \x20\x20\x20- mission: \"{mission_id}\"\n\
-            \x20\x20\x20- available_roles: [{roles_list}]\n\
-            3. Your work will be reviewed by **{reviewer_name}** (ELO: {elo})",
+            \x20\x20\x20- available_roles: [\"{auditor_id}\"]\n\
+            3. Your work will be reviewed by **{auditor_name}** (the centralized auditor for this mission)",
             role_id = role_id,
             mission_id = mission_id,
-            roles_list = roles_list,
-            reviewer_name = reviewer_lead.role_name,
-            elo = reviewer_lead.elo,
+            auditor_id = auditor_id,
+            auditor_name = auditor_name,
+        );
+    }
+
+    // Legacy fallback: no auditor in squad (solo-agent missions, or
+    // test-only recommendations). Retained so that existing tests and
+    // single-agent flows keep working. The generate_mission guardrail
+    // rejects multi-agent squads without an auditor, so this branch is
+    // dead for real multi-agent missions.
+    let _ = mission_id;
+    let _ = all_assignments;
+    let _ = role_type;
+    let reviewer_lead = match reviewer_lead {
+        Some(rl) => rl,
+        None => return String::new(),
+    };
+    if role_id == reviewer_lead.role_id {
+        format!(
+            "## Review Responsibility\n\n\
+            You are the designated reviewer (highest ELO in this squad, ELO: {}).\n\
+            When you receive review assignments via `mcp__colmena__review_list`:\n\
+            1. Read the artifact (diff/commit) thoroughly\n\
+            2. Call `mcp__colmena__review_evaluate` with scores and findings\n\
+            3. If score < 7.0 or any critical finding: flag for human review, do NOT auto-complete\n\
+            4. Be constructive — findings feed into ELO and help calibrate trust over time",
+            reviewer_lead.elo,
         )
+    } else {
+        String::new()
     }
 }
 
@@ -1260,35 +1432,74 @@ pub fn suggest_mission_size(
 // ── Mission Spawn — One-Step Pipeline ────────────────────────────────────────
 
 /// One-step mission creation: select pattern → auto-create if needed → map roles →
-/// generate mission with markers → return everything ready to use.
+/// generate mission with markers → persist delegations.
 ///
 /// Pipeline:
 /// 1. `select_patterns()` to find best matching pattern
 /// 2. If no match: `suggest_pattern_for_mission()` → `scaffold_pattern()` to auto-create
-/// 3. `generate_mission()` to create CLAUDE.md files with mission markers
+/// 3. `generate_mission()` to create CLAUDE.md files with mission markers + manifest sections
 /// 4. Read generated CLAUDE.md files to build AgentPrompt with mission marker prefix
-/// 5. Format delegation commands for CLI execution
+/// 5. Persist delegations directly to `runtime_delegations_path` with idempotent merge:
+///    - `decide_merge` picks Insert / SkipRespected / TtlTooShort per candidate.
+///    - TtlTooShort without `extend_existing` aborts the spawn with a descriptive error.
+///    - `dry_run` plans without writing to disk.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_mission(
     mission: &str,
+    manifest: Option<&crate::mission_manifest::MissionManifest>,
     roles: &[Role],
     patterns: &[Pattern],
     library_dir: &Path,
     missions_dir: &Path,
+    runtime_delegations_path: &Path,
+    agents_dir: &Path,
     session_id: Option<&str>,
     elo_ratings: &[AgentRating],
     config_dir: Option<&Path>,
+    extend_existing: bool,
+    dry_run: bool,
+    overwrite_subagents: bool,
 ) -> Result<SpawnResult> {
     if roles.is_empty() {
         anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
     }
 
-    // 1. Select best pattern
-    let mut recommendations = select_patterns(mission, patterns, roles);
+    let now = Utc::now();
+
+    // 1. Select best pattern.
+    // If a manifest provides an explicit pattern id, try to find it in the
+    // library first (exact id match) before falling back to score-based selection.
+    let manifest_pattern_id = manifest.map(|m| m.pattern.as_str());
+    let mut recommendations = if let Some(pid) = manifest_pattern_id {
+        let exact: Vec<Recommendation> = patterns
+            .iter()
+            .filter(|p| p.id == pid)
+            .map(|p| {
+                let role_map: HashMap<&str, &Role> =
+                    roles.iter().map(|r| (r.id.as_str(), r)).collect();
+                let role_assignments = build_role_assignments(&p.roles_suggested, &role_map);
+                Recommendation {
+                    pattern_id: p.id.clone(),
+                    pattern_name: p.name.clone(),
+                    score: 100.0,
+                    matched_criteria: vec!["Manifest-specified pattern".to_string()],
+                    anti_matched: vec![],
+                    role_assignments,
+                }
+            })
+            .collect();
+        if exact.is_empty() {
+            select_patterns(mission, patterns, roles)
+        } else {
+            exact
+        }
+    } else {
+        select_patterns(mission, patterns, roles)
+    };
     let mut pattern_auto_created = false;
     let mut auto_created_pattern: Option<crate::library::Pattern> = None;
 
-    let recommendation = if recommendations.is_empty() {
+    let mut recommendation = if recommendations.is_empty() {
         // 2. No match — auto-create a pattern
         let suggestion = suggest_pattern_for_mission(mission);
         let pattern_path = scaffold_pattern(
@@ -1358,11 +1569,41 @@ pub fn spawn_mission(
         recommendations.remove(0)
     };
 
+    // 2b. If a manifest provides explicit roles, override the pattern's role
+    // assignments with the manifest's ordered list. This ensures manifest-driven
+    // spawn honours the exact squad the caller specified, regardless of which
+    // pattern was selected or auto-created.
+    if let Some(m) = manifest {
+        if !m.roles.is_empty() {
+            let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
+            let manifest_assignments: Vec<RoleAssignment> = m
+                .roles
+                .iter()
+                .enumerate()
+                .map(|(i, mr)| {
+                    let (name, icon) = role_map
+                        .get(mr.name.as_str())
+                        .map(|r| (r.name.clone(), r.icon.clone()))
+                        .unwrap_or_else(|| (mr.name.clone(), "?".to_string()));
+                    RoleAssignment {
+                        slot: format!("slot_{}", i + 1),
+                        role_id: mr.name.clone(),
+                        role_name: name,
+                        icon,
+                    }
+                })
+                .collect();
+            recommendation.role_assignments = manifest_assignments;
+        }
+    }
+
     // Detect role gaps
     let role_gaps = detect_role_gaps(mission, roles);
 
-    // 3. Generate mission (creates CLAUDE.md + delegations)
-    // Need patterns for generate_mission — use auto-created if applicable
+    // 3. Generate mission (creates CLAUDE.md + delegations).
+    //    Honour `dry_run`: when true, generate_mission composes prompts in
+    //    memory but does NOT create directories or write mission.yaml /
+    //    per-agent CLAUDE.md files.
     let mission_config = generate_mission(
         mission,
         &recommendation,
@@ -1372,6 +1613,8 @@ pub fn spawn_mission(
         session_id,
         elo_ratings,
         config_dir,
+        manifest,
+        dry_run,
     )?;
 
     let mission_name = mission_config
@@ -1386,10 +1629,9 @@ pub fn spawn_mission(
     let mut agent_prompts = Vec::new();
 
     for agent_cfg in &mission_config.agent_configs {
-        let claude_md_content = std::fs::read_to_string(&agent_cfg.claude_md_path)
-            .with_context(|| format!("Failed to read CLAUDE.md for {}", agent_cfg.role_id))?;
-
-        let prompt = format!("{}\n{}", mission_marker, claude_md_content);
+        // Use the in-memory content so dry_run works — the CLAUDE.md file
+        // may not exist on disk when generate_mission was called with dry_run.
+        let prompt = format!("{}\n{}", mission_marker, agent_cfg.claude_md_content);
 
         agent_prompts.push(AgentPrompt {
             role_id: agent_cfg.role_id.clone(),
@@ -1399,30 +1641,160 @@ pub fn spawn_mission(
         });
     }
 
-    // 5. Format delegation CLI commands
-    let delegation_commands: Vec<String> = mission_config
-        .delegations
-        .iter()
-        .map(|d| {
-            let mut cmd = format!("colmena delegate add --tool {}", d.tool);
-            if let Some(ref agent) = d.agent_id {
-                cmd.push_str(&format!(" --agent {}", agent));
+    // 4b. M7.3 live-surface: write ~/.claude/agents/<role>.md for each mission role.
+    //     Respect operator-authored files that satisfy minimums; abort loud otherwise
+    //     unless overwrite_subagents is true.
+    let role_map_for_subagents: std::collections::HashMap<&str, &Role> =
+        roles.iter().map(|r| (r.id.as_str(), r)).collect();
+
+    let mut subagent_files_written: Vec<PathBuf> = Vec::new();
+    let mut subagent_files_respected: Vec<PathBuf> = Vec::new();
+    let mut subagent_fails: Vec<(String, Vec<String>)> = Vec::new();
+
+    for assignment in &recommendation.role_assignments {
+        let role = role_map_for_subagents
+            .get(assignment.role_id.as_str())
+            .ok_or_else(|| anyhow::anyhow!("role not in map: {}", assignment.role_id))?;
+
+        let subagent_path = agents_dir.join(format!("{}.md", assignment.role_id));
+
+        // Hybrid roles (auditor) need both worker and reviewer tools.
+        let mut required: Vec<&str> = crate::emitters::claude_code::WORKER_REQUIRED_TOOLS.to_vec();
+        if role.role_type.as_deref() == Some("auditor") {
+            required.extend_from_slice(crate::emitters::claude_code::REVIEWER_REQUIRED_TOOLS);
+        }
+
+        let check = crate::emitters::claude_code::check_subagent_minimums(
+            &subagent_path,
+            &assignment.role_id,
+            &required,
+        )?;
+
+        match check {
+            crate::emitters::claude_code::MinimumsCheck::Pass => {
+                subagent_files_respected.push(subagent_path.clone());
             }
-            if let Some(ref conds) = d.conditions {
-                if let Some(ref bp) = conds.bash_pattern {
-                    cmd.push_str(&format!(" --bash-pattern '{}'", bp));
+            crate::emitters::claude_code::MinimumsCheck::Fail { reasons } => {
+                if overwrite_subagents {
+                    if !dry_run {
+                        let body = format!(
+                            "# {role_name} ({role_id})\n\n\
+                             Auto-generated by Colmena `mission spawn`. See \
+                             `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
+                            role_name = assignment.role_name,
+                            role_id = assignment.role_id,
+                            mission_dir = mission_config.mission_dir.display(),
+                        );
+                        crate::emitters::claude_code::write_subagent_file(
+                            &subagent_path,
+                            &assignment.role_id,
+                            &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
+                            &body,
+                            true, // overwrite
+                        )?;
+                    }
+                    subagent_files_written.push(subagent_path.clone());
+                } else {
+                    subagent_fails.push((assignment.role_id.clone(), reasons));
                 }
             }
-            cmd.push_str(" --ttl 8");
-            if let Some(ref sid) = session_id
-                .map(|s| s.to_string())
-                .or_else(|| d.session_id.clone())
-            {
-                cmd.push_str(&format!(" --session {}", sid));
+            crate::emitters::claude_code::MinimumsCheck::Absent => {
+                if !dry_run {
+                    let body = format!(
+                        "# {role_name} ({role_id})\n\n\
+                         Auto-generated by Colmena `mission spawn`. See \
+                         `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
+                        role_name = assignment.role_name,
+                        role_id = assignment.role_id,
+                        mission_dir = mission_config.mission_dir.display(),
+                    );
+                    crate::emitters::claude_code::write_subagent_file(
+                        &subagent_path,
+                        &assignment.role_id,
+                        &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
+                        &body,
+                        false,
+                    )?;
+                }
+                subagent_files_written.push(subagent_path.clone());
             }
-            cmd
-        })
-        .collect();
+        }
+    }
+
+    if !subagent_fails.is_empty() {
+        let detail = subagent_fails
+            .iter()
+            .map(|(id, reasons)| format!("  {}:\n    - {}", id, reasons.join("\n    - ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        anyhow::bail!(
+            "Subagent file(s) exist but do not satisfy minimums. Re-run with \
+             --overwrite to regenerate (a .colmena-backup will be kept).\n{}",
+            detail
+        );
+    }
+
+    // 5. Persist delegations directly to runtime-delegations.json with idempotency.
+    //    Replaces the old `delegation_commands: Vec<String>` which emitted a
+    //    non-existent `--bash-pattern` CLI flag.
+    let ttl_hours = manifest
+        .map(|m| m.mission_ttl_hours)
+        .unwrap_or(DEFAULT_MISSION_TTL_HOURS);
+    let mission_end_at = now + chrono::Duration::hours(ttl_hours);
+
+    let existing_delegations = crate::delegate::load_delegations(runtime_delegations_path);
+
+    let mut delegations_to_insert: Vec<RuntimeDelegation> = Vec::new();
+    let mut delegations_skipped: Vec<(RuntimeDelegation, chrono::DateTime<Utc>)> = Vec::new();
+    let mut delegations_aborted: Vec<RuntimeDelegation> = Vec::new();
+
+    for candidate in &mission_config.delegations {
+        use crate::delegate::{decide_merge, MergeDecision};
+        match decide_merge(candidate, &existing_delegations, mission_end_at) {
+            MergeDecision::Insert => {
+                delegations_to_insert.push(candidate.clone());
+            }
+            MergeDecision::SkipRespected {
+                existing_expires_at,
+            } => {
+                delegations_skipped.push((candidate.clone(), existing_expires_at));
+            }
+            MergeDecision::TtlTooShort { .. } => {
+                if extend_existing {
+                    delegations_to_insert.push(candidate.clone());
+                } else {
+                    delegations_aborted.push(candidate.clone());
+                }
+            }
+        }
+    }
+
+    if !delegations_aborted.is_empty() {
+        anyhow::bail!(
+            "{} delegation(s) have TTL shorter than mission end. Re-run with --extend-existing to replace them, or revoke them manually first. Affected: {}",
+            delegations_aborted.len(),
+            delegations_aborted
+                .iter()
+                .map(|d| format!("{}/{}", d.tool, d.agent_id.clone().unwrap_or_default()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if !dry_run && !delegations_to_insert.is_empty() {
+        // Merge: drop existing entries whose (tool, agent_id) is being replaced
+        // (only meaningful when --extend-existing upgraded a TtlTooShort), then append.
+        let mut merged: Vec<RuntimeDelegation> = existing_delegations
+            .into_iter()
+            .filter(|e| {
+                !delegations_to_insert
+                    .iter()
+                    .any(|c| c.tool == e.tool && c.agent_id == e.agent_id)
+            })
+            .collect();
+        merged.extend(delegations_to_insert.iter().cloned());
+        crate::delegate::save_delegations(runtime_delegations_path, &merged)?;
+    }
 
     // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
     let _ = &auto_created_pattern; // suppress unused warning
@@ -1432,9 +1804,13 @@ pub fn spawn_mission(
         pattern_id: recommendation.pattern_id,
         pattern_auto_created,
         agent_prompts,
-        delegation_commands,
+        delegations_created: delegations_to_insert,
+        delegations_skipped,
+        delegations_aborted: Vec::new(), // empty when we reach here (bail'd otherwise)
         role_gaps,
         mission_config,
+        subagent_files_written,
+        subagent_files_respected,
     })
 }
 
@@ -1492,6 +1868,16 @@ mod tests {
 
     fn make_role(id: &str, name: &str, specializations: Vec<&str>) -> Role {
         use crate::library::{EloConfig, MentoringConfig};
+        // M7.3 convention: tests use `id = "auditor"` to construct the
+        // centralized auditor role. Real role YAMLs must set `role_type:
+        // auditor` explicitly; the helper defaults it here so existing test
+        // fixtures keep passing the `generate_mission` invariant guardrail
+        // without every test having to set the field manually.
+        let role_type = if id == "auditor" {
+            Some("auditor".to_string())
+        } else {
+            None
+        };
         Role {
             id: id.to_string(),
             name: name.to_string(),
@@ -1506,7 +1892,7 @@ mod tests {
                 categories: Default::default(),
             },
             permissions: None,
-            role_type: None,
+            role_type,
             mentoring: MentoringConfig {
                 can_mentor: vec![],
                 mentored_by: vec![],
@@ -1748,8 +2134,10 @@ mod tests {
             &library_dir,
             &missions_dir,
             None,
-            &[],  // no ELO ratings — uncalibrated
-            None, // no config_dir — no prompt review detection
+            &[],   // no ELO ratings — uncalibrated
+            None,  // no config_dir — no prompt review detection
+            None,  // no manifest
+            false, // dry_run: test writes to disk
         )
         .expect("generate_mission should succeed");
 
@@ -2177,10 +2565,16 @@ mod tests {
             "# Pentester\n\nYou find vulnerabilities.",
         )
         .unwrap();
+        std::fs::write(
+            library_dir.join("prompts/auditor.md"),
+            "# Auditor\n\nSystem prompt.",
+        )
+        .unwrap();
 
         let roles = vec![
             make_role("security_architect", "Security Architect", vec!["audit"]),
             make_role("pentester", "Pentester", vec!["pentesting"]),
+            make_role("auditor", "Auditor", vec!["compliance"]),
         ];
 
         let rec = Recommendation {
@@ -2197,10 +2591,16 @@ mod tests {
                     icon: "🗡️".to_string(),
                 },
                 RoleAssignment {
-                    slot: "judge".to_string(),
+                    slot: "debater_defense".to_string(),
                     role_id: "security_architect".to_string(),
                     role_name: "Security Architect".to_string(),
                     icon: "🔒".to_string(),
+                },
+                RoleAssignment {
+                    slot: "judge".to_string(),
+                    role_id: "auditor".to_string(),
+                    role_name: "Auditor".to_string(),
+                    icon: "📋".to_string(),
                 },
             ],
         };
@@ -2215,6 +2615,8 @@ mod tests {
             None,
             &[],
             Some(config_dir),
+            None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2291,6 +2693,8 @@ mod tests {
             None,
             &[],
             Some(config_dir),
+            None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2508,6 +2912,8 @@ mod tests {
             None,
             &[],
             None,
+            None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2568,6 +2974,8 @@ mod tests {
             None,
             &[],
             None,
+            None,
+            false,
         )
         .expect("generate_mission should succeed");
 
@@ -2624,15 +3032,23 @@ mod tests {
             vec![("agent", "developer"), ("critic", "auditor")],
         )];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
         let result = spawn_mission(
             "implement feature with code review",
+            None, // manifest
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
+            false, // overwrite_subagents
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -2648,7 +3064,11 @@ mod tests {
                 ap.role_id
             );
         }
-        assert!(!spawn.delegation_commands.is_empty());
+        // Delegations should have been persisted (either created or skipped — non-empty for this role set).
+        assert!(
+            !spawn.delegations_created.is_empty() || !spawn.delegations_skipped.is_empty(),
+            "should have created or skipped delegations"
+        );
     }
 
     // ── 20. spawn_mission — auto-creates pattern ────────────────────────────
@@ -2669,15 +3089,23 @@ mod tests {
         // Empty patterns — will auto-create
         let patterns: Vec<Pattern> = vec![];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
         let result = spawn_mission(
             "do something completely unique",
+            None, // manifest
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
+            false, // overwrite_subagents
         );
         assert!(
             result.is_ok(),
@@ -2700,15 +3128,23 @@ mod tests {
         std::fs::create_dir_all(&library_dir).unwrap();
         std::fs::create_dir_all(&missions_dir).unwrap();
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
         let result = spawn_mission(
             "some mission",
+            None, // manifest
             &[],
             &[],
             &library_dir,
             &missions_dir,
-            None,
-            &[],
-            None,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
+            false, // overwrite_subagents
         );
         assert!(
             result.is_err(),
@@ -2725,10 +3161,10 @@ mod tests {
         assert!(MISSION_MARKER_PREFIX.contains("colmena:mission_id="));
     }
 
-    // ── 23. spawn_mission — delegation commands ─────────────────────────────
+    // ── 23. spawn_mission — delegations persisted to runtime-delegations.json ──
 
     #[test]
-    fn test_spawn_mission_includes_delegation_commands() {
+    fn test_spawn_mission_persists_delegations() {
         let tmp = tempfile::tempdir().unwrap();
         let library_dir = tmp.path().join("library");
         let missions_dir = tmp.path().join("missions");
@@ -2741,6 +3177,13 @@ mod tests {
 
         let mut dev = make_role("developer", "Developer", vec!["code_writing"]);
         dev.tools_allowed = vec!["Read".to_string(), "Write".to_string(), "Bash".to_string()];
+        // Bash delegations require a scope condition — give the dev a bash_pattern
+        // so `save_delegations` accepts the generated entry.
+        dev.permissions = Some(crate::library::RolePermissions {
+            bash_patterns: vec!["^cargo (test|build|check)".to_string()],
+            path_within: vec![],
+            path_not_match: vec![],
+        });
         let roles = vec![dev, make_role("auditor", "Auditor", vec!["audit"])];
 
         let patterns = vec![make_pattern(
@@ -2751,30 +3194,434 @@ mod tests {
             vec![("agent", "developer"), ("critic", "auditor")],
         )];
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
         let result = spawn_mission(
             "implement feature with code review",
+            None, // manifest
             &roles,
             &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,  // session_id
+            &[],   // elo_ratings
+            None,  // config_dir
+            false, // extend_existing
+            false, // dry_run
+            false, // overwrite_subagents
+        )
+        .unwrap();
+
+        // Delegations should have been created (fresh store — no existing delegations).
+        assert!(
+            !result.delegations_created.is_empty(),
+            "should have created delegations"
+        );
+        assert!(
+            result.delegations_skipped.is_empty(),
+            "nothing to skip on a fresh store"
+        );
+        assert!(result.delegations_aborted.is_empty(), "no aborts when Ok");
+
+        // Verify the runtime-delegations.json file was actually written.
+        assert!(
+            runtime_delegations_path.exists(),
+            "runtime-delegations.json should have been persisted"
+        );
+        let persisted = crate::delegate::load_delegations(&runtime_delegations_path);
+        assert!(
+            !persisted.is_empty(),
+            "persisted delegations should be non-empty"
+        );
+        // Sanity: created delegations match what we persisted.
+        assert_eq!(
+            persisted.len(),
+            result.delegations_created.len(),
+            "persisted count should equal delegations_created count on a fresh store"
+        );
+    }
+
+    // ── 23a+. M7.3 post-dogfood: ELO-cycle tool bundling + centralized auditor ─
+
+    #[test]
+    fn test_generate_role_delegations_bundles_elo_cycle_tools() {
+        // Mirror of the bug found in 2026-04-21 dogfood: role YAML only declares
+        // review_submit, but mission_spawn must still delegate review_evaluate
+        // so the role can act as reviewer without the operator gluing it.
+        let mut dev = make_role("developer", "Developer", vec!["code_writing"]);
+        dev.tools_allowed = vec![
+            "Read".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+        ];
+
+        let tmp = tempfile::tempdir().unwrap();
+        let delegations = generate_role_delegations(
+            &dev,
+            "2026-04-21-test-mission",
+            tmp.path(),
+            None,
+            Utc::now(),
+            chrono::Duration::hours(8),
+        );
+
+        let tools: Vec<&str> = delegations.iter().map(|d| d.tool.as_str()).collect();
+        assert!(
+            tools.contains(&"mcp__colmena__review_submit"),
+            "review_submit must be delegated (was in YAML): {:?}",
+            tools
+        );
+        assert!(
+            tools.contains(&"mcp__colmena__review_evaluate"),
+            "review_evaluate MUST be auto-bundled even though YAML omits it: {:?}",
+            tools
+        );
+        assert!(
+            tools.contains(&"mcp__colmena__findings_query"),
+            "findings_query must remain delegated: {:?}",
+            tools
+        );
+    }
+
+    // ── M7.3 build_review_section auditor-centric routing ───────────────────
+
+    #[test]
+    fn test_build_review_section_auditor_gets_review_responsibility() {
+        // When the agent IS the auditor (by id match), it must receive the
+        // Review Responsibility + Evaluation Protocol sections, NOT a
+        // Post-Work Protocol. The auditor evaluates, it does not submit.
+        let assignments = vec![
+            RoleAssignment {
+                slot: "worker".to_string(),
+                role_id: "developer".to_string(),
+                role_name: "Developer".to_string(),
+                icon: "💻".to_string(),
+            },
+            RoleAssignment {
+                slot: "judge".to_string(),
+                role_id: "auditor".to_string(),
+                role_name: "Auditor".to_string(),
+                icon: "📋".to_string(),
+            },
+        ];
+
+        // Pass an ELO-based reviewer_lead that picks the DEVELOPER (not the
+        // auditor) to prove the new routing ignores ELO ranking entirely.
+        let misleading_lead = Some(ReviewerLead {
+            role_id: "developer".to_string(),
+            role_name: "Developer".to_string(),
+            elo: 2000,
+            review_count: 50,
+        });
+
+        let section = build_review_section(
+            "auditor",
+            &misleading_lead,
+            "m73-test-mission",
+            &assignments,
+            Some("auditor"),
+            Some("auditor"),
+            Some("Auditor"),
+        );
+
+        assert!(
+            section.contains("## Review Responsibility"),
+            "auditor must receive Review Responsibility; got:\n{}",
+            section
+        );
+        assert!(
+            section.contains("## Evaluation Protocol"),
+            "auditor must receive Evaluation Protocol; got:\n{}",
+            section
+        );
+        assert!(
+            !section.contains("## Post-Work Protocol"),
+            "auditor must NOT receive Post-Work Protocol (does not submit); got:\n{}",
+            section
+        );
+        assert!(
+            !section.contains("ELO: 2000"),
+            "auditor routing must ignore ELO-based reviewer_lead; got:\n{}",
+            section
+        );
+    }
+
+    #[test]
+    fn test_build_review_section_worker_points_to_auditor_regardless_of_elo() {
+        // When the agent is a worker, Post-Work Protocol must route to the
+        // auditor (available_roles: ["auditor"]) regardless of the ELO-based
+        // reviewer_lead. ELO is an output of review, not a criterion for
+        // picking reviewers.
+        let assignments = vec![
+            RoleAssignment {
+                slot: "worker".to_string(),
+                role_id: "developer".to_string(),
+                role_name: "Developer".to_string(),
+                icon: "💻".to_string(),
+            },
+            RoleAssignment {
+                slot: "judge".to_string(),
+                role_id: "auditor".to_string(),
+                role_name: "Auditor".to_string(),
+                icon: "📋".to_string(),
+            },
+        ];
+
+        // reviewer_lead points at developer itself (as if ELO ranked workers
+        // against each other) — the new routing must ignore this entirely.
+        let legacy_lead = Some(ReviewerLead {
+            role_id: "developer".to_string(),
+            role_name: "Developer".to_string(),
+            elo: 1800,
+            review_count: 20,
+        });
+
+        let section = build_review_section(
+            "developer",
+            &legacy_lead,
+            "m73-test-mission",
+            &assignments,
+            None,
+            Some("auditor"),
+            Some("Auditor"),
+        );
+
+        assert!(
+            section.contains("## Post-Work Protocol"),
+            "worker must receive Post-Work Protocol; got:\n{}",
+            section
+        );
+        assert!(
+            section.contains("available_roles: [\"auditor\"]"),
+            "worker review_submit must centralize on auditor; got:\n{}",
+            section
+        );
+        assert!(
+            section.contains("reviewed by **Auditor**"),
+            "worker must know reviewer is the centralized auditor; got:\n{}",
+            section
+        );
+        assert!(
+            !section.contains("ELO: 1800"),
+            "worker routing must ignore ELO-based reviewer_lead; got:\n{}",
+            section
+        );
+        assert!(
+            !section.contains("## Review Responsibility"),
+            "worker must NOT receive Review Responsibility; got:\n{}",
+            section
+        );
+    }
+
+    #[test]
+    fn test_generate_mission_fails_without_auditor_invariant() {
+        // Multi-agent missions without any role_type=auditor must fail at
+        // generate_mission with a clear invariant-violation error message.
+        // See CLAUDE.md §Missions & Agent Identity.
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev").unwrap();
+        std::fs::write(library_dir.join("prompts/pentester.md"), "# Pentester").unwrap();
+
+        // Two workers, no auditor — invariant violation.
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("pentester", "Pentester", vec!["pentesting"]),
+        ];
+
+        let rec = Recommendation {
+            pattern_id: "peer".to_string(),
+            pattern_name: "Peer".to_string(),
+            score: 3.0,
+            matched_criteria: vec![],
+            anti_matched: vec![],
+            role_assignments: vec![
+                RoleAssignment {
+                    slot: "worker_a".to_string(),
+                    role_id: "developer".to_string(),
+                    role_name: "Developer".to_string(),
+                    icon: "💻".to_string(),
+                },
+                RoleAssignment {
+                    slot: "worker_b".to_string(),
+                    role_id: "pentester".to_string(),
+                    role_name: "Pentester".to_string(),
+                    icon: "🗡️".to_string(),
+                },
+            ],
+        };
+
+        let result = generate_mission(
+            "review this thing",
+            &rec,
+            &roles,
             &library_dir,
             &missions_dir,
             None,
             &[],
             None,
+            None,
+            false,
+        );
+
+        assert!(
+            result.is_err(),
+            "generate_mission must reject multi-agent squad without auditor"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("role_type: auditor"),
+            "error must cite role_type: auditor; got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_spawn_mission_centralizes_review_to_auditor_when_present() {
+        use crate::mission_manifest::MissionManifest;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let dev = make_role("developer", "Developer", vec!["code_writing"]);
+        let mut auditor = make_role("auditor", "Auditor", vec!["audit"]);
+        auditor.role_type = Some("auditor".to_string());
+        let roles = vec![dev, auditor];
+
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let manifest = MissionManifest::from_yaml(
+            "id: m73-centralize-test\n\
+             pattern: code-review-cycle\n\
+             mission_ttl_hours: 1\n\
+             roles:\n  \
+               - name: developer\n    \
+                 task: Implement feature\n  \
+               - name: auditor\n    \
+                 task: Evaluate developer work\n",
         )
         .unwrap();
 
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
+        let result = spawn_mission(
+            "implement feature with code review",
+            Some(&manifest),
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,
+            &[],
+            None,
+            false,
+            false,
+            true, // overwrite_subagents
+        )
+        .unwrap();
+
+        let dev_md_path = result
+            .agent_prompts
+            .iter()
+            .find(|p| p.role_id == "developer")
+            .expect("developer prompt should exist")
+            .claude_md_path
+            .clone();
+        let dev_md = std::fs::read_to_string(&dev_md_path).unwrap();
         assert!(
-            !result.delegation_commands.is_empty(),
-            "should have delegation commands"
+            dev_md.contains("available_roles: [\"auditor\"]"),
+            "developer review_submit must centralize on auditor; got:\n{}",
+            dev_md
         );
-        // Commands should reference `colmena delegate add`
-        for cmd in &result.delegation_commands {
-            assert!(
-                cmd.starts_with("colmena delegate add"),
-                "cmd should start with delegate add: {}",
-                cmd
-            );
-        }
+
+        let auditor_md_path = result
+            .agent_prompts
+            .iter()
+            .find(|p| p.role_id == "auditor")
+            .expect("auditor prompt should exist")
+            .claude_md_path
+            .clone();
+        let auditor_md = std::fs::read_to_string(&auditor_md_path).unwrap();
+        assert!(
+            !auditor_md.contains("## Review Protocol — MANDATORY"),
+            "auditor (role_type=auditor) must be exempt from review_submit block; got:\n{}",
+            auditor_md
+        );
+    }
+
+    // ── 23b. spawn_mission — dry_run does not write to disk ─────────────────
+
+    #[test]
+    fn test_spawn_mission_dry_run_skips_persistence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
+        let result = spawn_mission(
+            "implement feature with code review",
+            None,
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,
+            &[],
+            None,
+            false, // extend_existing
+            true,  // dry_run
+            false, // overwrite_subagents
+        )
+        .unwrap();
+
+        // Plan still computed (we know which delegations would be inserted)…
+        assert!(!result.delegations_created.is_empty());
+        // …but no file was written.
+        assert!(
+            !runtime_delegations_path.exists(),
+            "dry_run must NOT write to disk"
+        );
     }
 
     // ── 24. suggest_mission_size — trivial ──────────────────────────────────

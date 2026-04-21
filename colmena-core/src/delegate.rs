@@ -984,3 +984,149 @@ mod tests {
         assert!(lock_path.exists(), "lock file should be created");
     }
 }
+
+/// Outcome of comparing a candidate delegation with the existing store.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MergeDecision {
+    /// No matching existing delegation — safe to insert.
+    Insert,
+    /// Existing delegation covers this one with TTL ≥ mission_end. Skip insert.
+    SkipRespected { existing_expires_at: DateTime<Utc> },
+    /// Existing delegation expires BEFORE mission_end. Caller must decide
+    /// to abort (default) or extend via `--extend-existing`.
+    TtlTooShort {
+        existing_expires_at: DateTime<Utc>,
+        needed_until: DateTime<Utc>,
+    },
+}
+
+/// Decide how to merge a candidate delegation into the existing store.
+///
+/// Matching key: (tool, agent_id). Conditions are not part of the key — if
+/// a user has a custom `bash_pattern` delegation and the mission wants a
+/// different one, the user's wins (returns SkipRespected with a TTL check).
+///
+/// `mission_end_at` is the time when the mission TTL ends. If the existing
+/// delegation expires AFTER that, we respect the user (SkipRespected). If
+/// BEFORE, we return TtlTooShort so the caller can either abort or extend.
+pub fn decide_merge(
+    candidate: &RuntimeDelegation,
+    existing: &[RuntimeDelegation],
+    mission_end_at: DateTime<Utc>,
+) -> MergeDecision {
+    for e in existing {
+        if e.tool == candidate.tool && e.agent_id == candidate.agent_id {
+            if let Some(exp) = e.expires_at {
+                if exp >= mission_end_at {
+                    return MergeDecision::SkipRespected {
+                        existing_expires_at: exp,
+                    };
+                } else {
+                    return MergeDecision::TtlTooShort {
+                        existing_expires_at: exp,
+                        needed_until: mission_end_at,
+                    };
+                }
+            }
+            // No expires_at on existing shouldn't happen (load_delegations drops those)
+            // but treat defensively as short.
+            return MergeDecision::TtlTooShort {
+                existing_expires_at: Utc::now(),
+                needed_until: mission_end_at,
+            };
+        }
+    }
+    MergeDecision::Insert
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    fn make_delegation(tool: &str, agent: &str, expires: DateTime<Utc>) -> RuntimeDelegation {
+        RuntimeDelegation {
+            tool: tool.to_string(),
+            agent_id: Some(agent.to_string()),
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(expires),
+            session_id: None,
+            source: Some("role".to_string()),
+            mission_id: Some("m-test".to_string()),
+            conditions: None,
+        }
+    }
+
+    #[test]
+    fn test_decide_merge_insert_when_no_match() {
+        let candidate = make_delegation("Read", "developer", Utc::now() + Duration::hours(8));
+        let existing = vec![];
+        let end = Utc::now() + Duration::hours(8);
+        assert_eq!(
+            decide_merge(&candidate, &existing, end),
+            MergeDecision::Insert
+        );
+    }
+
+    #[test]
+    fn test_decide_merge_skip_when_ttl_covers() {
+        let end = Utc::now() + Duration::hours(8);
+        let existing = vec![make_delegation(
+            "Read",
+            "developer",
+            Utc::now() + Duration::hours(24),
+        )];
+        let candidate = make_delegation("Read", "developer", end);
+        let dec = decide_merge(&candidate, &existing, end);
+        match dec {
+            MergeDecision::SkipRespected { .. } => {}
+            other => panic!("expected SkipRespected, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decide_merge_ttl_too_short() {
+        let end = Utc::now() + Duration::hours(8);
+        let existing = vec![make_delegation(
+            "Read",
+            "developer",
+            Utc::now() + Duration::hours(2),
+        )];
+        let candidate = make_delegation("Read", "developer", end);
+        let dec = decide_merge(&candidate, &existing, end);
+        match dec {
+            MergeDecision::TtlTooShort { .. } => {}
+            other => panic!("expected TtlTooShort, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decide_merge_different_agent_inserts() {
+        let end = Utc::now() + Duration::hours(8);
+        let existing = vec![make_delegation(
+            "Read",
+            "developer",
+            end + Duration::hours(16),
+        )];
+        let candidate = make_delegation("Read", "auditor", end);
+        assert_eq!(
+            decide_merge(&candidate, &existing, end),
+            MergeDecision::Insert
+        );
+    }
+
+    #[test]
+    fn test_decide_merge_different_tool_inserts() {
+        let end = Utc::now() + Duration::hours(8);
+        let existing = vec![make_delegation(
+            "Read",
+            "developer",
+            end + Duration::hours(16),
+        )];
+        let candidate = make_delegation("Write", "developer", end);
+        assert_eq!(
+            decide_merge(&candidate, &existing, end),
+            MergeDecision::Insert
+        );
+    }
+}

@@ -18,6 +18,7 @@ tools_allowed:
   - mcp__colmena__findings_list
   - mcp__colmena__findings_query
   - mcp__colmena__review_submit
+  - mcp__colmena__review_evaluate
 
 specializations:
   - compliance

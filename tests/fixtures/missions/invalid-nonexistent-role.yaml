@@ -1,0 +1,8 @@
+id: test-bad-role
+pattern: peer
+roles:
+  - name: nonexistent_role_xyz
+    scope:
+      owns: []
+      forbidden: []
+    task: "Impossible task"

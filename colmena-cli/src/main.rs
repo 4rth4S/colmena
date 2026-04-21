@@ -229,6 +229,53 @@ enum MissionAction {
         #[arg(long)]
         id: String,
     },
+    /// Spawn a mission with auto-generated delegations + enriched prompts.
+    Spawn {
+        /// Path to a mission manifest YAML.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// Shortcut: mission description when no manifest.
+        #[arg(long)]
+        mission: Option<String>,
+        /// Shortcut: pattern id.
+        #[arg(long)]
+        pattern: Option<String>,
+        /// Shortcut: role name. Repeatable.
+        #[arg(long = "role", value_name = "ROLE")]
+        roles: Vec<String>,
+        /// Shortcut: scope "owns" (comma-separated) — applies to the last --role.
+        #[arg(long = "scope", value_name = "FILES", requires = "roles")]
+        scopes: Vec<String>,
+        /// Shortcut: role task — applies to the last --role.
+        #[arg(long = "task", value_name = "TASK", requires = "roles")]
+        tasks: Vec<String>,
+        /// TTL for generated delegations in hours. Default 8, max 24.
+        #[arg(long, default_value_t = 8)]
+        mission_ttl: i64,
+        /// Simulate: print what would be done, do not write.
+        #[arg(long)]
+        dry_run: bool,
+        /// Overwrite existing delegations whose TTL is shorter than mission end.
+        #[arg(long)]
+        extend_existing: bool,
+        /// Overwrite existing subagent .md files that fail minimums check.
+        #[arg(long)]
+        overwrite: bool,
+        /// Activate Mission Gate only for this session, bypassing an
+        /// explicit `enforce_missions: false` in trust-firewall.yaml.
+        #[arg(long)]
+        session_gate: bool,
+        /// Proceed without Mission Gate (modo observación). Required when
+        /// YAML `enforce_missions: false` is explicit and mission has ≥3 roles.
+        #[arg(long)]
+        no_gate_confirmed: bool,
+    },
+    /// Emit the INTER_AGENT_DIRECTIVE as a standalone block for manual Agent spawns.
+    PromptInject {
+        /// Output mode. Currently only `terse` is implemented.
+        #[arg(long, default_value = "terse")]
+        mode: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -288,6 +335,34 @@ fn main() {
         Commands::Mission { action } => match action {
             MissionAction::List => run_mission_list(),
             MissionAction::Deactivate { id } => run_mission_deactivate(id),
+            MissionAction::Spawn {
+                from,
+                mission,
+                pattern,
+                roles,
+                scopes,
+                tasks,
+                mission_ttl,
+                dry_run,
+                extend_existing,
+                overwrite,
+                session_gate,
+                no_gate_confirmed,
+            } => run_mission_spawn(
+                from,
+                mission,
+                pattern,
+                roles,
+                scopes,
+                tasks,
+                mission_ttl,
+                dry_run,
+                extend_existing,
+                overwrite,
+                session_gate,
+                no_gate_confirmed,
+            ),
+            MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
         },
         Commands::Calibrate { action } => match action {
             CalibrateAction::Run => run_calibrate(),
@@ -519,41 +594,44 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
     );
 
     // 4c. Mission Gate: if enforce_missions and tool is Agent, check for mission marker
-    let decision = if cfg.enforce_missions
-        && eval_input.tool_name == "Agent"
-        && decision.action != Action::Block
-    {
-        // Check if the Agent prompt contains a mission marker
-        let prompt = eval_input
-            .tool_input
-            .get("prompt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
-            // Log Mission Gate event
-            let _ = colmena_core::audit::log_event(
-                &audit_path,
-                &colmena_core::audit::AuditEvent::MissionGate {
-                    session_id: &eval_input.session_id,
-                    agent_id: eval_input.agent_id.as_deref(),
-                },
-            );
-            colmena_core::firewall::Decision {
-                action: Action::Ask,
-                reason: "Mission gate: this Agent call has no Colmena mission binding. \
+    // M7.3 live-surface: gate active if explicit, if mission delegations are live,
+    // or if a --session-gate sentinel is present and unexpired.
+    let session_override = colmena_core::config::session_gate_override_active(config_dir);
+    let gate_active = cfg.is_mission_gate_active(&delegations, session_override);
+
+    let decision =
+        if gate_active && eval_input.tool_name == "Agent" && decision.action != Action::Block {
+            // Check if the Agent prompt contains a mission marker
+            let prompt = eval_input
+                .tool_input
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !prompt.contains(colmena_core::selector::MISSION_MARKER_PREFIX) {
+                // Log Mission Gate event
+                let _ = colmena_core::audit::log_event(
+                    &audit_path,
+                    &colmena_core::audit::AuditEvent::MissionGate {
+                        session_id: &eval_input.session_id,
+                        agent_id: eval_input.agent_id.as_deref(),
+                    },
+                );
+                colmena_core::firewall::Decision {
+                    action: Action::Ask,
+                    reason: "Mission gate: this Agent call has no Colmena mission binding. \
                          Use mcp__colmena__mission_suggest to check if you need a mission, \
                          or mcp__colmena__mission_spawn to create one directly. \
                          Approve manually to proceed without mission binding."
-                    .to_string(),
-                matched_rule: Some("mission_gate".to_string()),
-                priority: colmena_core::firewall::Priority::Medium,
+                        .to_string(),
+                    matched_rule: Some("mission_gate".to_string()),
+                    priority: colmena_core::firewall::Priority::Medium,
+                }
+            } else {
+                decision
             }
         } else {
             decision
-        }
-    } else {
-        decision
-    };
+        };
 
     // 5. If Ask → enqueue pending
     if decision.action == Action::Ask {
@@ -1351,6 +1429,8 @@ fn run_library_select(mission: String) -> Result<()> {
         None, // session_id: CLI doesn't have session context
         &elo_ratings,
         Some(&default_config_dir()),
+        None,  // manifest: legacy CLI path does not take a manifest
+        false, // dry_run: this CLI path always persists
     )?;
 
     // Save role-generated delegations
@@ -1817,6 +1897,16 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
     let config_dir = default_config_dir();
     let delegations_path = config_dir.join("runtime-delegations.json");
 
+    // M7.3 live-surface: collect mission's agent_ids BEFORE revocation (so the
+    // delegation list is still populated), then remove auto-generated .md files
+    // after the delegations are revoked.
+    let all_delegations = colmena_core::delegate::load_delegations(&delegations_path);
+    let mission_agents: std::collections::HashSet<String> = all_delegations
+        .iter()
+        .filter(|d| d.mission_id.as_deref() == Some(mission_id.as_str()))
+        .filter_map(|d| d.agent_id.clone())
+        .collect();
+
     let revoked = colmena_core::delegate::revoke_by_mission(&delegations_path, &mission_id)?;
 
     if revoked == 0 {
@@ -1836,6 +1926,297 @@ fn run_mission_deactivate(mission_id: String) -> Result<()> {
                 revoked,
             },
         );
+    }
+
+    // After revocation, walk the collected agent_ids and remove .md files
+    // that have the auto-generated marker.
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+    let mut removed = Vec::new();
+    let mut kept = Vec::new();
+    for agent_id in &mission_agents {
+        let path = agents_dir.join(format!("{}.md", agent_id));
+        match colmena_core::emitters::claude_code::delete_auto_generated_subagent(&path) {
+            Ok(true) => removed.push(agent_id.clone()),
+            Ok(false) => {
+                if path.exists() {
+                    kept.push(agent_id.clone());
+                }
+            }
+            Err(e) => {
+                eprintln!(
+                    "[colmena] WARNING: failed to check/remove {}: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    if !removed.is_empty() {
+        println!(
+            "Removed {} auto-generated subagent files: {}",
+            removed.len(),
+            removed.join(", ")
+        );
+    }
+    if !kept.is_empty() {
+        println!(
+            "Kept {} operator-authored subagent files: {}",
+            kept.len(),
+            kept.join(", ")
+        );
+    }
+
+    // M7.3 live-surface: clear session-gate override when mission is deactivated.
+    // Safe no-op if the sentinel doesn't exist or TTL already expired it.
+    if let Err(e) = colmena_core::config::clear_session_gate_override(&config_dir) {
+        eprintln!(
+            "[colmena] WARNING: failed to clear session-gate override: {}",
+            e
+        );
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_mission_spawn(
+    from: Option<PathBuf>,
+    mission: Option<String>,
+    pattern: Option<String>,
+    roles_arg: Vec<String>,
+    scopes_arg: Vec<String>,
+    tasks_arg: Vec<String>,
+    mission_ttl: i64,
+    dry_run: bool,
+    extend_existing: bool,
+    overwrite: bool,
+    session_gate: bool,
+    no_gate_confirmed: bool,
+) -> Result<()> {
+    use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
+
+    let manifest: MissionManifest = if let Some(path) = from {
+        match MissionManifest::from_path(&path) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("ERROR: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // Shortcut path: build a manifest from flags
+        let mission_text = mission.ok_or_else(|| {
+            anyhow::anyhow!("--mission <string> required when --from not provided")
+        })?;
+        let pattern_id = pattern
+            .ok_or_else(|| anyhow::anyhow!("--pattern <id> required when --from not provided"))?;
+        if roles_arg.is_empty() {
+            anyhow::bail!("at least one --role required when --from not provided");
+        }
+        let roles: Vec<ManifestRole> = roles_arg
+            .iter()
+            .enumerate()
+            .map(|(i, name)| ManifestRole {
+                name: name.clone(),
+                scope: ManifestScope {
+                    owns: scopes_arg
+                        .get(i)
+                        .map(|csv| {
+                            csv.split(',')
+                                .map(|s| s.trim().to_string())
+                                .filter(|s| !s.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    forbidden: Vec::new(),
+                },
+                task: tasks_arg.get(i).cloned().unwrap_or_default(),
+            })
+            .collect();
+        let m = MissionManifest {
+            id: mission_text.clone(),
+            pattern: pattern_id,
+            mission_ttl_hours: mission_ttl,
+            roles,
+        };
+        if let Err(e) = m.validate() {
+            eprintln!("ERROR: {e}");
+            std::process::exit(1);
+        }
+        m
+    };
+
+    let library_dir = colmena_core::library::default_library_dir();
+    let all_roles =
+        colmena_core::library::load_roles(&library_dir).context("failed to load roles")?;
+    let all_patterns =
+        colmena_core::library::load_patterns(&library_dir).context("failed to load patterns")?;
+
+    // Validate all roles referenced by the manifest exist in the library.
+    for r in &manifest.roles {
+        if !all_roles.iter().any(|lr| lr.id == r.name) {
+            eprintln!(
+                "ERROR: Role '{}' referenced in manifest but not found in library. \
+                 Create it first with: colmena library create-role --id {} --description \"...\"",
+                r.name, r.name
+            );
+            std::process::exit(1);
+        }
+    }
+
+    let config_dir = colmena_core::paths::default_config_dir();
+    let runtime_delegations_path = config_dir.join("runtime-delegations.json");
+    let missions_dir = config_dir.join("missions");
+
+    // M7.3 live-surface: border case check.
+    //   enforce_missions: false (explicit in YAML) + mission with >= 3 roles
+    //   → abort with 3 escape flags unless one was already passed.
+    let firewall_yaml = config_dir.join("trust-firewall.yaml");
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let cwd_str = cwd.to_string_lossy();
+    let cfg = colmena_core::config::load_config(&firewall_yaml, &cwd_str)?;
+
+    if matches!(cfg.enforce_missions, Some(false))
+        && manifest.roles.len() >= 3
+        && !session_gate
+        && !no_gate_confirmed
+    {
+        eprintln!(
+            "\nenforce_missions: false is explicit in trust-firewall.yaml.\n\
+             About to spawn {} agents with source: role. Without Mission Gate:\n  \
+             - Workers can Stop without review_submit\n  \
+             - Reviewers can Stop without review_evaluate\n  \
+             - The ELO cycle will not close for this mission\n\n\
+             Options:\n  \
+             [1] Re-run with --session-gate (activate gate for this session only)\n  \
+             [2] Edit trust-firewall.yaml and set enforce_missions: true\n  \
+             [3] Re-run with --no-gate-confirmed (observation mode, no audit-of-closure)\n\n\
+             Aborting by default.",
+            manifest.roles.len()
+        );
+        std::process::exit(1);
+    }
+
+    // M7.3 live-surface: if the operator passed --session-gate, write a sentinel
+    // that makes is_mission_gate_active return true for the mission's lifetime.
+    if session_gate {
+        let expires_at = chrono::Utc::now() + chrono::Duration::hours(manifest.mission_ttl_hours);
+        colmena_core::config::write_session_gate_override(&config_dir, expires_at)?;
+    }
+
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+
+    let result = colmena_core::selector::spawn_mission(
+        &manifest.id,
+        Some(&manifest),
+        &all_roles,
+        &all_patterns,
+        &library_dir,
+        &missions_dir,
+        &runtime_delegations_path,
+        &agents_dir,
+        None, // session_id
+        &[],  // elo_ratings — calibrate lookup deferred for CLI simplicity
+        Some(&config_dir),
+        extend_existing,
+        dry_run,
+        overwrite,
+    )?;
+
+    // Emit summary
+    println!();
+    println!("Mission spawned: {}", result.mission_name);
+    println!(
+        "  OK {} subagent prompts composed",
+        result.agent_prompts.len()
+    );
+    if dry_run {
+        println!(
+            "  (dry-run) {} delegations WOULD be created",
+            result.delegations_created.len()
+        );
+    } else {
+        println!(
+            "  OK {} delegations created",
+            result.delegations_created.len()
+        );
+    }
+    if !result.delegations_skipped.is_empty() {
+        println!(
+            "  WARN {} delegations preserved (already exist with sufficient TTL)",
+            result.delegations_skipped.len()
+        );
+        for (d, exp) in &result.delegations_skipped {
+            println!(
+                "       - {}/{} (expires {})",
+                d.tool,
+                d.agent_id.clone().unwrap_or_default(),
+                exp.to_rfc3339()
+            );
+        }
+    }
+    if !result.role_gaps.is_empty() {
+        println!("  INFO role gaps detected: {}", result.role_gaps.join(", "));
+    }
+
+    // M7.3 live-surface: subagent file reporting + Mission Gate state.
+    println!(
+        "  OK {} subagent files written",
+        result.subagent_files_written.len()
+    );
+    if !result.subagent_files_respected.is_empty() {
+        println!(
+            "  INFO {} subagent files respected (already valid)",
+            result.subagent_files_respected.len()
+        );
+    }
+
+    let updated_delegations = colmena_core::delegate::load_delegations(&runtime_delegations_path);
+    let session_override_active = colmena_core::config::session_gate_override_active(&config_dir);
+    let will_be_active = cfg.is_mission_gate_active(&updated_delegations, session_override_active);
+
+    match (
+        cfg.enforce_missions,
+        session_override_active,
+        will_be_active,
+    ) {
+        (Some(true), _, _) => println!("  INFO Mission Gate: ON (explicit in YAML)"),
+        (Some(false), true, _) => {
+            println!("  INFO Mission Gate: ON (--session-gate override active)")
+        }
+        (Some(false), false, _) => {
+            println!("  INFO Mission Gate: OFF (explicit in YAML, operator choice)")
+        }
+        (None, _, true) => println!(
+            "  INFO Mission Gate: auto-activated (enforce_missions unset, role delegations live)"
+        ),
+        (None, _, false) => println!("  INFO Mission Gate: OFF (no live role delegations)"),
+    }
+
+    println!();
+    println!("Next steps:");
+    for ap in &result.agent_prompts {
+        println!(
+            "  spawn agent '{}' with prompt at: {}",
+            ap.role_id,
+            ap.claude_md_path.display()
+        );
+    }
+
+    Ok(())
+}
+
+fn run_mission_prompt_inject(mode: &str) -> Result<()> {
+    match mode {
+        "terse" => {
+            println!("<!-- INTER-AGENT PROTOCOL -->");
+            println!("{}", colmena_core::selector::INTER_AGENT_DIRECTIVE);
+        }
+        other => {
+            eprintln!("unsupported mode '{}'. Supported: terse", other);
+            std::process::exit(1);
+        }
     }
     Ok(())
 }

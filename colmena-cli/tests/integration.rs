@@ -1073,3 +1073,369 @@ fn test_delegation_injection_source_role_without_mission_dir() {
         "Injected delegation should be filtered; no session rules taught. Got: {stdout}"
     );
 }
+
+// ── M7.3 mission spawn tests ─────────────────────────────────────────────
+
+#[test]
+fn test_mission_spawn_dry_run_with_manifest() {
+    let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
+    let fixture =
+        std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .arg("--dry-run")
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "dry-run should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("test-peer-mission"), "stdout: {stdout}");
+    assert!(stdout.contains("(dry-run)"), "must mark dry-run: {stdout}");
+
+    // No delegations written
+    let delegations_path = tmp.path().join("config/runtime-delegations.json");
+    assert!(
+        !delegations_path.exists()
+            || std::fs::read_to_string(&delegations_path).unwrap().trim() == "[]",
+        "dry-run must not persist delegations"
+    );
+
+    // M7.3 dry-run contract: nothing persisted to disk
+    let mission_dir = tmp.path().join("config/missions/test-peer-mission");
+    let date_prefixed = tmp
+        .path()
+        .join("config/missions")
+        .read_dir()
+        .ok()
+        .and_then(|mut it| it.next().and_then(|e| e.ok()))
+        .map(|e| e.path());
+    assert!(
+        !mission_dir.exists() && date_prefixed.is_none(),
+        "dry-run must not create mission directories"
+    );
+}
+
+#[test]
+fn test_mission_spawn_rejects_nonexistent_role() {
+    let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
+    let fixture = std::path::Path::new(&workspace_root())
+        .join("tests/fixtures/missions/invalid-nonexistent-role.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(!output.status.success(), "must fail for unknown role");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nonexistent_role_xyz"),
+        "error must mention the unknown role: {stderr}"
+    );
+    assert!(
+        stderr.contains("create-role"),
+        "error must suggest colmena library create-role: {stderr}"
+    );
+}
+
+#[test]
+fn test_mission_spawn_rejects_ttl_over_max() {
+    let tmp = make_colmena_home();
+
+    // Write a temp manifest with ttl = 25 (> MAX_TTL_HOURS = 24)
+    let manifest_content = r#"
+id: ttl-overflow
+pattern: peer
+mission_ttl_hours: 25
+roles:
+  - name: developer
+    task: "x"
+"#;
+    let manifest_path = tmp.path().join("bad-ttl.yaml");
+    std::fs::write(&manifest_path, manifest_content).unwrap();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("MAX_TTL_HOURS"), "stderr: {stderr}");
+}
+
+#[test]
+fn test_mission_spawn_persists_delegations_when_not_dry_run() {
+    let tmp = make_colmena_home();
+    let agents_tmp = tempfile::TempDir::new().unwrap();
+    let fixture =
+        std::path::Path::new(&workspace_root()).join("tests/fixtures/missions/peer-2-roles.yaml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&fixture)
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", agents_tmp.path())
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "real spawn should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Delegations file exists and contains role-source delegations
+    let delegations_path = tmp.path().join("config/runtime-delegations.json");
+    assert!(
+        delegations_path.exists(),
+        "delegations file must exist after real spawn"
+    );
+    let content = std::fs::read_to_string(&delegations_path).unwrap();
+    assert!(
+        content.contains("\"source\": \"role\""),
+        "must have role-source delegations: {content}"
+    );
+    assert!(
+        content.contains("\"developer\""),
+        "must have developer delegations: {content}"
+    );
+    assert!(
+        content.contains("mcp__colmena__review_submit"),
+        "must bundle review_submit: {content}"
+    );
+}
+
+// ── prompt-inject integration tests ──────────────────────────────────────────
+
+#[test]
+fn test_mission_prompt_inject_terse() {
+    let tmp = make_colmena_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "prompt-inject", "--mode", "terse"])
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+    assert!(
+        output.status.success(),
+        "prompt-inject terse should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("INTER-AGENT PROTOCOL"));
+    assert!(stdout.contains("Facts only"));
+}
+
+#[test]
+fn test_mission_prompt_inject_unsupported_mode() {
+    let tmp = make_colmena_home();
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "prompt-inject", "--mode", "verbose"])
+        .env("COLMENA_HOME", tmp.path())
+        .output()
+        .expect("binary should run");
+    // Non-hook CLI path: unsupported mode must exit non-zero with a stderr message,
+    // consistent with the border-case abort (PR 3 Fix I1).
+    assert!(
+        !output.status.success(),
+        "unsupported mode must exit non-zero, got: {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unsupported mode"),
+        "unsupported mode error should appear in stderr; got: {stderr}"
+    );
+}
+
+// ── mission deactivate subagent cleanup tests ─────────────────────────────────
+
+#[test]
+fn test_mission_deactivate_removes_auto_generated_subagent_files() {
+    let tmp = make_colmena_home();
+
+    // Isolated agents dir via env var
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    // Seed: one auto-generated file, one manual file
+    let auto_path = agents_dir.join("developer.md");
+    std::fs::write(
+        &auto_path,
+        "---\nname: developer\ncolmena_auto_generated: true\ntools: []\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    let manual_path = agents_dir.join("architect.md");
+    std::fs::write(
+        &manual_path,
+        "---\nname: architect\ntools: []\n---\n\nbody\n",
+    )
+    .unwrap();
+
+    // Seed a mission directory (required by load_delegations for source: role validation)
+    std::fs::create_dir_all(tmp.path().join("config/missions/m-x")).unwrap();
+
+    // Seed runtime-delegations.json with 2 agents under mission "m-x"
+    let delegations = serde_json::json!([
+        {
+            "tool": "Read",
+            "agent_id": "developer",
+            "action": "auto-approve",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-12-31T23:59:59Z",
+            "source": "role",
+            "mission_id": "m-x"
+        },
+        {
+            "tool": "Read",
+            "agent_id": "architect",
+            "action": "auto-approve",
+            "created_at": "2099-01-01T00:00:00Z",
+            "expires_at": "2099-12-31T23:59:59Z",
+            "source": "role",
+            "mission_id": "m-x"
+        }
+    ]);
+    std::fs::write(
+        tmp.path().join("config/runtime-delegations.json"),
+        serde_json::to_string_pretty(&delegations).unwrap(),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "deactivate", "--id", "m-x"])
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "mission deactivate should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Auto-generated file: gone
+    assert!(!auto_path.exists(), "auto-generated file must be removed");
+    // Manual file: preserved
+    assert!(manual_path.exists(), "manual file must be preserved");
+}
+
+// ── M7.3 live-surface: border case enforce_missions=false + 3+ roles ──────────
+
+#[test]
+fn test_mission_spawn_aborts_on_false_enforce_with_3_roles() {
+    let tmp = make_colmena_home_no_enforce(); // enforce_missions: false explicit
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    // 3-role manifest triggers the border case
+    let manifest = r#"
+id: border-case-mission
+pattern: peer
+mission_ttl_hours: 2
+roles:
+  - name: developer
+    task: "x"
+  - name: auditor
+    task: "y"
+  - name: code_reviewer
+    task: "z"
+"#;
+    let manifest_path = tmp.path().join("border.yaml");
+    std::fs::write(&manifest_path, manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        !output.status.success(),
+        "must abort without --session-gate or --no-gate-confirmed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("enforce_missions: false is explicit"),
+        "stderr must mention the explicit flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("--session-gate"),
+        "stderr must list option 1: {stderr}"
+    );
+    assert!(
+        stderr.contains("--no-gate-confirmed"),
+        "stderr must list option 3: {stderr}"
+    );
+}
+
+#[test]
+fn test_mission_spawn_proceeds_with_session_gate() {
+    let tmp = make_colmena_home_no_enforce();
+    let agents_dir = tmp.path().join("agents");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+
+    let manifest = r#"
+id: session-gate-mission
+pattern: peer
+mission_ttl_hours: 2
+roles:
+  - name: developer
+    task: "x"
+  - name: auditor
+    task: "y"
+  - name: code_reviewer
+    task: "z"
+"#;
+    let manifest_path = tmp.path().join("sess.yaml");
+    std::fs::write(&manifest_path, manifest).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_colmena"))
+        .args(["mission", "spawn", "--from"])
+        .arg(&manifest_path)
+        .arg("--session-gate")
+        .env("COLMENA_HOME", tmp.path())
+        .env("COLMENA_AGENTS_DIR", &agents_dir)
+        .output()
+        .expect("binary should run");
+
+    assert!(
+        output.status.success(),
+        "--session-gate must allow spawn, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // PR 3 Fix C1: --session-gate must write a sentinel at config/session-gate.json
+    // AND the announcement must accurately reflect the override is active.
+    let sentinel = tmp.path().join("config/session-gate.json");
+    assert!(
+        sentinel.exists(),
+        "--session-gate must write session-gate.json sentinel"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Mission Gate: ON (--session-gate override active)"),
+        "announcement must reflect the override: {stdout}"
+    );
+}

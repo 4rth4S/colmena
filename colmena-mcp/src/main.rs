@@ -761,6 +761,8 @@ impl ColmenaServer {
             None, // session_id: MCP context doesn't have session binding
             &elo_ratings,
             Some(&self.config_dir),
+            None,  // manifest: MCP doesn't expose manifest yet
+            false, // dry_run: MCP always persists
         )
         .map_err(|e| sanitize_error(&format!("Mission generation failed: {e}")))?;
 
@@ -1431,15 +1433,24 @@ impl ColmenaServer {
             .collect();
         let elo_ratings = colmena_core::elo::leaderboard(&elo_events, &baselines);
 
+        let runtime_delegations_path = self.config_dir.join("runtime-delegations.json");
+        let agents_dir = colmena_core::paths::default_agents_dir()
+            .map_err(|e| sanitize_error(&format!("Failed to resolve agents dir: {e}")))?;
         let spawn_result = colmena_core::selector::spawn_mission(
             &input.mission,
+            None, // manifest: MCP doesn't expose manifest yet
             &roles,
             &patterns,
             &library_dir,
             &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
             None, // session_id
             &elo_ratings,
             Some(&self.config_dir),
+            false, // extend_existing — safe default; humans can rerun via CLI if needed
+            false, // dry_run
+            false, // overwrite_subagents — MCP never overwrites; human-only via CLI
         )
         .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
 
@@ -1494,13 +1505,31 @@ impl ColmenaServer {
             ));
         }
 
-        // Delegation commands
-        if !spawn_result.delegation_commands.is_empty() {
-            output.push_str("\n## Delegations (require human confirmation)\n\n```\n");
-            for cmd in &spawn_result.delegation_commands {
-                output.push_str(&format!("{}\n", cmd));
+        // Delegations summary (persisted directly to runtime-delegations.json).
+        if !spawn_result.delegations_created.is_empty() {
+            output.push_str(&format!(
+                "\n## Delegations persisted ({})\n\n",
+                spawn_result.delegations_created.len()
+            ));
+            for d in &spawn_result.delegations_created {
+                let agent = d.agent_id.clone().unwrap_or_else(|| "*".to_string());
+                output.push_str(&format!("- {} → {}\n", d.tool, agent));
             }
-            output.push_str("```\n");
+        }
+        if !spawn_result.delegations_skipped.is_empty() {
+            output.push_str(&format!(
+                "\n## Delegations skipped — existing entries cover mission TTL ({})\n\n",
+                spawn_result.delegations_skipped.len()
+            ));
+            for (d, existing_exp) in &spawn_result.delegations_skipped {
+                let agent = d.agent_id.clone().unwrap_or_else(|| "*".to_string());
+                output.push_str(&format!(
+                    "- {} → {} (existing expires_at: {})\n",
+                    d.tool,
+                    agent,
+                    existing_exp.to_rfc3339()
+                ));
+            }
         }
 
         Ok(output)

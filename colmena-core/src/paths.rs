@@ -30,3 +30,46 @@ pub fn colmena_home() -> PathBuf {
 pub fn default_config_dir() -> PathBuf {
     colmena_home().join("config")
 }
+
+/// Return the target directory for Claude Code subagent files.
+///
+/// Precedence:
+/// 1. `COLMENA_AGENTS_DIR` env var (testing, custom setups)
+/// 2. `$HOME/.claude/agents/`
+///
+/// Errors if `HOME` is unset (per CLAUDE.md: fallback to /tmp is banned).
+pub fn default_agents_dir() -> anyhow::Result<std::path::PathBuf> {
+    if let Ok(override_dir) = std::env::var("COLMENA_AGENTS_DIR") {
+        return Ok(std::path::PathBuf::from(override_dir));
+    }
+    let home = std::env::var("HOME").map_err(|_| {
+        anyhow::anyhow!("HOME env var not set — cannot resolve subagents directory")
+    })?;
+    Ok(std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("agents"))
+}
+
+#[cfg(test)]
+mod default_agents_dir_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_default_agents_dir_uses_override() {
+        // Use a unique override path for this test to avoid leaking state
+        let override_path = "/tmp/colmena-agents-dir-test-a1b2c3";
+        std::env::set_var("COLMENA_AGENTS_DIR", override_path);
+        let result = default_agents_dir().unwrap();
+        assert_eq!(result, PathBuf::from(override_path));
+        std::env::remove_var("COLMENA_AGENTS_DIR");
+    }
+
+    #[test]
+    fn test_default_agents_dir_falls_back_to_home() {
+        std::env::remove_var("COLMENA_AGENTS_DIR");
+        std::env::set_var("HOME", "/tmp/fake-home-xyz");
+        let result = default_agents_dir().unwrap();
+        assert_eq!(result, PathBuf::from("/tmp/fake-home-xyz/.claude/agents"));
+    }
+}

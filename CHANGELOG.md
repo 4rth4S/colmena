@@ -6,6 +6,69 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **M7.3 post-dogfood gaps (2026-04-21)**: first docs-overhaul dogfood uncovered two defects that prevented the ELO cycle from closing without operator glue. Patched:
+  - `generate_role_delegations` bundled only the tools listed in `role.tools_allowed`, so role YAMLs that declared `review_submit` but not `review_evaluate` left reviewers in the restricted tier (CC prompted the human for every evaluation).
+  - Auto-generated subagent `.md` files inherited the same YAML tools list, gating `review_evaluate` off at the frontmatter layer even when a delegation existed.
+
+  New helper `emitters::claude_code::mission_tool_set()` + `ELO_CYCLE_TOOLS` constant. `generate_role_delegations`, `format_pre_approved_ops`, and the auto-generated subagent writer now bundle the union of the role YAML and the cycle tools, deduplicated.
+
+  Additionally, `review_protocol_section` now centralizes `available_roles` on the squad's `role_type: auditor` when present (matches the public-release-prep success recipe), and `role_type: auditor` authors are exempted from the MANDATORY `review_submit` block (SubagentStop already exempts them; the template was contradicting itself).
+
+## [0.12.2] - 2026-04-19
+
+### Added
+
+- **M7.3 live-surface — complete auto-closure of the ELO cycle**:
+  - `mission_spawn` now writes `~/.claude/agents/<role>.md` per role with `colmena_auto_generated: true` frontmatter marker. Respects operator-authored files that satisfy minimums check (name = role_id, required tools present); aborts loud on failed minimums with actionable message. `--overwrite` regenerates with a `.colmena-backup` of the original.
+  - Mission Gate auto-activation: `enforce_missions: None` (unset) flips to `true` when `runtime-delegations.json` has at least one `source: "role"` entry. `Some(true)` / `Some(false)` honored literally. Operator always wins — explicit `false` is respected even when mission delegations are live.
+  - Border case guard: `enforce_missions: false` explicit + mission with ≥3 roles → spawn aborts with 3 explicit options (`--session-gate`, edit YAML, `--no-gate-confirmed`). Operator decides consciously; no silent degradation.
+  - New subcommand `colmena mission prompt-inject --mode terse` emits `INTER_AGENT_DIRECTIVE` as a standalone block for manual Agent spawns.
+  - `mission_deactivate` now also removes subagent `.md` files that have the auto-generated marker AND match an agent_id tied to the mission. Operator-authored files preserved. Clean inverse of `mission_spawn`.
+- New helper `colmena_core::paths::default_agents_dir()` with `COLMENA_AGENTS_DIR` env override for tests.
+- New emitter functions: `write_subagent_file`, `check_subagent_minimums`, `read_subagent_frontmatter`, `delete_auto_generated_subagent`.
+
+### Changed
+
+- **Breaking (internal):** `FirewallConfig::enforce_missions: bool` → `Option<bool>`. New helper `FirewallConfig::is_mission_gate_active(&[RuntimeDelegation]) -> bool` encapsulates the 3-state decision (explicit true/false honored, unset auto-activates on live role delegations).
+- `spawn_mission` signature gains `agents_dir: &Path` and `overwrite_subagents: bool`. Callers (`colmena-cli`, `colmena-mcp`) updated in-PR.
+- `SpawnResult` adds `subagent_files_written` and `subagent_files_respected` fields.
+
+### Fixed
+
+- Subagent `.md` file overwrites now produce `.md.colmena-backup` instead of clobbering operator work.
+
+### With this release
+
+M7.3 + M7.3.1 complete. Every `colmena mission spawn` closes the ELO cycle by construction: delegations bundled, subagent files aligned (or respected when operator-authored), Mission Gate tracked per session, anti-reciprocal scoped per-mission. Manual setup of the 6 recipe mechanisms is eliminated.
+
+## [0.12.1] - 2026-04-19
+
+### Added
+
+- **M7.3 core — mission_spawn auto-closure (safe subset)**:
+  - New `colmena mission spawn` subcommand with `--from <manifest.yaml>` and shortcut flags (`--mission/--pattern/--role/--scope/--task`).
+  - Manifest-driven `[Scope]`, `[Task]`, and `[Review Protocol]` sections injected into generated CLAUDE.md files. `review_submit` params are pre-filled.
+  - Delegations now persist directly to `runtime-delegations.json` (no more CLI command strings) — fixes the `--bash-pattern` flag bug from the TM pattern mission.
+  - Idempotency via new `decide_merge` helper in `delegate`: insert / skip-respected (existing TTL covers mission end) / abort (TTL too short). `--extend-existing` flag overwrites short-TTL delegations; `--dry-run` plans without writing.
+  - Reviewer role YAMLs (auditor, code_reviewer, architect) now list `mcp__colmena__review_evaluate` in `tools_allowed` so `generate_role_delegations` bundles the evaluation delegation automatically. (`security-architect` already had it.)
+- New module `colmena-core/src/emitters/claude_code.rs` with pure prompt-composition helpers. PR 3 will extend it with the `~/.claude/agents/` writer.
+- New module `colmena-core/src/mission_manifest.rs` with `MissionManifest` / `ManifestRole` / `ManifestScope` types and YAML parser + validator.
+
+### Fixed
+
+- `spawn_mission` now honors `manifest.pattern` via exact-id lookup (previously only did score-based selection on the mission text).
+- `spawn_mission` now honors `manifest.roles` as the canonical squad composition (previously the pattern's topology always won, ignoring the caller's explicit role list).
+- `run_mission_spawn` (CLI) now exits non-zero on validation errors (unknown role, TTL overflow, malformed manifest) instead of falling through to the hook-path `ask` fallback.
+- Delegations emitted by `mission_spawn` no longer reference the non-existent `--bash-pattern` CLI flag (persist directly to `runtime-delegations.json`).
+
+### Changed
+
+- **Internal API:** `colmena_core::selector::spawn_mission` signature grew — new args `manifest`, `runtime_delegations_path`, `extend_existing`, `dry_run`. Callers in `colmena-mcp` updated in-PR.
+- `SpawnResult` no longer exposes `delegation_commands: Vec<String>`. New fields: `delegations_created`, `delegations_skipped`, `delegations_aborted`.
+- `generate_mission` now accepts `manifest: Option<&MissionManifest>`.
+
 ## [0.12.0] - 2026-04-19
 
 ### Fixed
