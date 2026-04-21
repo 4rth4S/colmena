@@ -156,7 +156,7 @@ trust_circle: # Lowest — auto-approved
     reason: 'Read-only operations'
 ```
 
-Precedence is actually 8 steps: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`. Full chain in [../dev/architecture.md](../dev/architecture.md#pretooluse-tool-call-evaluation).
+Precedence is actually 8 steps: `blocked > delegations > agent_overrides (YAML) > ELO overrides > restricted > chain_guard > mission_revocation > trust_circle > defaults`. Full chain in [../dev/architecture.md](../dev/architecture.md#precedence-chain-pretooluse).
 
 ### Add a rule
 

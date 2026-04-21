@@ -133,19 +133,26 @@ mcp__colmena__mission_spawn(
 )
 ```
 
-### 2.4 Delegate Bash patterns the developer needs
+### 2.4 Extend the developer's pre-approved Bash patterns
 
-The developer role has `cargo (build|test|check|clippy)` and `git (status|diff|log)` pre-approved. If your project needs `npm test` or `pytest`, add a session-scoped delegation:
+The developer role has `cargo (build|test|check|clippy)` and `git (status|diff|log)` pre-approved by default. If your project needs additional commands like `pytest` or `npm test`, the CLI does NOT let you delegate `Bash` directly — unscoped Bash auto-approve would bypass the firewall. Two supported paths:
 
-```bash
-colmena delegate add --tool Bash \
-  --agent developer \
-  --bash-pattern '^(pytest|npm test)\b' \
-  --session $CC_SESSION_ID \
-  --ttl 4
+**Option A — edit `config/trust-firewall.yaml`:** add an `agent_overrides` rule scoped by `bash_pattern`:
+
+```yaml
+agent_overrides:
+  - agent: developer
+    tool: Bash
+    action: auto-approve
+    bash_pattern: '^(pytest|npm test|yarn test)\b'
+    reason: 'Developer test runners'
 ```
 
-Session-scoped + 4-hour TTL means it expires on its own. No cleanup.
+Reload takes effect on the next hook call — no CLI command needed. Run `colmena config check` to validate the YAML.
+
+**Option B — let a mission generate it:** `mcp__colmena__mission_spawn` auto-generates role-scoped Bash delegations from each role's YAML patterns. If your mission includes the developer role, it gets these patterns applied for the mission's TTL without any manual YAML editing.
+
+Why no CLI flag? Bash auto-approve without a regex scope is a firewall bypass — the CLI bails with a clear error if you try `colmena delegate add --tool Bash`. Scoped Bash lives in YAML (durable) or mission-generated delegations (ephemeral), never in ad-hoc CLI invocations.
 
 ### 2.5 Run the cycle
 
@@ -219,15 +226,9 @@ mcp__colmena__mission_spawn(
 )
 ```
 
-If the role is not in `Elevated` tier yet, you'll need a session-scoped delegation so `Bash` is auto-approved during this work:
+Once the mission is spawned, the `devops_engineer`'s full pattern set (kubectl, helm, terraform, docker, aws, gcloud, ansible, etc.) is auto-approved for the mission TTL. No further CLI setup is needed — `mission_spawn` emits the scoped Bash delegations from the role YAML automatically.
 
-```bash
-colmena delegate add --tool Bash \
-  --agent devops_engineer \
-  --bash-pattern '^(kubectl|helm) ' \
-  --session $CC_SESSION_ID \
-  --ttl 2
-```
+If you want a pattern NOT in the role YAML (e.g. a custom `^my-internal-tool\b`) either (a) add it to `config/library/roles/devops_engineer.yaml` → `bash_patterns` so the next mission spawn picks it up, or (b) add an `agent_overrides` rule in `trust-firewall.yaml` as shown in §2.4 above. The CLI does not accept `Bash` as a `delegate add` target — it bails to prevent unscoped Bash bypass.
 
 ### 3.3 What the firewall does during the run
 
