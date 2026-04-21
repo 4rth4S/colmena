@@ -6,6 +6,16 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **M7.3 post-dogfood gaps (2026-04-21)**: first docs-overhaul dogfood uncovered two defects that prevented the ELO cycle from closing without operator glue. Patched:
+  - `generate_role_delegations` bundled only the tools listed in `role.tools_allowed`, so role YAMLs that declared `review_submit` but not `review_evaluate` left reviewers in the restricted tier (CC prompted the human for every evaluation).
+  - Auto-generated subagent `.md` files inherited the same YAML tools list, gating `review_evaluate` off at the frontmatter layer even when a delegation existed.
+
+  New helper `emitters::claude_code::mission_tool_set()` + `ELO_CYCLE_TOOLS` constant. `generate_role_delegations`, `format_pre_approved_ops`, and the auto-generated subagent writer now bundle the union of the role YAML and the cycle tools, deduplicated.
+
+  Additionally, `review_protocol_section` now centralizes `available_roles` on the squad's `role_type: auditor` when present (matches the public-release-prep success recipe), and `role_type: auditor` authors are exempted from the MANDATORY `review_submit` block (SubagentStop already exempts them; the template was contradicting itself).
+
 ## [0.12.2] - 2026-04-19
 
 ### Added

@@ -26,6 +26,37 @@ pub const WORKER_REQUIRED_TOOLS: &[&str] = &[
     "mcp__colmena__findings_query",
 ];
 
+/// MCP tools that every mission role needs to guarantee the ELO cycle can close
+/// regardless of whether the role is assigned as author, reviewer, or both.
+///
+/// Union of [`WORKER_REQUIRED_TOOLS`] and [`REVIEWER_REQUIRED_TOOLS`]. Used by
+/// `mission_spawn` to bundle delegations and auto-generated subagent `tools:`
+/// frontmatter so a role YAML that only declares `review_submit` still gets
+/// `review_evaluate` when it participates in a mission (and vice versa).
+pub const ELO_CYCLE_TOOLS: &[&str] = &[
+    "mcp__colmena__review_submit",
+    "mcp__colmena__review_evaluate",
+    "mcp__colmena__findings_query",
+];
+
+/// Return a tool set that is the union of `role_tools` and [`ELO_CYCLE_TOOLS`],
+/// preserving original order and appending any missing cycle tools at the end.
+///
+/// Rationale: the role YAML is the operator's intent, but mission participation
+/// adds structural requirements the operator may not have thought about (a role
+/// can be selected as reviewer even if its YAML only lists author tools). This
+/// helper makes `mission_spawn`'s generated delegations + subagent files and the
+/// CLAUDE.md pre-approved-ops block consistent with that reality.
+pub fn mission_tool_set(role_tools: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = role_tools.to_vec();
+    for required in ELO_CYCLE_TOOLS {
+        if !out.iter().any(|existing| existing == required) {
+            out.push((*required).to_string());
+        }
+    }
+    out
+}
+
 /// Outcome of validating an existing subagent .md file against minimums.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MinimumsCheck {
@@ -315,6 +346,53 @@ mod tests {
     #[test]
     fn test_scope_block_empty() {
         assert!(scope_block(&[], &[]).is_empty());
+    }
+
+    #[test]
+    fn test_mission_tool_set_adds_missing_elo_tools() {
+        // Mirror of Colmena's default developer.yaml: declares review_submit
+        // but not review_evaluate. mission_tool_set must fill the gap.
+        let role_tools = vec![
+            "Read".to_string(),
+            "Write".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+        ];
+        let out = mission_tool_set(&role_tools);
+        assert!(out.contains(&"mcp__colmena__review_submit".to_string()));
+        assert!(out.contains(&"mcp__colmena__review_evaluate".to_string()));
+        assert!(out.contains(&"mcp__colmena__findings_query".to_string()));
+        assert!(out.contains(&"Read".to_string()));
+        assert!(out.contains(&"Write".to_string()));
+    }
+
+    #[test]
+    fn test_mission_tool_set_preserves_order_and_dedups() {
+        let role_tools = vec![
+            "Read".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__review_evaluate".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+            "Bash".to_string(),
+        ];
+        let out = mission_tool_set(&role_tools);
+        // Same length: nothing needed to be added.
+        assert_eq!(out.len(), role_tools.len());
+        // Order preserved.
+        assert_eq!(out[0], "Read");
+        assert_eq!(out.last().unwrap(), "Bash");
+    }
+
+    #[test]
+    fn test_mission_tool_set_empty_input_returns_elo_tools() {
+        let out = mission_tool_set(&[]);
+        for required in ELO_CYCLE_TOOLS {
+            assert!(
+                out.contains(&(*required).to_string()),
+                "missing {}",
+                required
+            );
+        }
     }
 
     #[test]

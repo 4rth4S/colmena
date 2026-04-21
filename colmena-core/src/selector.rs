@@ -434,26 +434,45 @@ pub fn generate_mission(
         let task_section = manifest_role
             .map(|r| crate::emitters::claude_code::task_block(&r.task))
             .unwrap_or_default();
-        let review_protocol_section = if manifest.is_some() {
-            let all_other_roles: Vec<String> = recommendation
-                .role_assignments
-                .iter()
-                .filter(|a| a.role_id != assignment.role_id)
-                .map(|a| a.role_id.clone())
-                .collect();
-            // M7.3 fix: the mission_id passed to review_submit MUST match the
-            // mission_id stamped onto delegations and the Mission Gate marker.
-            // All three use `mission_name` (date-prefixed slug), so the prompt
-            // follows suit — otherwise review_submit() lands under an id that
-            // matches no delegation and the ELO cycle silently breaks.
-            crate::emitters::claude_code::review_protocol_block(
-                &mission_name,
-                &assignment.role_id,
-                &all_other_roles,
-            )
-        } else {
-            String::new()
-        };
+        // M7.3 fix: role_type=auditor is exempt from submitting artifact reviews
+        // (it evaluates others via review_evaluate, it doesn't author work that
+        // needs peer review). Emitting a MANDATORY review_submit block would
+        // trap the auditor under SubagentStop with nothing valid to submit.
+        let review_protocol_section =
+            if manifest.is_some() && role.role_type.as_deref() != Some("auditor") {
+                // Identify the auditor in the squad, if any.
+                let auditor_role_id: Option<String> =
+                    recommendation.role_assignments.iter().find_map(|a| {
+                        role_map
+                            .get(a.role_id.as_str())
+                            .filter(|r| r.role_type.as_deref() == Some("auditor"))
+                            .map(|_| a.role_id.clone())
+                    });
+                // Centralize reviews to the auditor when present (matches the ELO
+                // success recipe — centralized-auditor pattern). Otherwise fall
+                // back to the full pool of non-author roles.
+                let available_roles: Vec<String> = match auditor_role_id {
+                    Some(auditor_id) if auditor_id != assignment.role_id => vec![auditor_id],
+                    _ => recommendation
+                        .role_assignments
+                        .iter()
+                        .filter(|a| a.role_id != assignment.role_id)
+                        .map(|a| a.role_id.clone())
+                        .collect(),
+                };
+                // M7.3 fix: the mission_id passed to review_submit MUST match the
+                // mission_id stamped onto delegations and the Mission Gate marker.
+                // All three use `mission_name` (date-prefixed slug), so the prompt
+                // follows suit — otherwise review_submit() lands under an id that
+                // matches no delegation and the ELO cycle silently breaks.
+                crate::emitters::claude_code::review_protocol_block(
+                    &mission_name,
+                    &assignment.role_id,
+                    &available_roles,
+                )
+            } else {
+                String::new()
+            };
 
         // Compose base CLAUDE.md (existing structure, unchanged semantics)
         let base_md = if review_context_section.is_empty() {
@@ -547,7 +566,12 @@ fn generate_role_delegations(
     // File-based tools that support path_within scoping
     let file_tools: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep"];
 
-    for tool in &role.tools_allowed {
+    // M7.3: bundle ELO-cycle tools (review_submit + review_evaluate + findings_query)
+    // alongside whatever the role YAML declares, so any role in a mission can act
+    // as author AND as reviewer without the operator having to update every YAML.
+    let mission_tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
+
+    for tool in &mission_tools {
         if tool == "Bash" {
             // Bash: if role has bash_patterns, create one delegation per pattern
             if let Some(ref perms) = role.permissions {
@@ -643,7 +667,11 @@ fn format_pre_approved_ops(role: &Role) -> String {
         "The following operations are pre-approved for your role in this mission:".to_string(),
     );
 
-    for tool in &role.tools_allowed {
+    // Stay consistent with generate_role_delegations: show ELO-cycle MCP tools
+    // in the brief even if the role YAML doesn't list them explicitly.
+    let mission_tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
+
+    for tool in &mission_tools {
         if tool == "Bash" {
             if let Some(ref perms) = role.permissions {
                 if !perms.bash_patterns.is_empty() {
@@ -1588,7 +1616,7 @@ pub fn spawn_mission(
                         crate::emitters::claude_code::write_subagent_file(
                             &subagent_path,
                             &assignment.role_id,
-                            &role.tools_allowed,
+                            &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
                             &body,
                             true, // overwrite
                         )?;
@@ -1611,7 +1639,7 @@ pub fn spawn_mission(
                     crate::emitters::claude_code::write_subagent_file(
                         &subagent_path,
                         &assignment.role_id,
-                        &role.tools_allowed,
+                        &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
                         &body,
                         false,
                     )?;
@@ -3118,6 +3146,136 @@ mod tests {
             persisted.len(),
             result.delegations_created.len(),
             "persisted count should equal delegations_created count on a fresh store"
+        );
+    }
+
+    // ── 23a+. M7.3 post-dogfood: ELO-cycle tool bundling + centralized auditor ─
+
+    #[test]
+    fn test_generate_role_delegations_bundles_elo_cycle_tools() {
+        // Mirror of the bug found in 2026-04-21 dogfood: role YAML only declares
+        // review_submit, but mission_spawn must still delegate review_evaluate
+        // so the role can act as reviewer without the operator gluing it.
+        let mut dev = make_role("developer", "Developer", vec!["code_writing"]);
+        dev.tools_allowed = vec![
+            "Read".to_string(),
+            "mcp__colmena__review_submit".to_string(),
+            "mcp__colmena__findings_query".to_string(),
+        ];
+
+        let tmp = tempfile::tempdir().unwrap();
+        let delegations = generate_role_delegations(
+            &dev,
+            "2026-04-21-test-mission",
+            tmp.path(),
+            None,
+            Utc::now(),
+            chrono::Duration::hours(8),
+        );
+
+        let tools: Vec<&str> = delegations.iter().map(|d| d.tool.as_str()).collect();
+        assert!(
+            tools.contains(&"mcp__colmena__review_submit"),
+            "review_submit must be delegated (was in YAML): {:?}",
+            tools
+        );
+        assert!(
+            tools.contains(&"mcp__colmena__review_evaluate"),
+            "review_evaluate MUST be auto-bundled even though YAML omits it: {:?}",
+            tools
+        );
+        assert!(
+            tools.contains(&"mcp__colmena__findings_query"),
+            "findings_query must remain delegated: {:?}",
+            tools
+        );
+    }
+
+    #[test]
+    fn test_spawn_mission_centralizes_review_to_auditor_when_present() {
+        use crate::mission_manifest::MissionManifest;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let dev = make_role("developer", "Developer", vec!["code_writing"]);
+        let mut auditor = make_role("auditor", "Auditor", vec!["audit"]);
+        auditor.role_type = Some("auditor".to_string());
+        let roles = vec![dev, auditor];
+
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let manifest = MissionManifest::from_yaml(
+            "id: m73-centralize-test\n\
+             pattern: code-review-cycle\n\
+             mission_ttl_hours: 1\n\
+             roles:\n  \
+               - name: developer\n    \
+                 task: Implement feature\n  \
+               - name: auditor\n    \
+                 task: Evaluate developer work\n",
+        )
+        .unwrap();
+
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
+        let result = spawn_mission(
+            "implement feature with code review",
+            Some(&manifest),
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,
+            &[],
+            None,
+            false,
+            false,
+            true, // overwrite_subagents
+        )
+        .unwrap();
+
+        let dev_md_path = result
+            .agent_prompts
+            .iter()
+            .find(|p| p.role_id == "developer")
+            .expect("developer prompt should exist")
+            .claude_md_path
+            .clone();
+        let dev_md = std::fs::read_to_string(&dev_md_path).unwrap();
+        assert!(
+            dev_md.contains("available_roles: [\"auditor\"]"),
+            "developer review_submit must centralize on auditor; got:\n{}",
+            dev_md
+        );
+
+        let auditor_md_path = result
+            .agent_prompts
+            .iter()
+            .find(|p| p.role_id == "auditor")
+            .expect("auditor prompt should exist")
+            .claude_md_path
+            .clone();
+        let auditor_md = std::fs::read_to_string(&auditor_md_path).unwrap();
+        assert!(
+            !auditor_md.contains("## Review Protocol — MANDATORY"),
+            "auditor (role_type=auditor) must be exempt from review_submit block; got:\n{}",
+            auditor_md
         );
     }
 
