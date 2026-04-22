@@ -2,7 +2,7 @@
 
 A contributor's walkthrough of the full system: four crates, five Claude Code
 integration points, the trust model, the MCP server, and the mission lifecycle
-as of M7.3 (v0.12.2).
+as of M7.12 (v0.13.0).
 
 If you want the *why* at feature level, read the [README](../../README.md).
 This document is the *how*: where the code lives, how data flows, and which
@@ -17,7 +17,7 @@ binaries:
 
 ```
 colmena/
-  Cargo.toml              # Workspace root, single version (0.12.2)
+  Cargo.toml              # Workspace root, single version (0.13.0)
   colmena-core/           # Shared library — all business logic, zero platform deps
   colmena-cli/            # CLI binary: `colmena` (hooks + subcommands)
   colmena-filter/         # Output-filtering pipeline (used by CLI PostToolUse)

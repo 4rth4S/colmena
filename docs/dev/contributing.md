@@ -539,7 +539,7 @@ Single workspace version in the top-level `Cargo.toml`. Bump on every
 release. Docs referencing the version (`README.md`, `docs/guide.md`) must be
 updated in the same PR.
 
-Current: **0.12.2** (M7.3 live-surface shipped).
+Current: **0.13.0** (M7.12 library extension shipped).
 
 ---
 
