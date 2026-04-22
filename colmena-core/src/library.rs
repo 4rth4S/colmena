@@ -126,25 +126,36 @@ impl RolesSuggested {
 /// Resolve the private library directory if present.
 ///
 /// Precedence:
-/// 1. `$COLMENA_PRIVATE_LIBRARY` (explicit override)
-/// 2. `$HOME/.colmena-private/library` (default convention)
+/// 1. `$COLMENA_PRIVATE_LIBRARY` — explicit override. When set, it is
+///    authoritative: a valid directory returns `Some(path)`, any invalid
+///    value (empty, nonexistent, not-a-dir) returns `None`. The HOME
+///    default is **not** consulted when the env var is set — an invalid
+///    override acts as an explicit opt-out.
+/// 2. `$HOME/.colmena-private/library` — default convention when the env
+///    var is unset.
 ///
-/// Returns `None` when neither path exists. Never reads from the public repo —
-/// private roles/patterns are meant to live outside version control.
+/// Never reads from the public repo — private roles/patterns are meant to
+/// live outside version control.
 pub fn private_library_dir() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("COLMENA_PRIVATE_LIBRARY") {
-        let p = PathBuf::from(path);
-        if p.is_dir() {
-            return Some(p);
+    match std::env::var("COLMENA_PRIVATE_LIBRARY") {
+        Ok(path) => {
+            let p = PathBuf::from(path);
+            if p.is_dir() {
+                Some(p)
+            } else {
+                None
+            }
+        }
+        Err(_) => {
+            if let Ok(home) = std::env::var("HOME") {
+                let p = PathBuf::from(home).join(".colmena-private/library");
+                if p.is_dir() {
+                    return Some(p);
+                }
+            }
+            None
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        let p = PathBuf::from(home).join(".colmena-private/library");
-        if p.is_dir() {
-            return Some(p);
-        }
-    }
-    None
 }
 
 /// Load all role templates from library_dir/roles/*.yaml plus any private
@@ -205,12 +216,37 @@ where
     }
 }
 
-/// Load a system prompt markdown file.
+/// Load a system prompt markdown file. Tries `library_dir` first, then the
+/// private library (see `private_library_dir`) if the prompt is not found in
+/// public. This mirrors the role/pattern loader precedence — private entries
+/// live alongside public ones and must be reachable by the same `prompt_ref`.
+pub fn load_prompt(library_dir: &Path, prompt_ref: &str) -> Result<String> {
+    match load_prompt_from(library_dir, prompt_ref) {
+        Ok(content) => Ok(content),
+        Err(public_err) => {
+            if let Some(priv_dir) = private_library_dir() {
+                load_prompt_from(&priv_dir, prompt_ref).map_err(|priv_err| {
+                    anyhow::anyhow!(
+                        "prompt '{}' not found in public ({}) nor private ({}) library",
+                        prompt_ref,
+                        public_err,
+                        priv_err
+                    )
+                })
+            } else {
+                Err(public_err)
+            }
+        }
+    }
+}
+
+/// Load a system prompt from a specific library dir. Deterministic (no env
+/// access) — production code goes through `load_prompt`.
 ///
 /// STRIDE TM Finding #23 (DREAD 5.0): after normalize_path check, also runs
 /// `canonicalize()` to resolve symlinks and verify the real path is still
 /// within the library directory. Prevents symlink-based traversal attacks.
-pub fn load_prompt(library_dir: &Path, prompt_ref: &str) -> Result<String> {
+pub fn load_prompt_from(library_dir: &Path, prompt_ref: &str) -> Result<String> {
     let path = library_dir.join(prompt_ref);
 
     // Normalize to prevent ../ traversal without requiring the file to exist
@@ -371,10 +407,17 @@ pub fn validate_library(roles: &[Role], patterns: &[Pattern], library_dir: &Path
         }
     }
 
-    // Check prompt files exist
+    // Check prompt files exist (try public first, fall back to private library
+    // so private-library roles don't trigger false-positive warnings).
+    let priv_dir = private_library_dir();
     for role in roles {
-        let prompt_path = library_dir.join(&role.system_prompt_ref);
-        if !prompt_path.exists() {
+        let public_path = library_dir.join(&role.system_prompt_ref);
+        let found_in_public = public_path.exists();
+        let found_in_private = priv_dir
+            .as_deref()
+            .map(|p| p.join(&role.system_prompt_ref).exists())
+            .unwrap_or(false);
+        if !found_in_public && !found_in_private {
             warnings.push(format!(
                 "Role '{}' references missing prompt: {}",
                 role.id, role.system_prompt_ref
@@ -832,7 +875,9 @@ elo_lead_selection: true
     }
 
     #[test]
-    fn test_private_library_dir_env_var_ignored_when_path_missing() {
+    fn test_private_library_dir_env_var_invalid_is_explicit_optout() {
+        // New semantics: when the env var is set to anything invalid, it acts
+        // as an explicit opt-out — we do NOT fall through to the HOME default.
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(
             "COLMENA_PRIVATE_LIBRARY",
@@ -840,15 +885,9 @@ elo_lead_selection: true
         );
         let resolved = private_library_dir();
         std::env::remove_var("COLMENA_PRIVATE_LIBRARY");
-        // Falls through to HOME default; since that likely doesn't exist in CI
-        // environments, we only assert that a non-existent env var path does NOT
-        // get returned.
         assert!(
-            resolved
-                .as_deref()
-                .map(|p| p != std::path::Path::new("/nonexistent/path/that/does/not/exist"))
-                .unwrap_or(true),
-            "should not return a nonexistent override path"
+            resolved.is_none(),
+            "invalid env var path must disable private library (got {resolved:?})"
         );
     }
 

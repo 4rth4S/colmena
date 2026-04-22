@@ -665,6 +665,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Serialize tests that mutate `COLMENA_PRIVATE_LIBRARY` — private library
+    /// merging is a process-wide side effect and must not bleed across tests
+    /// running in parallel.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_check_config_valid() {
         let tmp = TempDir::new().unwrap();
@@ -719,12 +724,24 @@ mod tests {
 
     #[test]
     fn test_check_library_valid() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Disable private-library merging for this test so the developer's
+        // own ~/.colmena-private does not leak into the assertion.
+        let prev = std::env::var("COLMENA_PRIVATE_LIBRARY").ok();
+        std::env::set_var("COLMENA_PRIVATE_LIBRARY", "/dev/null/unused");
+
         let tmp = TempDir::new().unwrap();
         let lib_dir = tmp.path().join("library");
         std::fs::create_dir_all(lib_dir.join("roles")).unwrap();
         std::fs::create_dir_all(lib_dir.join("patterns")).unwrap();
 
         let checks = check_library(tmp.path());
+
+        match prev {
+            Some(v) => std::env::set_var("COLMENA_PRIVATE_LIBRARY", v),
+            None => std::env::remove_var("COLMENA_PRIVATE_LIBRARY"),
+        }
+
         let lib_check = checks
             .iter()
             .find(|c| c.name == "Roles & patterns")
