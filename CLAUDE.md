@@ -15,7 +15,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Fmt:** `cargo fmt --all --check` (CI-enforced)
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.11.1 (semver, single workspace version)
+- **Version:** 0.13.0 (semver, single workspace version)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (fmt + test + clippy `-D warnings` + build + audit + deny on PRs), `release.yml` (tag-triggered releases), dependabot weekly for cargo + github-actions
@@ -167,6 +167,10 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ### Wisdom Library
 
+- **Private library overlay:** Roles and patterns can be split across two dirs: public `config/library/` (version-controlled) and a private dir (`$COLMENA_PRIVATE_LIBRARY` if set, else `~/.colmena-private/library/`). Private entries with the same `id` override public ones. The loader is additive — if the private dir doesn't exist, behaviour is unchanged. Use this for experimental or personal roles/patterns that must not ship in the public repo.
+- **Deterministic loaders:** production code uses `load_roles(dir)` / `load_patterns(dir)` which discover the private dir via env/HOME. Tests and tooling that need determinism go through `load_roles_with_private(dir, Option<&Path>)` / `load_patterns_with_private(dir, Option<&Path>)`.
+- **Role model binding (`model: Option<String>`):** roles can declare a preferred model (e.g. `claude-sonnet-4-7`, `claude-opus-4-7`). Colmena does not invoke models — the field is surfaced in the `mission_spawn` output header (`### role (Name) [model: ...]`) so the operator picks the right model when pasting into the Agent tool. Optional.
+- **Pattern `workspace_scope: repo-wide`:** patterns can override the default mission-dir scope. When set, `spawn_mission` rewrites file-tool `path_within` to the Colmena repo root and merges default secret exclusions (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`). Use for missions that must touch production code; leave unset for anything confined to `config/missions/<id>/`.
 - 10 built-in roles (6 security + 4 dev) + 10 built-in patterns (7 security + 3 dev). New roles/patterns created via `library_create_role`/`library_create_pattern`
 - RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative)
 - PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)
@@ -305,6 +309,7 @@ Operations:
 
 - `COLMENA_HOME` — Override project root (default: auto-detected from binary)
 - `COLMENA_CONFIG` — Override config file path
+- `COLMENA_PRIVATE_LIBRARY` — Private library dir for roles/patterns that must stay out of the public repo (default: `~/.colmena-private/library/`). Private entries override public ones by `id`.
 
 ## Roadmap
 
@@ -332,14 +337,15 @@ Operations:
 - **M7.6** Install Mode B as first-class — document and polish the onboarding path where the user's own CC reads the Colmena repo (SSH or clone) and self-configures. Validated with the 4 power users. Scope: README section at top level, CLAUDE.md structured for agent consumption, copy-pasteable commands, explicit naming conventions. Do not replace Mode A, add B alongside it.
 - **M7.3.1** Anti-reciprocal invariant scope fix (discovered during Wave A parallel spawn 2026-04-17) — `submit_review` in `review.rs:141-147` currently filters reviewer candidates against the full reviews store (all missions), blocking legitimate cross-mission reviewer reuse. Scope the filter to `existing.mission == current.mission` so reciprocity is a per-collaboration property, not career-long exclusion. Audit other cross-mission leaks (e.g. stale-review auto-invalidation) for the same assumption. See memory: `project_review_reciprocal_cross_mission_bug.md`. Belongs folded into M7.3 as a required sub-task.
 - **M7.7** Multi-perspective reviewer diversification — near-future need flagged explicitly by Coco. As Colmena grows, many Researcher and Reviewer roles will coexist with distinct viewpoints (software engineering, security architect, project manager, SRE, compliance, etc.). Reviewer selection must reflect that diversity instead of pure random from the pool. Scope: (a) `submit_review` accepts an optional `preferred_categories` hint from callers; (b) when unhinted, reviewer selection scores candidates by complementarity — if author's strongest `EloConfig.categories` is X, prefer a reviewer whose strongest category is *not* X; (c) track "perspective balance" per mission — avoid the same reviewer category evaluating N consecutive artifacts; (d) expose `colmena review perspectives <mission>` showing which viewpoints reviewed what; (e) when a mission spawns many Researchers, pair each with a reviewer from a contrasting category (pentester ↔ software_engineer, developer ↔ security_architect, devops ↔ architect). Goal: every ELO event reflects a genuinely cross-viewpoint judgement, not same-tribe approval.
+- **M7.12** Library extension mechanism — foundation for "colmena codee colmena" missions. Three opt-in additions: (a) private library overlay via `$COLMENA_PRIVATE_LIBRARY` (default `~/.colmena-private/library/`), loaded by `load_roles`/`load_patterns` and merged over public entries by id; `load_*_with_private(dir, Option<&Path>)` pure variants for tests; (b) `Role.model: Option<String>` surfaced in `mission_spawn` output header `### role (Name) [model: X]` so the operator selects the right model when pasting the prompt into the Agent tool; (c) `Pattern.workspace_scope: Option<String>` — when set to `"repo-wide"`, `spawn_mission` rewrites file-tool `path_within` to the Colmena repo root and merges default secret exclusions (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`), closing the mission_spawn scope gap for refactor missions. Zero behavior change when fields are absent. Docs in CLAUDE.md §Wisdom Library + §Environment Variables. Follow-up `load_prompt` + `validate_library` fall through to the private dir so private-library roles do not emit false-positive missing-prompt warnings. Env var is authoritative — invalid value disables the private merge (explicit opt-out). (done)
 
-## Current State (2026-04-17)
+## Current State (2026-04-22)
 
-**Branch:** `main` @ `709997f` — post Wave A parallel wave (M7.5 + M7.6 + M7.8 + M7.9 all merged).
-**Done:** M0–M7.2 + v0.11.1 (review cycle hardening) + public-release-prep (PR #25: LICENSE, CI audit/deny/fmt/MSRV, dependabot, SECURITY/COC/CONTRIBUTORS, GitHub templates, runtime-file untracking, privacy scrub) + Wave A 2026-04-17 (PRs #28 #29 #30 #31: devops/SRE/platform_engineer roles, cross-platform release workflow + `cargo publish` + checksums, repositioning vs Claude Code auto-mode + Install Mode B docs, static prompt injection filter).
-**Validated users (2026-04-16):** 4 active power users (pentester, developer, devops, SRE) — primary hook is Y-approval reduction; explicit ask is more devops roles; onboarding happens via Install Mode B (user's own CC reads repo).
-**ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep 2026-04-16). Recipe documented in memory; must be formalized in M7.3 so every mission closes the cycle automatically.
-**Next:** M7.3 + M7.3.1 (ELO cycle auto-closure + anti-reciprocal scope fix) → M7.7 (multi-perspective reviewers) → M7.4 (role ergonomics CLI). Post-launch: `serde_yml → serde_yaml_ng` migration, RUSTSEC-2026-0097 rand upgrade when patched.
+**Branch:** `feat/library-ext-model-binding` — M7.12 (library extension mechanism) ready for PR.
+**Done:** M0–M7.2 + v0.11.1 (review cycle hardening) + public-release-prep (PR #25) + Wave A 2026-04-17 (PRs #28–#31) + M7.3/M7.3.1/M7.5/M7.6/M7.8/M7.9 + M7.12 library extension (v0.13.0) — pending merge.
+**Validated users (2026-04-16):** 4 active power users (pentester, developer, devops, SRE).
+**ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep 2026-04-16). M7.3 dogfood (2026-04-21) closed the full ELO cycle with centralized auditor + 14 ELO events.
+**Next:** merge M7.12 → dogfood warmup via `colmena-self-dev` private pattern (ReviewerLead cleanup re-spawn) → M7.4 (role ergonomics CLI, bundles the 4 M7.4-candidate gaps surfaced 2026-04-22: suggest matcher inflation, library select destructive default, delegate add condition flags, mission_spawn --code-paths) → M7.7 (multi-perspective reviewers). Post-launch: `serde_yml → serde_yaml_ng` migration, RUSTSEC-2026-0097 rand upgrade when patched.
 
 ## Key Docs
 

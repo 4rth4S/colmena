@@ -492,6 +492,7 @@ mod tests {
                 path_not_match: vec![],
             }),
             role_type: None,
+            model: None,
             elo: EloConfig {
                 initial: 1500,
                 categories: Default::default(),
