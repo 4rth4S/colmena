@@ -167,6 +167,10 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ### Wisdom Library
 
+- **Private library overlay:** Roles and patterns can be split across two dirs: public `config/library/` (version-controlled) and a private dir (`$COLMENA_PRIVATE_LIBRARY` if set, else `~/.colmena-private/library/`). Private entries with the same `id` override public ones. The loader is additive — if the private dir doesn't exist, behaviour is unchanged. Use this for experimental or personal roles/patterns that must not ship in the public repo.
+- **Deterministic loaders:** production code uses `load_roles(dir)` / `load_patterns(dir)` which discover the private dir via env/HOME. Tests and tooling that need determinism go through `load_roles_with_private(dir, Option<&Path>)` / `load_patterns_with_private(dir, Option<&Path>)`.
+- **Role model binding (`model: Option<String>`):** roles can declare a preferred model (e.g. `claude-sonnet-4-7`, `claude-opus-4-7`). Colmena does not invoke models — the field is surfaced in the `mission_spawn` output header (`### role (Name) [model: ...]`) so the operator picks the right model when pasting into the Agent tool. Optional.
+- **Pattern `workspace_scope: repo-wide`:** patterns can override the default mission-dir scope. When set, `spawn_mission` rewrites file-tool `path_within` to the Colmena repo root and merges default secret exclusions (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`). Use for missions that must touch production code; leave unset for anything confined to `config/missions/<id>/`.
 - 10 built-in roles (6 security + 4 dev) + 10 built-in patterns (7 security + 3 dev). New roles/patterns created via `library_create_role`/`library_create_pattern`
 - RoleCategory: 8 categories (offensive, defensive, compliance, architecture, research, development, operations, creative)
 - PatternTopology: 7 topologies (hierarchical, sequential, adversarial, peer, fan-out-merge, recursive, iterative)
@@ -305,6 +309,7 @@ Operations:
 
 - `COLMENA_HOME` — Override project root (default: auto-detected from binary)
 - `COLMENA_CONFIG` — Override config file path
+- `COLMENA_PRIVATE_LIBRARY` — Private library dir for roles/patterns that must stay out of the public repo (default: `~/.colmena-private/library/`). Private entries override public ones by `id`.
 
 ## Roadmap
 

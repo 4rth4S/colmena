@@ -1491,10 +1491,16 @@ impl ColmenaServer {
         output.push_str("\n## Agent Prompts\n\n");
         output.push_str("Paste each prompt into the Agent tool's `prompt` parameter:\n\n");
         for ap in &spawn_result.agent_prompts {
+            let model_suffix = ap
+                .model
+                .as_ref()
+                .map(|m| format!(" [model: {m}]"))
+                .unwrap_or_default();
             output.push_str(&format!(
-                "### {} ({})\n\nCLAUDE.md: {}\n\n<details><summary>Prompt (click to expand)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
+                "### {} ({}){}\n\nCLAUDE.md: {}\n\n<details><summary>Prompt (click to expand)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
                 ap.role_id,
                 ap.role_name,
+                model_suffix,
                 ap.claude_md_path.display(),
                 // Show first 200 chars + indicator
                 if ap.prompt.len() > 200 {

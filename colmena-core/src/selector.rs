@@ -85,6 +85,11 @@ pub struct AgentPrompt {
     pub role_name: String,
     pub prompt: String,
     pub claude_md_path: PathBuf,
+    /// Preferred model for this agent (from `Role.model`). Surfaced by the
+    /// MCP handler in the `mission_spawn` output so the operator picks the
+    /// right model when pasting into the Agent tool. `None` leaves the choice
+    /// to the operator.
+    pub model: Option<String>,
 }
 
 /// Generated mission configuration
@@ -705,6 +710,46 @@ fn generate_role_delegations(
     }
 
     delegations
+}
+
+/// Default secret-file exclusions applied when a pattern declares
+/// `workspace_scope: repo-wide`. Pattern glob is applied to filename only
+/// (last path component) by the firewall — see CLAUDE.md §Config & Data.
+const REPO_WIDE_SECRET_EXCLUSIONS: &[&str] =
+    &["*.env", "*credentials*", "*secret*", "*.key", "*.pem"];
+
+/// File-based tools whose `path_within` we rewrite for `workspace_scope: repo-wide`.
+const FILE_BASED_TOOLS: &[&str] = &["Read", "Write", "Edit", "Glob", "Grep"];
+
+/// Rewrite delegations' `path_within` to the repo root for file-based tools.
+/// Preserves Bash/MCP tool delegations verbatim. Merges any existing
+/// `path_not_match` with the default secret exclusions (no duplicates).
+fn apply_repo_wide_scope(delegations: &mut [RuntimeDelegation], repo_root: &Path) {
+    let repo_root_str = repo_root.to_string_lossy().to_string();
+    for d in delegations.iter_mut() {
+        if !FILE_BASED_TOOLS.contains(&d.tool.as_str()) {
+            continue;
+        }
+        let existing = d.conditions.take();
+        let mut merged_excl: Vec<String> = REPO_WIDE_SECRET_EXCLUSIONS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        if let Some(cond) = existing.as_ref() {
+            if let Some(ref prev) = cond.path_not_match {
+                for p in prev {
+                    if !merged_excl.contains(p) {
+                        merged_excl.push(p.clone());
+                    }
+                }
+            }
+        }
+        d.conditions = Some(DelegationConditions {
+            bash_pattern: existing.as_ref().and_then(|c| c.bash_pattern.clone()),
+            path_within: Some(vec![repo_root_str.clone()]),
+            path_not_match: Some(merged_excl),
+        });
+    }
 }
 
 /// Format a "Pre-Approved Operations" section for CLAUDE.md
@@ -1604,7 +1649,7 @@ pub fn spawn_mission(
     //    Honour `dry_run`: when true, generate_mission composes prompts in
     //    memory but does NOT create directories or write mission.yaml /
     //    per-agent CLAUDE.md files.
-    let mission_config = generate_mission(
+    let mut mission_config = generate_mission(
         mission,
         &recommendation,
         roles,
@@ -1616,6 +1661,22 @@ pub fn spawn_mission(
         manifest,
         dry_run,
     )?;
+
+    // 3b. Apply pattern-level workspace_scope override. When the chosen pattern
+    //     declares `workspace_scope: repo-wide`, rewrite file-tool `path_within`
+    //     to the Colmena repo root (with default secret exclusions) so missions
+    //     that touch production code do not need per-file approval. See
+    //     `project_mission_spawn_scope_gap.md` in memory for the motivation.
+    let effective_pattern = patterns
+        .iter()
+        .find(|p| p.id == recommendation.pattern_id)
+        .or(auto_created_pattern.as_ref());
+    if let Some(p) = effective_pattern {
+        if p.workspace_scope.as_deref() == Some("repo-wide") {
+            let repo_root = crate::paths::colmena_home();
+            apply_repo_wide_scope(&mut mission_config.delegations, &repo_root);
+        }
+    }
 
     let mission_name = mission_config
         .mission_dir
@@ -1633,11 +1694,17 @@ pub fn spawn_mission(
         // may not exist on disk when generate_mission was called with dry_run.
         let prompt = format!("{}\n{}", mission_marker, agent_cfg.claude_md_content);
 
+        let model = roles
+            .iter()
+            .find(|r| r.id == agent_cfg.role_id)
+            .and_then(|r| r.model.clone());
+
         agent_prompts.push(AgentPrompt {
             role_id: agent_cfg.role_id.clone(),
             role_name: agent_cfg.role_name.clone(),
             prompt,
             claude_md_path: agent_cfg.claude_md_path.clone(),
+            model,
         });
     }
 
@@ -1893,6 +1960,7 @@ mod tests {
             },
             permissions: None,
             role_type,
+            model: None,
             mentoring: MentoringConfig {
                 can_mentor: vec![],
                 mentored_by: vec![],
@@ -1927,6 +1995,7 @@ mod tests {
             estimated_agents: "2-4".to_string(),
             roles_suggested: RolesSuggested(slots),
             elo_lead_selection: false,
+            workspace_scope: None,
         }
     }
 
@@ -3283,6 +3352,108 @@ mod tests {
             "findings_query must remain delegated: {:?}",
             tools
         );
+    }
+
+    // ── workspace_scope: repo-wide ──────────────────────────────────────────
+
+    #[test]
+    fn test_apply_repo_wide_scope_rewrites_file_tool_path_within() {
+        let now = Utc::now();
+        let mut delegations = vec![
+            RuntimeDelegation {
+                tool: "Read".to_string(),
+                agent_id: Some("developer".to_string()),
+                action: Action::AutoApprove,
+                created_at: now,
+                expires_at: Some(now + chrono::Duration::hours(8)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("test".to_string()),
+                conditions: Some(DelegationConditions {
+                    bash_pattern: None,
+                    path_within: Some(vec!["/tmp/old/mission".to_string()]),
+                    path_not_match: Some(vec!["*.env".to_string()]),
+                }),
+            },
+            RuntimeDelegation {
+                tool: "Bash".to_string(),
+                agent_id: Some("developer".to_string()),
+                action: Action::AutoApprove,
+                created_at: now,
+                expires_at: Some(now + chrono::Duration::hours(8)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("test".to_string()),
+                conditions: Some(DelegationConditions {
+                    bash_pattern: Some("^cargo ".to_string()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
+            },
+            RuntimeDelegation {
+                tool: "mcp__colmena__review_submit".to_string(),
+                agent_id: Some("developer".to_string()),
+                action: Action::AutoApprove,
+                created_at: now,
+                expires_at: Some(now + chrono::Duration::hours(8)),
+                session_id: None,
+                source: Some("role".to_string()),
+                mission_id: Some("test".to_string()),
+                conditions: None,
+            },
+        ];
+
+        let repo_root = Path::new("/home/u/colmena");
+        apply_repo_wide_scope(&mut delegations, repo_root);
+
+        // Read: path_within rewritten to repo root, secret exclusions merged
+        let read_cond = delegations[0].conditions.as_ref().unwrap();
+        assert_eq!(
+            read_cond.path_within.as_ref().unwrap(),
+            &vec!["/home/u/colmena".to_string()]
+        );
+        let excl = read_cond.path_not_match.as_ref().unwrap();
+        assert!(excl.contains(&"*.env".to_string()), "existing kept");
+        assert!(excl.contains(&"*credentials*".to_string()), "default added");
+        assert!(excl.contains(&"*secret*".to_string()), "default added");
+        assert!(excl.contains(&"*.key".to_string()), "default added");
+        assert!(excl.contains(&"*.pem".to_string()), "default added");
+        // No duplicate of *.env
+        assert_eq!(excl.iter().filter(|p| *p == "*.env").count(), 1);
+
+        // Bash: unchanged (bash_pattern preserved, no path_within added)
+        let bash_cond = delegations[1].conditions.as_ref().unwrap();
+        assert_eq!(bash_cond.bash_pattern.as_deref(), Some("^cargo "));
+        assert!(bash_cond.path_within.is_none(), "Bash keeps no path scope");
+
+        // MCP: conditions stays None (not a file tool)
+        assert!(delegations[2].conditions.is_none());
+    }
+
+    #[test]
+    fn test_apply_repo_wide_scope_handles_none_existing_conditions() {
+        let now = Utc::now();
+        let mut delegations = vec![RuntimeDelegation {
+            tool: "Write".to_string(),
+            agent_id: Some("developer".to_string()),
+            action: Action::AutoApprove,
+            created_at: now,
+            expires_at: Some(now + chrono::Duration::hours(8)),
+            session_id: None,
+            source: Some("role".to_string()),
+            mission_id: Some("test".to_string()),
+            conditions: None, // no prior conditions
+        }];
+
+        let repo_root = Path::new("/repo");
+        apply_repo_wide_scope(&mut delegations, repo_root);
+
+        let cond = delegations[0].conditions.as_ref().unwrap();
+        assert_eq!(
+            cond.path_within.as_ref().unwrap(),
+            &vec!["/repo".to_string()]
+        );
+        assert_eq!(cond.path_not_match.as_ref().unwrap().len(), 5);
     }
 
     // ── M7.3 build_review_section auditor-centric routing ───────────────────
