@@ -99,8 +99,6 @@ pub struct MissionConfig {
     pub agent_configs: Vec<AgentConfig>,
     /// Auto-generated delegations from role permissions
     pub delegations: Vec<RuntimeDelegation>,
-    /// Reviewer lead assigned by ELO (highest-rated agent in the squad)
-    pub reviewer_lead: Option<ReviewerLead>,
 }
 
 #[derive(Debug)]
@@ -112,15 +110,6 @@ pub struct AgentConfig {
     /// without a disk read (important under `dry_run`, where
     /// `claude_md_path` points at a file that was NOT persisted).
     pub claude_md_content: String,
-}
-
-/// Reviewer lead assignment based on ELO
-#[derive(Debug, Clone)]
-pub struct ReviewerLead {
-    pub role_id: String,
-    pub role_name: String,
-    pub elo: i32,
-    pub review_count: u32,
 }
 
 // ── Tokenizer ─────────────────────────────────────────────────────────────────
@@ -302,7 +291,8 @@ pub fn detect_role_gaps(mission: &str, roles: &[Role]) -> Vec<String> {
 /// Generate a mission directory with CLAUDE.md per agent and role-bound delegations.
 ///
 /// If `session_id` is provided, all generated delegations are scoped to that session.
-/// If `elo_ratings` is provided, the highest-ELO agent is assigned as reviewer lead.
+/// If `elo_ratings` is provided, it is passed to `generate_prompt_review_context` for
+/// prompt-improvement missions that need ELO context.
 /// If `config_dir` is provided and mission text matches prompt review keywords,
 /// the prompt review context is injected into all agents' CLAUDE.md files.
 /// If `manifest` is provided, per-role scope, task, and review protocol sections
@@ -365,11 +355,6 @@ pub fn generate_mission(
         });
     let auditor_role_id: Option<&str> = auditor_assignment.map(|a| a.role_id.as_str());
     let auditor_role_name: Option<&str> = auditor_assignment.map(|a| a.role_name.as_str());
-
-    // Assign reviewer lead (legacy; kept for struct backward-compat, ignored by
-    // the active review routing logic). Scheduled for removal in follow-up
-    // refactor — see `project_reviewerlead_cleanup_pending.md`.
-    let reviewer_lead = assign_reviewer_lead(recommendation, &role_map, elo_ratings);
 
     // Detect if this is a prompt review mission
     let prompt_review_context = config_dir.and_then(|cd| {
@@ -460,7 +445,6 @@ pub fn generate_mission(
         // Build review instructions based on role
         let review_section = build_review_section(
             &assignment.role_id,
-            &reviewer_lead,
             &mission_name,
             &recommendation.role_assignments,
             role.role_type.as_deref(),
@@ -600,7 +584,6 @@ pub fn generate_mission(
         mission_dir,
         agent_configs,
         delegations,
-        reviewer_lead,
     })
 }
 
@@ -804,99 +787,24 @@ fn format_pre_approved_ops(role: &Role) -> String {
     lines.join("\n")
 }
 
-// ── Reviewer Lead Assignment ─────────────────────────────────────────────────
-
-/// Assign reviewer lead based on ELO ratings. Highest ELO wins.
-/// Fallback: role with default_trust_level "high" (typically security_architect).
-/// Single-agent missions return None.
-fn assign_reviewer_lead(
-    recommendation: &Recommendation,
-    role_map: &HashMap<&str, &Role>,
-    elo_ratings: &[AgentRating],
-) -> Option<ReviewerLead> {
-    if recommendation.role_assignments.len() <= 1 {
-        return None; // Single-agent mission: no review needed
-    }
-
-    let rating_map: HashMap<&str, &AgentRating> =
-        elo_ratings.iter().map(|r| (r.agent.as_str(), r)).collect();
-
-    // Find highest ELO among mission roles
-    let mut best: Option<(&RoleAssignment, i32, u32)> = None;
-    for assignment in &recommendation.role_assignments {
-        let (elo, reviews) = rating_map
-            .get(assignment.role_id.as_str())
-            .map(|r| (r.elo, r.review_count))
-            .unwrap_or((1500, 0));
-
-        match &best {
-            None => best = Some((assignment, elo, reviews)),
-            Some((_, best_elo, _)) => {
-                if elo > *best_elo {
-                    best = Some((assignment, elo, reviews));
-                }
-            }
-        }
-    }
-
-    // If all agents have the same ELO (uncalibrated), pick the one with highest trust level
-    let all_same_elo = recommendation.role_assignments.iter().all(|a| {
-        let elo = rating_map
-            .get(a.role_id.as_str())
-            .map(|r| r.elo)
-            .unwrap_or(1500);
-        let best_elo = best.as_ref().map(|(_, e, _)| *e).unwrap_or(1500);
-        elo == best_elo
-    });
-
-    if all_same_elo {
-        // Fallback: pick role with default_trust_level "high"
-        for assignment in &recommendation.role_assignments {
-            if let Some(role) = role_map.get(assignment.role_id.as_str()) {
-                if role.default_trust_level == "high" {
-                    return Some(ReviewerLead {
-                        role_id: assignment.role_id.clone(),
-                        role_name: assignment.role_name.clone(),
-                        elo: 1500,
-                        review_count: 0,
-                    });
-                }
-            }
-        }
-    }
-
-    best.map(|(assignment, elo, reviews)| ReviewerLead {
-        role_id: assignment.role_id.clone(),
-        role_name: assignment.role_name.clone(),
-        elo,
-        review_count: reviews,
-    })
-}
-
 /// Build review instructions section for a CLAUDE.md based on the agent's role.
 ///
-/// M7.3 invariant: when the squad contains a `role_type: auditor`, review is
-/// centralized on that auditor — the auditor evaluates every worker via
-/// `review_evaluate`, and workers submit with `available_roles: ["auditor"]`.
-/// ELO-based `reviewer_lead` is ignored in this mode (kept in the signature
-/// for backward compat; scheduled for removal in a follow-up refactor).
+/// The centralized-auditor invariant is enforced upstream by `generate_mission`:
+/// every multi-agent mission has exactly one role with `role_type: auditor`.
+/// This function trusts that invariant — auditor routing is always centralized.
 ///
-/// The legacy reviewer-by-ELO path only fires for degenerate single-agent
-/// missions (no peer review) or hypothetical no-auditor squads (which the
-/// generate_mission guardrail now rejects for multi-agent cases).
-#[allow(clippy::too_many_arguments)]
+/// For solo-agent missions (no auditor in squad), returns `String::new()`.
 fn build_review_section(
     role_id: &str,
-    reviewer_lead: &Option<ReviewerLead>,
     mission_id: &str,
     all_assignments: &[RoleAssignment],
     role_type: Option<&str>,
     auditor_role_id: Option<&str>,
     auditor_role_name: Option<&str>,
 ) -> String {
-    // M7.3 centralized-auditor path: when the squad has an auditor, route all
-    // review traffic through it. ELO ranking is irrelevant — the auditor is
-    // the single calibrated standard for evaluation.
+    // Centralized-auditor path: when the squad has an auditor, route all
+    // review traffic through it. The generate_mission guardrail guarantees
+    // auditor_role_id and auditor_role_name are Some for every multi-agent mission.
     if let (Some(auditor_id), Some(auditor_name)) = (auditor_role_id, auditor_role_name) {
         if role_id == auditor_id || role_type == Some("auditor") {
             // This agent IS the centralized auditor — emit evaluation protocol.
@@ -944,32 +852,10 @@ fn build_review_section(
         );
     }
 
-    // Legacy fallback: no auditor in squad (solo-agent missions, or
-    // test-only recommendations). Retained so that existing tests and
-    // single-agent flows keep working. The generate_mission guardrail
-    // rejects multi-agent squads without an auditor, so this branch is
-    // dead for real multi-agent missions.
-    let _ = mission_id;
+    // Solo-agent mission or no auditor in squad: no peer review needed.
     let _ = all_assignments;
     let _ = role_type;
-    let reviewer_lead = match reviewer_lead {
-        Some(rl) => rl,
-        None => return String::new(),
-    };
-    if role_id == reviewer_lead.role_id {
-        format!(
-            "## Review Responsibility\n\n\
-            You are the designated reviewer (highest ELO in this squad, ELO: {}).\n\
-            When you receive review assignments via `mcp__colmena__review_list`:\n\
-            1. Read the artifact (diff/commit) thoroughly\n\
-            2. Call `mcp__colmena__review_evaluate` with scores and findings\n\
-            3. If score < 7.0 or any critical finding: flag for human review, do NOT auto-complete\n\
-            4. Be constructive — findings feed into ELO and help calibrate trust over time",
-            reviewer_lead.elo,
-        )
-    } else {
-        String::new()
-    }
+    String::new()
 }
 
 // ── Prompt Review Context ────────────────────────────────────────────────────
@@ -3463,6 +3349,8 @@ mod tests {
         // When the agent IS the auditor (by id match), it must receive the
         // Review Responsibility + Evaluation Protocol sections, NOT a
         // Post-Work Protocol. The auditor evaluates, it does not submit.
+        // The centralized-auditor invariant is enforced upstream by generate_mission;
+        // build_review_section trusts that invariant.
         let assignments = vec![
             RoleAssignment {
                 slot: "worker".to_string(),
@@ -3478,18 +3366,8 @@ mod tests {
             },
         ];
 
-        // Pass an ELO-based reviewer_lead that picks the DEVELOPER (not the
-        // auditor) to prove the new routing ignores ELO ranking entirely.
-        let misleading_lead = Some(ReviewerLead {
-            role_id: "developer".to_string(),
-            role_name: "Developer".to_string(),
-            elo: 2000,
-            review_count: 50,
-        });
-
         let section = build_review_section(
             "auditor",
-            &misleading_lead,
             "m73-test-mission",
             &assignments,
             Some("auditor"),
@@ -3512,19 +3390,13 @@ mod tests {
             "auditor must NOT receive Post-Work Protocol (does not submit); got:\n{}",
             section
         );
-        assert!(
-            !section.contains("ELO: 2000"),
-            "auditor routing must ignore ELO-based reviewer_lead; got:\n{}",
-            section
-        );
     }
 
     #[test]
-    fn test_build_review_section_worker_points_to_auditor_regardless_of_elo() {
+    fn test_build_review_section_worker_routes_to_auditor() {
         // When the agent is a worker, Post-Work Protocol must route to the
-        // auditor (available_roles: ["auditor"]) regardless of the ELO-based
-        // reviewer_lead. ELO is an output of review, not a criterion for
-        // picking reviewers.
+        // auditor (available_roles: ["auditor"]). The centralized-auditor
+        // invariant is enforced upstream by generate_mission.
         let assignments = vec![
             RoleAssignment {
                 slot: "worker".to_string(),
@@ -3540,18 +3412,8 @@ mod tests {
             },
         ];
 
-        // reviewer_lead points at developer itself (as if ELO ranked workers
-        // against each other) — the new routing must ignore this entirely.
-        let legacy_lead = Some(ReviewerLead {
-            role_id: "developer".to_string(),
-            role_name: "Developer".to_string(),
-            elo: 1800,
-            review_count: 20,
-        });
-
         let section = build_review_section(
             "developer",
-            &legacy_lead,
             "m73-test-mission",
             &assignments,
             None,
@@ -3572,11 +3434,6 @@ mod tests {
         assert!(
             section.contains("reviewed by **Auditor**"),
             "worker must know reviewer is the centralized auditor; got:\n{}",
-            section
-        );
-        assert!(
-            !section.contains("ELO: 1800"),
-            "worker routing must ignore ELO-based reviewer_lead; got:\n{}",
             section
         );
         assert!(

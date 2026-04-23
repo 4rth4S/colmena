@@ -779,29 +779,13 @@ impl ColmenaServer {
             ));
         }
 
-        // Show reviewer lead assignment
-        if let Some(ref lead) = mission_config.reviewer_lead {
-            output.push_str(&format!(
-                "\n## Review Lead\n\nAssigned: {} (ELO: {}, reviews: {})\n\
-                Escalation: scores < 7.0 or critical findings → human review\n",
-                lead.role_name, lead.elo, lead.review_count,
-            ));
-        }
-
         // Agent prompts section
         output.push_str("\n## Agent Prompts (ready for Agent tool)\n\n");
         for agent in &mission_config.agent_configs {
-            let is_lead = mission_config
-                .reviewer_lead
-                .as_ref()
-                .map(|l| l.role_id == agent.role_id)
-                .unwrap_or(false);
-            let role_label = if is_lead { " [REVIEWER]" } else { "" };
             output.push_str(&format!(
-                "### {} {}{}\nPrompt: {}\n\n",
+                "### {} {}\nPrompt: {}\n\n",
                 agent.role_id,
                 agent.role_name,
-                role_label,
                 agent.claude_md_path.display()
             ));
         }
@@ -992,29 +976,12 @@ impl ColmenaServer {
             );
         }
 
-        // Load existing reviews, filter out Invalidated so freed reviewer slots are available.
-        // M7.3.1: include mission in each tuple so the anti-reciprocal filter can scope per-mission.
-        let existing = colmena_core::review::list_reviews(&review_dir, None)
-            .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
-        let existing_pairs: Vec<(String, String, String)> = existing
-            .iter()
-            .filter(|r| r.state != colmena_core::review::ReviewState::Invalidated)
-            .map(|r| {
-                (
-                    r.reviewer_role.clone(),
-                    r.author_role.clone(),
-                    r.mission.clone(),
-                )
-            })
-            .collect();
-
         let entry = colmena_core::review::submit_review(
             &review_dir,
             &artifact_path,
             &input.author_role,
             &input.mission,
             &input.available_roles,
-            &existing_pairs,
         )
         .map_err(|e| sanitize_error(&format!("Error: {e}")))?;
 

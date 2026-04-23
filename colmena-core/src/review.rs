@@ -118,10 +118,6 @@ pub fn hash_artifact(path: &Path) -> Result<String> {
 /// filter away. Perspective diversification across missions lives in M7.7
 /// (category complementarity scoring), which does not reuse this mechanism.
 ///
-/// `existing_reviews` is kept in the signature for backward-compat; it is
-/// currently unused by the active logic and scheduled to be removed alongside
-/// the `ReviewerLead` cleanup in a follow-up refactor PR.
-///
 /// Returns the created `ReviewEntry` in Pending state.
 pub fn submit_review(
     review_dir: &Path,
@@ -129,10 +125,7 @@ pub fn submit_review(
     author_role: &str,
     mission: &str,
     available_roles: &[String],
-    existing_reviews: &[(String, String, String)],
 ) -> Result<ReviewEntry> {
-    let _ = existing_reviews; // Legacy param, see docstring.
-
     // STRIDE TM Finding #24: limit pending reviews per (author, mission)
     let pending_count = count_pending_for_author(review_dir, author_role, mission);
     if pending_count >= MAX_PENDING_PER_AUTHOR {
@@ -609,17 +602,9 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         assert!(entry.review_id.starts_with("r_"));
         assert_eq!(entry.author_role, "coder");
@@ -648,16 +633,8 @@ mod tests {
 
         // Only the author's role is available
         let roles = vec!["coder".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let result = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        );
+        let result = submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles);
 
         assert!(result.is_err());
         assert!(result
@@ -682,59 +659,17 @@ mod tests {
 
         let roles = vec!["auditor".to_string()];
 
-        // Simulate the exact dogfood state: after the first submit, the
-        // reviews store records (auditor, architect, mission). The filter
-        // used to block subsequent submits; now it must not.
-        let existing_after_first = vec![(
-            "auditor".to_string(),
-            "architect".to_string(),
-            "m73-docs-overhaul".to_string(),
-        )];
-
-        let r1 = submit_review(
-            &review_dir,
-            &a1,
-            "architect",
-            "m73-docs-overhaul",
-            &roles,
-            &[],
-        )
-        .expect("first submit to centralized auditor must succeed");
+        // The centralized auditor must accept multiple artifacts from the same author.
+        let r1 = submit_review(&review_dir, &a1, "architect", "m73-docs-overhaul", &roles)
+            .expect("first submit to centralized auditor must succeed");
         assert_eq!(r1.reviewer_role, "auditor");
 
-        let r2 = submit_review(
-            &review_dir,
-            &a2,
-            "architect",
-            "m73-docs-overhaul",
-            &roles,
-            &existing_after_first,
-        )
-        .expect("second submit to centralized auditor must succeed");
+        let r2 = submit_review(&review_dir, &a2, "architect", "m73-docs-overhaul", &roles)
+            .expect("second submit to centralized auditor must succeed");
         assert_eq!(r2.reviewer_role, "auditor");
 
-        let existing_after_second = vec![
-            (
-                "auditor".to_string(),
-                "architect".to_string(),
-                "m73-docs-overhaul".to_string(),
-            ),
-            (
-                "auditor".to_string(),
-                "architect".to_string(),
-                "m73-docs-overhaul".to_string(),
-            ),
-        ];
-
-        let r3 = submit_review(
-            &review_dir,
-            &a3,
-            "architect",
-            "m73-docs-overhaul",
-            &roles,
-            &existing_after_second,
-        )
-        .expect("third submit to centralized auditor must succeed");
+        let r3 = submit_review(&review_dir, &a3, "architect", "m73-docs-overhaul", &roles)
+            .expect("third submit to centralized auditor must succeed");
         assert_eq!(r3.reviewer_role, "auditor");
     }
 
@@ -750,21 +685,8 @@ mod tests {
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
 
-        let existing = vec![(
-            "pentester".to_string(),
-            "coder".to_string(),
-            "mission-a".to_string(),
-        )];
-
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "mission-b",
-            &roles,
-            &existing,
-        )
-        .expect("cross-mission submit must succeed");
+        let entry = submit_review(&review_dir, &artifact, "coder", "mission-b", &roles)
+            .expect("cross-mission submit must succeed");
 
         assert_eq!(entry.reviewer_role, "pentester");
         assert_eq!(entry.mission, "mission-b");
@@ -777,17 +699,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         let mut scores = HashMap::new();
         scores.insert("correctness".to_string(), 8);
@@ -834,17 +748,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Tamper with the artifact after submission
         std::fs::write(&artifact, "fn main() { evil() }").unwrap();
@@ -877,17 +783,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Only 1 score dimension (below MIN_SCORE_DIMENSIONS)
         let mut scores = HashMap::new();
@@ -946,31 +844,14 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String, String)> = vec![];
 
         // Submit two reviews (need slight delay for unique IDs)
-        let _e1 = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "mission-1",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let _e1 = submit_review(&review_dir, &artifact, "coder", "mission-1", &roles).unwrap();
 
         // Small sleep to get a different timestamp-based ID
         std::thread::sleep(std::time::Duration::from_millis(2));
 
-        let _e2 = submit_review(
-            &review_dir,
-            &artifact,
-            "architect",
-            "mission-2",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let _e2 = submit_review(&review_dir, &artifact, "architect", "mission-2", &roles).unwrap();
 
         // List all reviews
         let all = list_reviews(&review_dir, None).unwrap();
@@ -998,17 +879,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Score of u32::MAX triggers overflow on sum() without bounds check
         let mut scores = HashMap::new();
@@ -1044,17 +917,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         let mut scores = HashMap::new();
         scores.insert("correctness".to_string(), MAX_REVIEW_SCORE);
@@ -1085,17 +950,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let _entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let _entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         assert!(
             has_submitted_review(&review_dir, "coder", "audit-payments"),
@@ -1121,17 +978,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let _entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let _entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         assert!(
             !has_submitted_review(&review_dir, "coder", "different-mission"),
@@ -1148,17 +997,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         let mut scores = HashMap::new();
         scores.insert("correctness".to_string(), 8);
@@ -1202,17 +1043,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // The assigned reviewer should have a pending evaluation
         assert!(
@@ -1239,17 +1072,8 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         assert!(
             !has_pending_evaluations(&review_dir, "pentester", "different-mission"),
@@ -1264,17 +1088,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         let reviewer = entry.reviewer_role.clone();
 
@@ -1309,17 +1125,9 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        let entry = submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        let entry =
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Modify the artifact (new hash)
         std::fs::write(&artifact, "fn main() { improved() }").unwrap();
@@ -1360,17 +1168,8 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Same hash — nothing should be invalidated
         let same_hash = hash_artifact(&artifact).unwrap();
@@ -1393,17 +1192,8 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         std::fs::write(&artifact, "fn main() { changed() }").unwrap();
         let new_hash = hash_artifact(&artifact).unwrap();
@@ -1427,17 +1217,8 @@ mod tests {
         let artifact = create_artifact(tmp.path(), "main.rs", "fn main() {}");
 
         let roles = vec!["coder".to_string(), "pentester".to_string()];
-        let existing: Vec<(String, String, String)> = vec![];
 
-        submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         std::fs::write(&artifact, "fn main() { changed() }").unwrap();
         let new_hash = hash_artifact(&artifact).unwrap();
@@ -1477,18 +1258,9 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String, String)> = vec![];
 
         // Coder submits a review
-        submit_review(
-            &review_dir,
-            &artifact,
-            "coder",
-            "audit-payments",
-            &roles,
-            &existing,
-        )
-        .unwrap();
+        submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
 
         // Pentester modifies the artifact and tries to invalidate coder's review
         std::fs::write(&artifact, "fn main() { pentester_was_here() }").unwrap();
@@ -1533,7 +1305,6 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String, String)> = vec![];
 
         // Submit MAX_PENDING_PER_AUTHOR reviews (should succeed)
         for i in 0..MAX_PENDING_PER_AUTHOR {
@@ -1541,15 +1312,7 @@ mod tests {
             let artifact =
                 create_artifact(tmp.path(), &artifact_name, &format!("fn f{}() {{}}", i));
             std::thread::sleep(std::time::Duration::from_millis(2));
-            submit_review(
-                &review_dir,
-                &artifact,
-                "coder",
-                "audit-payments",
-                &roles,
-                &existing,
-            )
-            .unwrap();
+            submit_review(&review_dir, &artifact, "coder", "audit-payments", &roles).unwrap();
         }
 
         // The next submission should fail
@@ -1560,7 +1323,6 @@ mod tests {
             "coder",
             "audit-payments",
             &roles,
-            &existing,
         );
         assert!(
             result.is_err(),
@@ -1586,7 +1348,6 @@ mod tests {
             "pentester".to_string(),
             "architect".to_string(),
         ];
-        let existing: Vec<(String, String, String)> = vec![];
 
         // Fill up mission A
         for i in 0..MAX_PENDING_PER_AUTHOR {
@@ -1594,27 +1355,12 @@ mod tests {
             let artifact =
                 create_artifact(tmp.path(), &artifact_name, &format!("fn a{}() {{}}", i));
             std::thread::sleep(std::time::Duration::from_millis(2));
-            submit_review(
-                &review_dir,
-                &artifact,
-                "coder",
-                "mission-a",
-                &roles,
-                &existing,
-            )
-            .unwrap();
+            submit_review(&review_dir, &artifact, "coder", "mission-a", &roles).unwrap();
         }
 
         // Mission B should still accept reviews from the same author
         let artifact_b = create_artifact(tmp.path(), "b_0.rs", "fn b0() {}");
-        let result = submit_review(
-            &review_dir,
-            &artifact_b,
-            "coder",
-            "mission-b",
-            &roles,
-            &existing,
-        );
+        let result = submit_review(&review_dir, &artifact_b, "coder", "mission-b", &roles);
         assert!(result.is_ok(), "different mission should have its own cap");
     }
 

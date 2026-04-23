@@ -7,6 +7,7 @@ config/audit.log
 config/queue/pending/
 config/queue/processed/
 config/queue/completed/
+config/queue/decided/
 config/missions/
 
 # Runtime state (ephemeral)
