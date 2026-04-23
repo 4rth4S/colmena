@@ -742,7 +742,10 @@ impl ColmenaServer {
             role_assignments,
         };
 
-        // Query ELO ratings for reviewer lead assignment
+        // Load ELO ratings for the prompt review context (surfaced in each
+        // agent's CLAUDE.md via `generate_prompt_review_context`).
+        // Note: no longer used for reviewer selection — the centralized
+        // auditor is discovered by `role_type == "auditor"`, not by max ELO.
         let elo_dir = self.config_dir.join("elo");
         let elo_log_path = elo_dir.join("elo-log.jsonl");
         let elo_events = colmena_core::elo::read_elo_log(&elo_log_path).unwrap_or_default();
