@@ -272,9 +272,30 @@ pub fn check_subagent_minimums(
 ///
 /// On overwrite, writes a `.md.colmena-backup` next to the original before
 /// replacing it.
+/// Escape a string as a YAML double-quoted scalar. Escapes `\` and `"`.
+/// Safe for any UTF-8 input; multi-line descriptions are flattened to a
+/// single `\n` escape inside the quoted string.
+fn yaml_double_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 pub fn write_subagent_file(
     path: &Path,
     role_id: &str,
+    description: &str,
     tools_allowed: &[String],
     body: &str,
     overwrite_existing: bool,
@@ -300,14 +321,22 @@ pub fn write_subagent_file(
     // Emit tools as comma-separated string (Claude Code idiomatic format).
     let tools_inline = tools_allowed.join(", ");
 
+    // YAML-escape the description by double-quoting and escaping interior
+    // double-quotes + backslashes. Claude Code refuses to load subagents
+    // whose frontmatter lacks `description:`, so this field is mandatory
+    // for auto-generated files.
+    let description_yaml = yaml_double_quote(description);
+
     let content = format!(
         "---\n\
          name: {}\n\
+         description: {}\n\
          {}\n\
          tools: {}\n\
          ---\n\n\
          {}\n",
         role_id,
+        description_yaml,
         AUTO_GENERATED_MARKER,
         tools_inline,
         body.trim_start_matches('\n'),
@@ -554,9 +583,18 @@ mod tests {
             "mcp__colmena__review_submit".to_string(),
             "mcp__colmena__findings_query".to_string(),
         ];
-        write_subagent_file(&path, "developer", &tools, "# Developer\nBody text.", false).unwrap();
+        write_subagent_file(
+            &path,
+            "developer",
+            "Test developer role",
+            &tools,
+            "# Developer\nBody text.",
+            false,
+        )
+        .unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("name: developer"));
+        assert!(content.contains("description: \"Test developer role\""));
         assert!(content.contains(AUTO_GENERATED_MARKER));
         assert!(content.contains("mcp__colmena__review_submit"));
     }
@@ -567,7 +605,7 @@ mod tests {
         let path = tmp.path().join("developer.md");
         std::fs::write(&path, "# Pre-existing").unwrap();
         let tools = vec!["mcp__colmena__review_submit".to_string()];
-        let r = write_subagent_file(&path, "developer", &tools, "new body", false);
+        let r = write_subagent_file(&path, "developer", "desc", &tools, "new body", false);
         assert!(r.is_err());
         assert!(r.unwrap_err().to_string().contains("--overwrite"));
     }
@@ -578,10 +616,32 @@ mod tests {
         let path = tmp.path().join("developer.md");
         std::fs::write(&path, "# Pre-existing").unwrap();
         let tools = vec!["mcp__colmena__review_submit".to_string()];
-        write_subagent_file(&path, "developer", &tools, "new body", true).unwrap();
+        write_subagent_file(&path, "developer", "desc", &tools, "new body", true).unwrap();
         let backup = path.with_extension("md.colmena-backup");
         assert!(backup.exists());
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "# Pre-existing");
+    }
+
+    #[test]
+    fn test_write_subagent_file_escapes_quotes_and_backslashes_in_description() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("developer.md");
+        let tools = vec!["mcp__colmena__review_submit".to_string()];
+        // Description with embedded `"` and `\` — must survive as valid YAML.
+        let desc = r#"Role for "testing" with a \backslash and newline
+here"#;
+        write_subagent_file(&path, "developer", desc, &tools, "body", false).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        // Must be double-quoted and escape characters correctly.
+        assert!(
+            content.contains(
+                r#"description: "Role for \"testing\" with a \\backslash and newline\nhere""#
+            ),
+            "description not escaped correctly:\n{content}"
+        );
+        // Re-parse via the frontmatter reader to confirm the YAML is valid.
+        let fm = read_subagent_frontmatter(&path).unwrap();
+        assert_eq!(fm.name.as_deref(), Some("developer"));
     }
 
     #[test]

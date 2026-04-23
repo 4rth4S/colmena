@@ -1294,14 +1294,14 @@ pub fn suggest_mission_size(
     complexity_score -= reduces as i32;
 
     // 4. Map to Complexity enum
-    let (complexity, recommended_agents) = match complexity_score {
+    let (complexity, base_agents) = match complexity_score {
         ..=1 => (Complexity::Trivial, 1),
         2 => (Complexity::Small, 2),
         3 => (Complexity::Medium, 3),
         _ => (Complexity::Large, complexity_score.min(6) as usize),
     };
 
-    let needs_colmena = recommended_agents >= 3;
+    let needs_colmena = base_agents >= 3;
 
     // 5. Confidence: keyword match density
     let confidence = if total_keywords > 0 {
@@ -1326,6 +1326,19 @@ pub fn suggest_mission_size(
         }
     } else {
         (None, vec![])
+    };
+
+    // When a concrete pattern is chosen, `recommended_agents` must equal the
+    // number of roles the pattern actually places on the squad — otherwise the
+    // suggestion output would say e.g. "4 agents" but list only 3 roles (bug
+    // surfaced during M7.12 dogfood: pattern `code-review-cycle` ships 3
+    // role slots, complexity_score gave 4, operator saw a phantom auditor).
+    // If no pattern matched, keep the complexity-score-based estimate so the
+    // trivial / small / medium-without-pattern outputs stay informative.
+    let recommended_agents = if !suggested_roles.is_empty() {
+        suggested_roles.len()
+    } else {
+        base_agents
     };
 
     // 7. Build reason
@@ -1641,6 +1654,7 @@ pub fn spawn_mission(
                         crate::emitters::claude_code::write_subagent_file(
                             &subagent_path,
                             &assignment.role_id,
+                            &role.description,
                             &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
                             &body,
                             true, // overwrite
@@ -1664,6 +1678,7 @@ pub fn spawn_mission(
                     crate::emitters::claude_code::write_subagent_file(
                         &subagent_path,
                         &assignment.role_id,
+                        &role.description,
                         &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
                         &body,
                         false,
@@ -3762,6 +3777,53 @@ mod tests {
             "needs_colmena should be true iff agents >= 3, got agents={} needs={}",
             s.recommended_agents,
             s.needs_colmena
+        );
+    }
+
+    // ── 30.5 recommended_agents aligns with suggested_roles ─────────────────
+
+    #[test]
+    fn test_suggest_agent_count_equals_pattern_role_count() {
+        // Regression guard for M7.12 dogfood bug: `colmena suggest` returned
+        // `Agents: 4` but `Roles: developer → code_reviewer → auditor` (3).
+        // When a concrete pattern is selected, `recommended_agents` must
+        // equal `suggested_roles.len()` — no phantom centralized auditor.
+        let roles = vec![
+            make_role("developer", "Developer", vec!["refactor", "cleanup"]),
+            make_role(
+                "code_reviewer",
+                "Code Reviewer",
+                vec!["code_review", "cleanup"],
+            ),
+            make_role("auditor", "Auditor", vec!["audit", "cleanup"]),
+        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["refactor", "cleanup", "code", "review"],
+            vec![],
+            vec![
+                ("stage_1", "developer"),
+                ("stage_2", "code_reviewer"),
+                ("stage_3", "auditor"),
+            ],
+        )];
+        let s = suggest_mission_size(
+            "Refactor cleanup: remove dead code, review, and audit",
+            &roles,
+            &patterns,
+        );
+        assert!(s.needs_colmena, "expected needs_colmena");
+        assert_eq!(
+            s.recommended_agents,
+            s.suggested_roles.len(),
+            "recommended_agents ({}) must equal suggested_roles.len() ({}) — no phantom auditor",
+            s.recommended_agents,
+            s.suggested_roles.len()
+        );
+        assert_eq!(
+            s.recommended_agents, 3,
+            "pattern has 3 roles, count must be 3 (not 4 as in the original bug)"
         );
     }
 
