@@ -192,7 +192,7 @@ pub fn review_protocol_block(
          mcp__colmena__review_submit(\n  \
              mission: \"{mission}\",\n  \
              author_role: \"{author}\",\n  \
-             artifact_paths: [<files you touched>],\n  \
+             artifact_path: \"<worktree branch path or diff of your changes>\",\n  \
              available_roles: [{roles}]\n\
          )\n\
          ```\n\n\
@@ -435,6 +435,23 @@ mod tests {
         assert!(out.contains("author_role: \"developer\""));
         assert!(out.contains("[\"auditor\", \"code_reviewer\"]"));
         assert!(out.contains("DO NOT Stop"));
+    }
+
+    #[test]
+    fn test_review_protocol_uses_singular_artifact_path() {
+        // Regression guard: the MCP tool signature is `artifact_path: String`
+        // (singular). The prompt template must match — the plural
+        // `artifact_paths: [...]` form trips agents into invalid calls.
+        let roles = vec!["auditor".to_string()];
+        let out = review_protocol_block("m-1", "developer", &roles);
+        assert!(
+            out.contains("artifact_path:"),
+            "prompt must use singular `artifact_path:` — got:\n{out}"
+        );
+        assert!(
+            !out.contains("artifact_paths:"),
+            "prompt must NOT use plural `artifact_paths:` — the tool takes a single path.\nGot:\n{out}"
+        );
     }
 
     use tempfile::TempDir;
