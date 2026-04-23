@@ -8,7 +8,7 @@ mod setup;
 use std::io::{BufReader, Read as _};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 
@@ -171,6 +171,12 @@ enum LibraryAction {
         /// Mission description
         #[arg(long)]
         mission: String,
+        /// Read-only: print ranking + role gaps without spawning or persisting delegations
+        #[arg(long)]
+        dry_run: bool,
+        /// Pattern id to select non-interactively (skips the prompt). Use `library list` to see ids.
+        #[arg(long)]
+        pattern: Option<String>,
     },
     /// Create a new role with intelligent defaults
     CreateRole {
@@ -313,7 +319,11 @@ fn main() {
         Commands::Library { action } => match action {
             LibraryAction::List => run_library_list(),
             LibraryAction::Show { id } => run_library_show(id),
-            LibraryAction::Select { mission } => run_library_select(mission),
+            LibraryAction::Select {
+                mission,
+                dry_run,
+                pattern,
+            } => run_library_select(mission, dry_run, pattern),
             LibraryAction::CreateRole {
                 id,
                 description,
@@ -1357,7 +1367,11 @@ fn run_library_show(id: String) -> Result<()> {
     std::process::exit(1);
 }
 
-fn run_library_select(mission: String) -> Result<()> {
+fn run_library_select(
+    mission: String,
+    dry_run: bool,
+    pattern_override: Option<String>,
+) -> Result<()> {
     let library_dir = default_library_dir();
     if !library_dir.exists() {
         eprintln!("Library directory not found: {}", library_dir.display());
@@ -1387,23 +1401,74 @@ fn run_library_select(mission: String) -> Result<()> {
         return Ok(());
     }
 
-    // Prompt user to choose
-    print!("Choose a pattern [1");
-    for i in 2..=recommendations.len() {
-        print!("/{i}");
+    // --dry-run: stop here. No prompt, no spawn, no delegations persisted.
+    // Safe for smoke tests, scripting, and read-only inspection.
+    if dry_run {
+        println!(
+            "(dry-run: no mission spawned, no delegations persisted — drop `--dry-run` or pass `--pattern <id>` to spawn)"
+        );
+        return Ok(());
     }
-    println!("] (default: 1): ");
 
-    let mut choice_line = String::new();
-    std::io::stdin()
-        .read_line(&mut choice_line)
-        .context("Failed to read pattern choice")?;
-
-    let choice: usize = choice_line.trim().parse().unwrap_or(1);
-    let idx = if choice == 0 || choice > recommendations.len() {
-        0
+    let idx = if let Some(ref pid) = pattern_override {
+        // --pattern <id>: non-interactive selection. Must match one of the
+        // ranked recommendations (so the user sees the mission fit a pattern
+        // that actually applies to their description).
+        match recommendations.iter().position(|r| &r.pattern_id == pid) {
+            Some(i) => i,
+            None => {
+                let available: Vec<&str> = recommendations
+                    .iter()
+                    .map(|r| r.pattern_id.as_str())
+                    .collect();
+                bail!(
+                    "--pattern '{}' is not in the ranked recommendations. Available: [{}]. \
+                     Run `colmena library select --mission '<desc>' --dry-run` to see the ranking.",
+                    pid,
+                    available.join(", ")
+                );
+            }
+        }
     } else {
-        choice - 1
+        // Interactive prompt. EOF / non-TTY stdin (piped with no input, Ctrl+D
+        // without a keystroke) used to silently default to pattern 1 and
+        // execute the spawn — destructive, not safe for smoke tests. Refuse
+        // now and point the user at the safe flags.
+        print!("Choose a pattern [1");
+        for i in 2..=recommendations.len() {
+            print!("/{i}");
+        }
+        println!("] (default: 1): ");
+
+        let mut choice_line = String::new();
+        let bytes = std::io::stdin()
+            .read_line(&mut choice_line)
+            .context("Failed to read pattern choice")?;
+        if bytes == 0 {
+            bail!(
+                "stdin closed before a pattern was selected — this command spawns a mission \
+                 (creates delegations + writes CLAUDE.md). Re-run with `--dry-run` for a \
+                 read-only ranking, or `--pattern <id>` to select non-interactively."
+            );
+        }
+
+        let trimmed = choice_line.trim();
+        let choice: usize = if trimmed.is_empty() {
+            1
+        } else {
+            trimmed.parse().with_context(|| {
+                format!(
+                    "invalid pattern choice '{}' — expected a number 1..={}",
+                    trimmed,
+                    recommendations.len()
+                )
+            })?
+        };
+        if choice == 0 || choice > recommendations.len() {
+            0
+        } else {
+            choice - 1
+        }
     };
 
     let selected = &recommendations[idx];

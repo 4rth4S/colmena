@@ -19,6 +19,7 @@ config/reviews/
 config/alerts.json
 config/filter-stats.jsonl
 config/.runtime-delegations.lock
+config/session-gate.json
 
 # RRA / threat model exports
 RRA_*.csv
