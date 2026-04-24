@@ -149,3 +149,9 @@ agent_overrides: {}
 
 notifications:
   enabled: true
+
+# Queue lifecycle (M7.14) — optional overrides. Defaults shown.
+# Omit this block entirely for zero-diff behaviour on existing deployments.
+# queue:
+#   retention_pending_seconds: 600    # stale-GC TTL for pending entries (range: 60–3600)
+#   retention_decided_hours: 24       # decided/ retention before automatic purge (range: 1–720)

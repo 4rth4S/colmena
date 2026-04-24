@@ -55,6 +55,66 @@ pub struct NotificationsConfig {
     pub enabled: bool,
 }
 
+/// Queue lifecycle configuration (M7.14).
+///
+/// All fields are optional with defaults so existing `trust-firewall.yaml` files
+/// that omit the `queue:` block deserialize correctly with zero diff.
+#[derive(Debug, Clone, Deserialize)]
+pub struct QueueConfig {
+    /// TTL in seconds for stale-GC (pending entries older than this are moved to decided/).
+    /// Default: 600s (10 min). Clamped to [60, 3600] at runtime.
+    #[serde(default = "default_pending_ttl_seconds")]
+    pub retention_pending_seconds: u64,
+    /// Retention in hours for decided/ entries before automatic purge.
+    /// Default: 24h. Clamped to [1, 720] at runtime.
+    #[serde(default = "default_decided_retention_hours")]
+    pub retention_decided_hours: u64,
+}
+
+fn default_pending_ttl_seconds() -> u64 {
+    600
+}
+fn default_decided_retention_hours() -> u64 {
+    24
+}
+
+impl Default for QueueConfig {
+    fn default() -> Self {
+        Self {
+            retention_pending_seconds: default_pending_ttl_seconds(),
+            retention_decided_hours: default_decided_retention_hours(),
+        }
+    }
+}
+
+impl QueueConfig {
+    /// Return clamped retention_pending_seconds, logging a warning if out of range.
+    pub fn effective_pending_ttl(&self) -> u64 {
+        let raw = self.retention_pending_seconds;
+        let clamped = raw.clamp(60, 3600);
+        if clamped != raw {
+            eprintln!(
+                "colmena config: queue.retention_pending_seconds={raw} is out of range [60, 3600]; \
+                 using {clamped}"
+            );
+        }
+        clamped
+    }
+
+    /// Return clamped retention_decided_hours, logging a warning if out of range.
+    pub fn effective_decided_retention(&self) -> u64 {
+        let raw = self.retention_decided_hours;
+        let clamped = raw.clamp(1, 720);
+        if clamped != raw {
+            eprintln!(
+                "colmena config: queue.retention_decided_hours={raw} is out of range [1, 720]; \
+                 using {clamped}"
+            );
+        }
+        clamped
+    }
+}
+
 /// Top-level firewall configuration loaded from trust-firewall.yaml.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FirewallConfig {
@@ -75,6 +135,9 @@ pub struct FirewallConfig {
     /// - `Some(false)` → explicit opt-out (operator decision, respected always)
     #[serde(default)]
     pub enforce_missions: Option<bool>,
+    /// Queue lifecycle settings (M7.14). Optional — defaults apply when absent.
+    #[serde(default)]
+    pub queue: QueueConfig,
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -436,6 +499,7 @@ action: auto-approve
             agent_overrides: HashMap::new(),
             notifications: None,
             enforce_missions: Some(false),
+            queue: Default::default(),
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -461,6 +525,7 @@ action: auto-approve
             agent_overrides: HashMap::new(),
             notifications: None,
             enforce_missions: Some(false),
+            queue: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -485,6 +550,7 @@ action: auto-approve
             agent_overrides: HashMap::new(),
             notifications: None,
             enforce_missions: Some(false),
+            queue: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -508,6 +574,7 @@ action: auto-approve
             agent_overrides: HashMap::new(),
             notifications: None,
             enforce_missions: Some(false),
+            queue: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -664,6 +731,7 @@ enforce_missions: true
             agent_overrides: HashMap::new(),
             notifications: None,
             enforce_missions: enforce,
+            queue: Default::default(),
         }
     }
 
@@ -746,5 +814,66 @@ enforce_missions: true
         assert!(tmp.path().join("session-gate.json").exists());
         clear_session_gate_override(tmp.path()).unwrap();
         assert!(!tmp.path().join("session-gate.json").exists());
+    }
+
+    // ── S6: QueueConfig tests (M7.14) ───────────────────────────────────────
+
+    #[test]
+    fn test_queue_config_defaults_when_absent() {
+        // YAML without `queue:` block must yield defaults
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+"#;
+        let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(config.queue.retention_pending_seconds, 600);
+        assert_eq!(config.queue.retention_decided_hours, 24);
+    }
+
+    #[test]
+    fn test_queue_config_clamp_below_range() {
+        // Value below minimum (60s) → clamped to 60
+        let cfg = QueueConfig {
+            retention_pending_seconds: 10,
+            retention_decided_hours: 24,
+        };
+        assert_eq!(cfg.effective_pending_ttl(), 60);
+    }
+
+    #[test]
+    fn test_queue_config_clamp_above_range() {
+        // Value above maximum (3600s / 720h) → clamped to max
+        let cfg = QueueConfig {
+            retention_pending_seconds: 9999,
+            retention_decided_hours: 9999,
+        };
+        assert_eq!(cfg.effective_pending_ttl(), 3600);
+        assert_eq!(cfg.effective_decided_retention(), 720);
+    }
+
+    #[test]
+    fn test_queue_config_within_range_unchanged() {
+        let cfg = QueueConfig {
+            retention_pending_seconds: 600,
+            retention_decided_hours: 48,
+        };
+        assert_eq!(cfg.effective_pending_ttl(), 600);
+        assert_eq!(cfg.effective_decided_retention(), 48);
+    }
+
+    #[test]
+    fn test_queue_config_parses_from_yaml() {
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+queue:
+  retention_pending_seconds: 300
+  retention_decided_hours: 48
+"#;
+        let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(config.queue.retention_pending_seconds, 300);
+        assert_eq!(config.queue.retention_decided_hours, 48);
     }
 }

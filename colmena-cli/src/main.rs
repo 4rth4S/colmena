@@ -138,8 +138,12 @@ enum DelegateAction {
 #[derive(Subcommand)]
 enum QueueAction {
     /// List pending approval items
-    List,
-    /// Prune old queue entries
+    List {
+        /// Filter by session ID (shows only entries for this CC session)
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Prune old decided entries (manual reclaim of disk space)
     Prune {
         /// Maximum age in days (default: 7)
         #[arg(long, default_value = "7")]
@@ -299,7 +303,7 @@ fn main() {
     let result = match cli.command {
         Commands::Hook { config } => run_hook(config),
         Commands::Queue { action } => match action {
-            QueueAction::List => run_queue_list(),
+            QueueAction::List { session } => run_queue_list(session.as_deref()),
             QueueAction::Prune { older_than } => run_queue_prune(older_than),
         },
         Commands::Delegate { action } => match action {
@@ -477,6 +481,33 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
             let payload: hook::SubagentStopPayload =
                 serde_json::from_value(raw).context("Failed to parse SubagentStop payload")?;
             run_subagent_stop_hook(payload)
+        }
+        "Stop" => {
+            // S4-bis: session-end sweep — move all pending entries for this session to decided/
+            let session_id = raw.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+            if session_id.is_empty() {
+                log_error("Stop hook: missing session_id, skipping queue sweep");
+            } else {
+                let config_dir = colmena_core::paths::default_config_dir();
+                let now = chrono::Utc::now();
+                match colmena_core::queue::sweep_session_pending(&config_dir, session_id, now) {
+                    Ok(n) if n > 0 => {
+                        log_error(&format!(
+                            "Stop hook: swept {n} pending entries for session {session_id}"
+                        ));
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        log_error(&format!("Stop hook: queue sweep error (non-fatal): {e:#}"));
+                    }
+                }
+            }
+            // Stop hook: no response needed — CC doesn't read stdout for Stop events.
+            // Write an empty passthrough to satisfy any potential stdout read.
+            let response = hook::PostToolUseResponse::passthrough();
+            serde_json::to_writer(std::io::stdout(), &response)
+                .context("Failed to write Stop passthrough response")?;
+            Ok(())
         }
         other => {
             log_error(&format!("Unknown hook event: {other}"));
@@ -687,6 +718,36 @@ fn run_post_tool_use_hook(payload: hook::HookPayload) -> Result<()> {
 }
 
 fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
+    // S3 (M7.14): move pending entry to decided/ for ALL tools that complete.
+    // Must run before the Bash-only filter check below so Read/Write/Edit approvals
+    // are also resolved. Errors are non-fatal — logged and execution continues.
+    {
+        let config_dir = colmena_core::paths::default_config_dir();
+        let interrupted = payload
+            .tool_response
+            .as_ref()
+            .and_then(|r| r.get("interrupted"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let outcome = if interrupted {
+            colmena_core::queue::QueueOutcome::Failed
+        } else {
+            colmena_core::queue::QueueOutcome::Allowed
+        };
+        match colmena_core::queue::resolve_pending(
+            &config_dir,
+            &payload.session_id,
+            &payload.tool_use_id,
+            outcome,
+            colmena_core::queue::QueueMover::Posttool,
+        ) {
+            Ok(_) => {}
+            Err(e) => log_error(&format!(
+                "PostToolUse: queue resolve error (non-fatal): {e:#}"
+            )),
+        }
+    }
+
     // Only filter Bash tool outputs
     if payload.tool_name != "Bash" {
         let response = hook::PostToolUseResponse::passthrough();
@@ -1018,27 +1079,58 @@ fn subagent_stop_inner(payload: &hook::SubagentStopPayload) -> Result<hook::Suba
     }
 }
 
-fn run_queue_list() -> Result<()> {
+fn run_queue_list(session_filter: Option<&str>) -> Result<()> {
     let config_dir = colmena_core::paths::default_config_dir();
-    let entries = colmena_core::queue::list_pending(&config_dir)?;
+    let entries = colmena_core::queue::list_pending_filtered(&config_dir, session_filter)?;
 
     if entries.is_empty() {
-        println!("No pending approvals.");
+        if let Some(sid) = session_filter {
+            println!("0 pending approvals for session {sid}.");
+        } else {
+            println!("No pending approvals.");
+        }
         return Ok(());
     }
 
-    println!("{} pending approval(s):\n", entries.len());
+    if let Some(sid) = session_filter {
+        println!(
+            "{} pending approval(s) for session {}:\n",
+            entries.len(),
+            sid
+        );
+    } else {
+        println!("{} pending approval(s):\n", entries.len());
+    }
+
     for entry in &entries {
         let agent = entry.agent_id.as_deref().unwrap_or("unknown");
+        let outcome_str = match &entry.outcome {
+            Some(o) => format!(" [{}]", format!("{o:?}").to_lowercase()),
+            None => String::new(),
+        };
+        let mover_str = match &entry.moved_by {
+            Some(m) => format!(" via {}", format!("{m:?}").to_lowercase()),
+            None => String::new(),
+        };
         println!(
-            "  [{priority}] {tool} — {agent}",
+            "  [{priority}] {tool} — {agent}{outcome}{mover}",
             priority = entry.priority,
             tool = entry.tool,
             agent = agent,
+            outcome = outcome_str,
+            mover = mover_str,
         );
         println!("    Reason: {}", entry.reason);
         println!("    Time:   {}", entry.timestamp);
         println!("    ID:     {}", entry.id);
+        if let Some(sid) = &entry.session_id {
+            // Display only the first 8 chars of the session_id — enough to
+            // correlate entries to a CC session without emitting the full
+            // identifier repeatedly in operator-facing output. Full id is
+            // preserved on disk (decided/*.json) for audit purposes.
+            let short = sid.get(..8).unwrap_or(sid.as_str());
+            println!("    Session:{}...", short);
+        }
         println!();
     }
 
@@ -1047,12 +1139,17 @@ fn run_queue_list() -> Result<()> {
 
 fn run_queue_prune(older_than_days: i64) -> Result<()> {
     let config_dir = colmena_core::paths::default_config_dir();
-    let duration = chrono::Duration::days(older_than_days);
-    let pruned = colmena_core::queue::prune_old_entries(&config_dir, duration)?;
-    if pruned == 0 {
-        println!("No entries older than {older_than_days} days.");
+    // M7.14: queue prune now cleans decided/ (manual reclaim).
+    // Stale pending/ → decided/ is handled automatically by lazy GC + Stop sweep.
+    let retention_hours = (older_than_days * 24) as u64;
+    let now = chrono::Utc::now();
+    let deleted = colmena_core::queue::purge_expired_decided(&config_dir, retention_hours, now)?;
+    if deleted == 0 {
+        println!("No decided entries older than {older_than_days} days to prune.");
     } else {
-        println!("Pruned {pruned} entries older than {older_than_days} days → queue/decided/");
+        println!(
+            "Pruned {deleted} decided entries older than {older_than_days} days from queue/decided/"
+        );
     }
     Ok(())
 }

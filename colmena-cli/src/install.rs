@@ -177,12 +177,45 @@ pub fn run_install() -> Result<()> {
         }));
     }
 
+    // Register Stop hook for session-end queue sweep (S4-bis, M7.14)
+    let stop_hook = hooks_obj.entry("Stop").or_insert_with(|| json!([]));
+
+    let stop_arr = stop_hook.as_array_mut().context("Stop must be an array")?;
+
+    let already_installed_stop = stop_arr.iter().any(|entry| {
+        if let Some(inner_hooks) = entry.get("hooks").and_then(|h| h.as_array()) {
+            inner_hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.contains("colmena hook"))
+            })
+        } else {
+            entry
+                .get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| c.contains("colmena hook"))
+        }
+    });
+
+    if !already_installed_stop {
+        stop_arr.push(json!({
+            "matcher": "",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": hook_command
+                }
+            ]
+        }));
+    }
+
     if already_installed
         && already_installed_post
         && already_installed_perm
         && already_installed_subagent
+        && already_installed_stop
     {
-        println!("Colmena hooks are already installed (PreToolUse + PostToolUse + PermissionRequest + SubagentStop).");
+        println!("Colmena hooks are already installed (PreToolUse + PostToolUse + PermissionRequest + SubagentStop + Stop).");
         return Ok(());
     }
 
