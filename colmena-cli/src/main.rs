@@ -1124,7 +1124,12 @@ fn run_queue_list(session_filter: Option<&str>) -> Result<()> {
         println!("    Time:   {}", entry.timestamp);
         println!("    ID:     {}", entry.id);
         if let Some(sid) = &entry.session_id {
-            println!("    Session:{}", sid);
+            // Display only the first 8 chars of the session_id — enough to
+            // correlate entries to a CC session without emitting the full
+            // identifier repeatedly in operator-facing output. Full id is
+            // preserved on disk (decided/*.json) for audit purposes.
+            let short = sid.get(..8).unwrap_or(sid.as_str());
+            println!("    Session:{}...", short);
         }
         println!();
     }
