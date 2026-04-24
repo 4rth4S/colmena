@@ -6,6 +6,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`agent_overrides` and runtime delegations now match on `agent_type` as well as `agent_id`**. Claude Code emits two agent fields in hook payloads: `agent_id` (per-invocation identity, often an ephemeral hash for custom subagents) and `agent_type` (the stable agent class name — the `name:` from the subagent `.md` frontmatter). Previously the firewall only consulted `agent_id`, which meant single-agent scoped permissions authored against the stable class name (e.g. `agent_overrides.cron-worker: …`) could not match a custom subagent whose `agent_id` rotated per spawn. The firewall now tries `agent_id` first (preserves mission_spawn / role delegation semantics), then falls back to `agent_type`. Mission revocation kill switch likewise checks both fields. `EvaluationInput` gained an optional `agent_type` field; the CLI hook, MCP `evaluate` input, and CC `HookPayload::to_evaluation_input()` all forward it. Unlocks first-class single-agent autonomous use cases (launchd-triggered subagents, one-shot CRON-style agents) without forcing them through `mission_spawn`.
+
 ### Fixed
 
 - **M7.3 post-dogfood gaps (2026-04-21)**: first docs-overhaul dogfood uncovered two defects that prevented the ELO cycle from closing without operator glue. Patched:

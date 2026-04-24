@@ -450,6 +450,27 @@ agent_overrides:
 YAML `agent_overrides` beat ELO overrides — if you pin a rule by hand, ELO
 calibration cannot undo it.
 
+**Matching key.** The firewall looks up each override block against two fields
+in every hook payload:
+
+1. `agent_id` — the per-invocation identity Claude Code assigns. For
+   `mission_spawn`-generated delegations this is the stable role id
+   (`pentester`, `researcher`). For custom subagents spawned directly, recent
+   CC versions emit an opaque per-spawn hash that changes every run.
+2. `agent_type` — the stable agent class name, which equals the `name:` field
+   in the subagent `.md` frontmatter (e.g. `cron-worker`, `pentester`).
+
+The lookup tries `agent_id` first, then falls back to `agent_type`. The
+practical effect: author your `agent_overrides` against the stable agent
+name, and they apply regardless of which field CC populates. This makes
+single-agent scoped permissions usable outside the mission_spawn workflow
+(e.g. launchd-triggered autonomous subagents, one-shot triage bots), while
+preserving the mission flow's existing semantics.
+
+Runtime delegations follow the same dual-field match: a delegation created
+with `colmena delegate add --tool X --agent cron-worker` fires whether
+CC passes that name as `agent_id` or `agent_type`.
+
 ### Restricting MCP Tools
 
 ```yaml

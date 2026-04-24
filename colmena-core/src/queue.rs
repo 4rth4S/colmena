@@ -766,6 +766,7 @@ mod tests {
             tool_input: json!({"command": "nmap -sV target"}),
             tool_use_id: "tu_001".to_string(),
             agent_id: Some("pentester".to_string()),
+            agent_type: None,
             cwd: "/tmp".to_string(),
         }
     }
@@ -998,6 +999,7 @@ mod tests {
             tool_input: json!({"command": "ls"}),
             tool_use_id: "tu_999".to_string(),
             agent_id: None,
+            agent_type: None,
             cwd: "/tmp/test".to_string(),
         };
         let decision = make_test_decision();
@@ -1029,6 +1031,7 @@ mod tests {
             tool_input: json!({"command": "ls"}),
             tool_use_id: "tu_resolve_001".to_string(),
             agent_id: None,
+            agent_type: None,
             cwd: "/tmp/test".to_string(),
         };
         let decision = make_test_decision();
@@ -1072,6 +1075,7 @@ mod tests {
             tool_input: json!({"command": "ls"}),
             tool_use_id: "tu_failed_001".to_string(),
             agent_id: None,
+            agent_type: None,
             cwd: "/tmp/test".to_string(),
         };
         let decision = make_test_decision();
@@ -1571,6 +1575,7 @@ mod tests {
             tool_input: json!({}),
             tool_use_id: "tu_new_gc".to_string(),
             agent_id: None,
+            agent_type: None,
             cwd: "/tmp/test".to_string(),
         };
         let decision = make_test_decision();
