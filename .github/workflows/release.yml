@@ -126,7 +126,7 @@ jobs:
           echo "ARCHIVE=$ARCHIVE" >> $env:GITHUB_ENV
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.target }}
           path: |
@@ -154,7 +154,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Upload combined checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: checksums
           path: artifacts/SHA256SUMS.txt
