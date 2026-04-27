@@ -98,17 +98,29 @@ pub fn evaluate_with_elo(
     }
 
     // 3. Agent overrides — YAML (human) takes precedence over ELO
-    if let Some(ref agent_id) = payload.agent_id {
+    //
+    // We consult both `agent_id` (per-invocation identity — the stable role id
+    // when mission_spawn created the delegation, or an ephemeral hash for custom
+    // single-agents) and `agent_type` (the stable class name — the `name:` from
+    // the subagent `.md` frontmatter). The first field that finds a match wins.
+    //
+    // This lets users author `agent_overrides` keyed by the stable agent name
+    // (e.g. `cron-worker`) and have it match regardless of whether CC passes
+    // that name as `agent_id` or only as `agent_type`.
+    for key in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
+        .into_iter()
+        .flatten()
+    {
         // 3a. YAML-defined overrides (human always wins)
-        if let Some(rules) = config.agent_overrides.get(agent_id) {
-            let tier = format!("agent_override:{agent_id}");
+        if let Some(rules) = config.agent_overrides.get(key) {
+            let tier = format!("agent_override:{key}");
             if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
                 return decision;
             }
         }
         // 3b. ELO-calibrated overrides
-        if let Some(rules) = elo_overrides.get(agent_id) {
-            let tier = format!("elo_override:{agent_id}");
+        if let Some(rules) = elo_overrides.get(key) {
+            let tier = format!("elo_override:{key}");
             if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
                 return decision;
             }
@@ -142,15 +154,21 @@ pub fn evaluate_with_elo(
     // 4.8. Mission revocation kill switch
     // If agent's mission was deactivated, deny all tools. This overrides CC session rules
     // that were taught via PermissionRequest hooks before the mission was revoked.
-    if let Some(ref agent_id) = payload.agent_id {
-        if revoked_agents.contains(agent_id) {
+    // Check both agent_id and agent_type so revocations against the stable agent
+    // name (the only stable key single-agent owners can target) kill switch
+    // reliably regardless of which field CC populates.
+    for candidate in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if revoked_agents.contains(candidate) {
             return Decision {
                 action: Action::Block,
                 reason: format!(
                     "Mission revoked for agent '{}' — permissions expired",
-                    agent_id
+                    candidate
                 ),
-                matched_rule: Some(format!("mission_revoked:{}", agent_id)),
+                matched_rule: Some(format!("mission_revoked:{}", candidate)),
                 priority: Priority::High,
             };
         }
@@ -181,9 +199,16 @@ fn check_delegations(
         if d.tool != payload.tool_name {
             continue;
         }
-        // If delegation specifies an agent_id, it must match
+        // If delegation specifies an agent_id, either `payload.agent_id` or
+        // `payload.agent_type` must match it. Matching on either field lets
+        // delegations created against a stable agent name (e.g. via
+        // `colmena delegate add --tool X --agent cron-worker`) continue to
+        // apply when CC passes that name as agent_type while emitting an
+        // ephemeral agent_id for the spawn.
         if let Some(ref delegation_agent) = d.agent_id {
-            if payload.agent_id.as_ref() != Some(delegation_agent) {
+            let id_matches = payload.agent_id.as_ref() == Some(delegation_agent);
+            let type_matches = payload.agent_type.as_ref() == Some(delegation_agent);
+            if !id_matches && !type_matches {
                 continue;
             }
         }
@@ -538,6 +563,24 @@ mod tests {
             tool_input: input,
             tool_use_id: "tu_test".to_string(),
             agent_id: None,
+            agent_type: None,
+            cwd: "/Users/test/project".to_string(),
+        }
+    }
+
+    fn make_payload_for_agent(
+        tool: &str,
+        input: serde_json::Value,
+        agent_id: Option<&str>,
+        agent_type: Option<&str>,
+    ) -> EvaluationInput {
+        EvaluationInput {
+            session_id: "test-session".to_string(),
+            tool_name: tool.to_string(),
+            tool_input: input,
+            tool_use_id: "tu_test".to_string(),
+            agent_id: agent_id.map(String::from),
+            agent_type: agent_type.map(String::from),
             cwd: "/Users/test/project".to_string(),
         }
     }
@@ -673,6 +716,177 @@ mod tests {
         let decision = evaluate(&config, &patterns, &[delegation], &payload);
         // Blocked fires first, delegation can't override
         assert_eq!(decision.action, Action::Block);
+    }
+
+    // ── agent_type matching for agent_overrides and runtime delegations ──────
+    //
+    // Regression for: single-agent scoped permissions failing because CC emits
+    // ephemeral `agent_id` hashes for custom subagents, while `agent_overrides`
+    // are authored against the stable agent class name. The firewall now treats
+    // either `agent_id` or `agent_type` as a valid lookup key.
+
+    fn agent_override_rule_for(tool: &str) -> crate::config::Rule {
+        crate::config::Rule {
+            tools: vec![tool.to_string()],
+            conditions: None,
+            action: Action::AutoApprove,
+            reason: Some("test agent_override".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_agent_override_matches_by_agent_id() {
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.agent_overrides.insert(
+            "pentester".to_string(),
+            vec![agent_override_rule_for("mcp__external__tool")],
+        );
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({"arg": "value"}),
+            Some("pentester"),
+            None,
+        );
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert_eq!(
+            decision.matched_rule,
+            Some("agent_override:pentester[0]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_agent_override_matches_by_agent_type_when_agent_id_absent() {
+        // Core case for single-agent scoped permissions (e.g. launchd-triggered
+        // autonomous subagents where CC does not populate a meaningful agent_id).
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.agent_overrides.insert(
+            "cron-worker".to_string(),
+            vec![agent_override_rule_for("mcp__external__tool")],
+        );
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({"arg": "value"}),
+            None,
+            Some("cron-worker"),
+        );
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert_eq!(
+            decision.matched_rule,
+            Some("agent_override:cron-worker[0]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_agent_override_matches_by_agent_type_when_agent_id_is_ephemeral() {
+        // CC emits an opaque agent_id hash for the spawn while keeping
+        // agent_type stable. The override authored against agent_type must
+        // still apply.
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.agent_overrides.insert(
+            "cron-worker".to_string(),
+            vec![agent_override_rule_for("mcp__external__tool")],
+        );
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({"arg": "value"}),
+            Some("aa0aae6b1f3568365"),
+            Some("cron-worker"),
+        );
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert_eq!(
+            decision.matched_rule,
+            Some("agent_override:cron-worker[0]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_agent_override_prefers_agent_id_over_agent_type() {
+        // If both fields are present and both have overrides, the agent_id
+        // lookup must run first (preserves existing mission_spawn semantics).
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.agent_overrides.insert(
+            "pentester".to_string(),
+            vec![agent_override_rule_for("mcp__external__tool")],
+        );
+        config.agent_overrides.insert(
+            "cron-worker".to_string(),
+            vec![crate::config::Rule {
+                tools: vec!["mcp__external__tool".to_string()],
+                conditions: None,
+                action: Action::Block,
+                reason: Some("agent_type side — should lose".to_string()),
+            }],
+        );
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({"arg": "value"}),
+            Some("pentester"),
+            Some("cron-worker"),
+        );
+        let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert_eq!(
+            decision.matched_rule,
+            Some("agent_override:pentester[0]".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delegation_matches_on_agent_type() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegation = RuntimeDelegation {
+            tool: "mcp__external__tool".to_string(),
+            agent_id: Some("cron-worker".to_string()),
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            session_id: None,
+            source: Some("human".to_string()),
+            mission_id: None,
+            conditions: None,
+        };
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({}),
+            Some("aa0aae6b1f3568365"),
+            Some("cron-worker"),
+        );
+        let decision = evaluate(&config, &patterns, &[delegation], &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert_eq!(
+            decision.matched_rule,
+            Some("runtime_delegation".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delegation_agent_id_mismatch_still_blocks() {
+        // Sanity: delegation keyed on "pentester" must NOT fire for a payload
+        // whose agent_id/agent_type are both different values.
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegation = RuntimeDelegation {
+            tool: "mcp__external__tool".to_string(),
+            agent_id: Some("pentester".to_string()),
+            action: Action::AutoApprove,
+            created_at: Utc::now(),
+            expires_at: Some(Utc::now() + Duration::hours(1)),
+            session_id: None,
+            source: Some("human".to_string()),
+            mission_id: None,
+            conditions: None,
+        };
+        let payload = make_payload_for_agent(
+            "mcp__external__tool",
+            json!({}),
+            Some("some-hash"),
+            Some("cron-worker"),
+        );
+        let decision = evaluate(&config, &patterns, &[delegation], &payload);
+        // Falls through to defaults (Ask)
+        assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]

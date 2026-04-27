@@ -72,8 +72,16 @@ struct EvaluateInput {
     tool_input: serde_json::Value,
     /// Working directory for ${PROJECT_DIR} resolution
     cwd: String,
-    /// Optional agent ID for per-agent rule lookup
+    /// Optional agent ID for per-agent rule lookup (per-invocation identity
+    /// — may be the role id when mission_spawn created the delegation, or
+    /// ephemeral for custom single-agents)
     agent_id: Option<String>,
+    /// Optional agent type for per-agent rule lookup (stable agent class name,
+    /// e.g. `pentester`, `cron-worker`). When `agent_id` is not set, the
+    /// firewall falls back to matching `agent_overrides` / delegations by
+    /// `agent_type`.
+    #[serde(default)]
+    agent_type: Option<String>,
 }
 
 // ── Peer Review + ELO + Findings input types ─────────────────────────────────
@@ -520,6 +528,7 @@ impl ColmenaServer {
             tool_input: input.tool_input.clone(),
             tool_use_id: format!("mcp-eval-{}", ts),
             agent_id: input.agent_id.clone(),
+            agent_type: input.agent_type.clone(),
             cwd: input.cwd.clone(),
         };
 

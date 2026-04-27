@@ -29,6 +29,7 @@ impl HookPayload {
             tool_input: self.tool_input.clone(),
             tool_use_id: self.tool_use_id.clone(),
             agent_id: self.agent_id.clone(),
+            agent_type: self.agent_type.clone(),
             cwd: self.cwd.clone(),
         }
     }
@@ -265,6 +266,28 @@ mod tests {
         assert_eq!(payload.tool_name, "Read");
         assert_eq!(payload.agent_id, Some("pentester".to_string()));
         assert_eq!(payload.cwd, "/Users/fr33m4n/colmena");
+    }
+
+    #[test]
+    fn test_to_evaluation_input_forwards_agent_type() {
+        // Regression: EvaluationInput must carry both agent_id (per-invocation)
+        // and agent_type (stable class name) so the firewall can match
+        // agent_overrides / delegations against either.
+        let input = json!({
+            "session_id": "abc123",
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_use_id": "tu_fwd",
+            "agent_id": "aa0aae6b1f3568365",
+            "agent_type": "cron-worker",
+            "cwd": "/tmp"
+        });
+
+        let payload: HookPayload = serde_json::from_value(input).unwrap();
+        let eval = payload.to_evaluation_input();
+        assert_eq!(eval.agent_id.as_deref(), Some("aa0aae6b1f3568365"));
+        assert_eq!(eval.agent_type.as_deref(), Some("cron-worker"));
     }
 
     #[test]
