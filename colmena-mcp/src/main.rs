@@ -937,7 +937,7 @@ impl ColmenaServer {
     // ── Peer Review tools ────────────────────────────────────────────────────
 
     #[rmcp::tool(
-        description = "Submit an artifact for peer review — assigns a reviewer and creates a pending review"
+        description = "Submit an artifact for auditor review — assigns a reviewer and creates a pending review"
     )]
     fn review_submit(
         &self,
@@ -1028,7 +1028,7 @@ impl ColmenaServer {
         Ok(result)
     }
 
-    #[rmcp::tool(description = "List peer reviews — pending, completed, or all")]
+    #[rmcp::tool(description = "List auditor reviews — pending, completed, or all")]
     fn review_list(
         &self,
         Parameters(input): Parameters<ReviewListInput>,
@@ -1056,7 +1056,9 @@ impl ColmenaServer {
         serde_json::to_string_pretty(&entries).map_err(|e| sanitize_error(&format!("Error: {e}")))
     }
 
-    #[rmcp::tool(description = "Evaluate a peer review — submit scores and findings as a reviewer")]
+    #[rmcp::tool(
+        description = "Evaluate an auditor review — submit scores and findings as a reviewer"
+    )]
     fn review_evaluate(
         &self,
         Parameters(input): Parameters<ReviewEvaluateInput>,

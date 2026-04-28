@@ -960,7 +960,7 @@ fn build_permission_updates(
     }]
 }
 
-/// SubagentStop: enforce peer review before mission workers can stop.
+/// SubagentStop: enforce auditor review before mission workers can stop.
 /// Safe fallback: any error → approve (never trap an agent).
 ///
 /// Fix Finding #19 (DREAD 5.4): When safe fallback triggers, create a warning-level
@@ -1072,7 +1072,7 @@ fn subagent_stop_inner(payload: &hook::SubagentStopPayload) -> Result<hook::Suba
         // 7. No review → block
         Ok(hook::SubagentStopResponse::block(format!(
             "You must call mcp__colmena__review_submit before stopping. \
-             Your work needs peer review as part of mission '{}' protocol. \
+             Your work needs auditor review as part of mission '{}' protocol. \
              Submit your work for review, then you can stop.",
             mission_id
         )))

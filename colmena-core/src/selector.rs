@@ -316,7 +316,7 @@ pub fn generate_mission(
     // role with role_type: "auditor" to centralize review. Peer-review-by-ELO
     // is a misconception — ELO is an output of the review system (calibrated
     // via `calibrate_auditor`), not a criterion to pick who audits. Solo
-    // missions (single role) skip this check since there is no peer review.
+    // missions (single role) skip this check since there is no auditor review.
     // See CLAUDE.md §Missions & Agent Identity, and the architectural memory
     // `project_auditor_centralized_invariant.md`.
     if recommendation.role_assignments.len() >= 2 {
@@ -473,7 +473,7 @@ pub fn generate_mission(
             .unwrap_or_default();
         // M7.3 fix: role_type=auditor is exempt from submitting artifact reviews
         // (it evaluates others via review_evaluate, it doesn't author work that
-        // needs peer review). Emitting a MANDATORY review_submit block would
+        // needs auditor review). Emitting a MANDATORY review_submit block would
         // trap the auditor under SubagentStop with nothing valid to submit.
         let review_protocol_section =
             if manifest.is_some() && role.role_type.as_deref() != Some("auditor") {
@@ -852,7 +852,7 @@ fn build_review_section(
         );
     }
 
-    // Solo-agent mission or no auditor in squad: no peer review needed.
+    // Solo-agent mission or no auditor in squad: no auditor review needed.
     let _ = all_assignments;
     let _ = role_type;
     String::new()
