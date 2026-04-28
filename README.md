@@ -10,11 +10,11 @@
 
 <p align="center"><strong>Deterministic governance for multi-agent Claude Code.</strong></p>
 
-<p align="center">YAML rules + audit.log for every tool call. Multi-agent missions with peer review. ELO-calibrated trust per role.</p>
+<p align="center">YAML rules + audit.log for every tool call. Multi-agent missions with centralized auditor review. ELO-calibrated trust per role.</p>
 
 ---
 
-Colmena is a local-first governance layer for Claude Code. Every tool call is evaluated against YAML rules in under 15ms — zero LLM calls in the hot path, zero per-call cost, every decision written to `audit.log` and explainable by a rule ID. Beyond single-agent allow/ask/block, Colmena orchestrates multi-agent missions with mandatory peer review and ELO-calibrated trust per role. Your rules, your log, your team's history — all on disk, all yours.
+Colmena is a local-first governance layer for Claude Code. Every tool call is evaluated against YAML rules in under 15ms — zero LLM calls in the hot path, zero per-call cost, every decision written to `audit.log` and explainable by a rule ID. Beyond single-agent allow/ask/block, Colmena orchestrates multi-agent missions with a mandatory centralized auditor and ELO-calibrated trust per role. Your rules, your log, your team's history — all on disk, all yours.
 
 ## Which fits you?
 
@@ -36,7 +36,7 @@ Claude Code gives agents a lot of power. Out of the box, you approve every tool 
 - **Multi-agent chaos.** Spawning three agents in parallel with overlapping file scopes ends in conflicts and unreviewed work.
 - **Opaque decisions.** When something goes wrong, you want to know *which rule* allowed it — not a probability score.
 
-Colmena's position: **policy is code, review is mandatory, trust is earned.** Every decision is a rule you wrote, every artifact goes through peer review, every role accumulates an ELO that reflects how well it actually does the work.
+Colmena's position: **policy is code, review is mandatory, trust is earned.** Every decision is a rule you wrote, every artifact goes through auditor review, every role accumulates an ELO that reflects how well it actually does the work.
 
 ## How it compares to Claude Code auto-mode
 
@@ -47,7 +47,7 @@ Anthropic's `--enable-auto-mode` (research preview) and Colmena solve different 
 | Decision model       | Probabilistic (LLM classifier) | Deterministic (YAML rules + regex)          |
 | Per-call cost        | Model tokens per classification | Zero — no network, no LLM call             |
 | Explainability       | Opaque classifier output     | `audit.log` line with the matching rule ID    |
-| Scope                | Single-agent intent detection | Single + multi-agent with peer review        |
+| Scope                | Single-agent intent detection | Single + multi-agent with auditor review     |
 | Accountability       | Per tool call                | Per agent + per role, ELO over time           |
 | Storage              | Cloud-side                   | Local filesystem (YAML / JSON / JSONL)        |
 
@@ -109,7 +109,7 @@ If the output says `recommended_agents: 3+`, spawn the squad:
 mcp__colmena__mission_spawn(mission="review and harden the auth module with tests")
 ```
 
-You get back scoped prompts for each agent with mission markers, time-limited delegations, and a pre-assigned reviewer. Paste the prompts into `Agent` tool calls. The `SubagentStop` hook blocks any worker from stopping until it submits for peer review; the auditor's scores feed ELO; your audit log grows one line per decision.
+You get back scoped prompts for each agent with mission markers, time-limited delegations, and a pre-assigned reviewer. Paste the prompts into `Agent` tool calls. The `SubagentStop` hook blocks any worker from stopping until it submits for auditor review; the auditor's scores feed ELO; your audit log grows one line per decision.
 
 That's it. The rest of this README is reference.
 
@@ -150,7 +150,7 @@ mcp__colmena__mission_spawn(mission="bug bounty on the payments API and its admi
                             pattern_id="caido-pentest")
 ```
 
-Each agent gets `mcp__caido__*` scoped via role YAML, `Bash` restricted to nmap/curl/nuclei, findings auto-written to the store. When either pentester stops, they submit a findings artifact for peer review; the security architect evaluates. You get one structured report at the end, with every HTTP request in the audit log.
+Each agent gets `mcp__caido__*` scoped via role YAML, `Bash` restricted to nmap/curl/nuclei, findings auto-written to the store. When either pentester stops, they submit a findings artifact for auditor review; the security architect evaluates. You get one structured report at the end, with every HTTP request in the audit log.
 
 See [use-cases.md #pentest](docs/user/use-cases.md#1-pentest-engagement-caido-native-web--api) for the full walkthrough.
 
@@ -207,7 +207,7 @@ colmena suggest "refactor the auth module with tests and review"
 # → complexity=medium, recommended_agents=3+, use Colmena
 ```
 
-**ELO-based trust.** Agents earn trust through peer review. Five tiers: Uncalibrated → Standard → Elevated (auto-approve role tools) / Restricted / Probation. Trust calibrates automatically — good agents earn autonomy, bad ones get restricted.
+**ELO-based trust.** Agents earn trust through auditor review. Five tiers: Uncalibrated → Standard → Elevated (auto-approve role tools) / Restricted / Probation. Trust calibrates automatically — good agents earn autonomy, bad ones get restricted.
 
 **Output filtering.** Bash output passes through a 4-stage pipeline (ANSI strip → stderr-only → dedup → truncate) plus an optional prompt-injection heuristic before Claude processes it. Saves 30-50% tokens from noisy commands.
 
@@ -245,7 +245,7 @@ colmena library create-pattern --id etl-review \
   --topology sequential
 ```
 
-Your custom roles and patterns work with the full Colmena stack — trust firewall, scoped delegations, peer review, ELO ratings.
+Your custom roles and patterns work with the full Colmena stack — trust firewall, scoped delegations, auditor review, ELO ratings.
 
 ## Architecture
 

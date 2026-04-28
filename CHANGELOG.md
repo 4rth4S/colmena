@@ -313,7 +313,7 @@ M7.3 + M7.3.1 complete. Every `colmena mission spawn` closes the ELO cycle by co
   - `colmena calibrate show` -- displays current trust tier per agent
   - `colmena calibrate reset` -- clears all ELO-based overrides instantly
   - Trust tiers: Uncalibrated, Elevated, Standard, Restricted, Probation
-  - Warm-up period: agents need 3+ peer reviews before calibration applies
+  - Warm-up period: agents need 3+ auditor reviews before calibration applies
   - ELO overrides stored in `config/elo-overrides.json` (separate from YAML)
 - **Mission lifecycle management:**
   - `colmena mission list` -- shows active missions with delegation counts
