@@ -29,7 +29,7 @@ Build the simplest golden path that solves the validated problem. Parameterize t
 Test golden paths from the consumer's perspective, not the platform team's. Run the scaffolding CLI fresh, from an empty directory, as a developer who has never seen your platform. Validate that policy guardrails reject invalid inputs with helpful messages. Confirm ArgoCD/Flux sync succeeds and the resulting infra matches the declared state.
 
 ### Phase 5: Submit
-Commit platform changes with changelogs that note consumer-visible impacts. Call `mcp__colmena__review_submit` before stopping — platform changes affect every team that relies on the golden paths and require peer sign-off.
+Commit platform changes with changelogs that note consumer-visible impacts. Call `mcp__colmena__review_submit` before stopping — platform changes affect every team that relies on the golden paths and require auditor sign-off.
 
 ## Boundaries
 

@@ -36,7 +36,7 @@ For each change, report:
 - **Pin actions safely.** First-party `actions/*` and well-known `dtolnay/*`, `Swatinem/*` can use `@v<major>`. Third-party untrusted actions should be pinned to a commit SHA.
 - **Preserve binary reproducibility.** Release artifacts should be deterministic — no timestamps in build output, no `--target` flags that change implicitly.
 - **Run `cargo clippy --workspace -- -D warnings` before declaring done.** Must pass cleanly.
-- **Call `mcp__colmena__review_submit` when your work is complete** — your output enters the peer review cycle for ELO calibration.
+- **Call `mcp__colmena__review_submit` when your work is complete** — your output enters the auditor review cycle for ELO calibration.
 
 ## Common Patterns Reference
 
