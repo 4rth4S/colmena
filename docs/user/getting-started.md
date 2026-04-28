@@ -57,7 +57,7 @@ One idempotent command. You can re-run it safely — your edits are preserved, n
    |---|---|
    | `trust-firewall.yaml` | What to allow, ask, block |
    | `filter-config.yaml` | Output filter settings |
-   | `review-config.yaml` | Peer review thresholds |
+   | `review-config.yaml` | Auditor review thresholds |
    | `library/roles/*.yaml` | 15 built-in roles |
    | `library/patterns/*.yaml` | 11 orchestration patterns |
    | `library/prompts/*.md` | System prompts per role |

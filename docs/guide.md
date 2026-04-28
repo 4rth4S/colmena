@@ -595,9 +595,9 @@ that ship in the binary.
 
 ---
 
-## 8. Peer Review and the ELO Cycle
+## 8. Auditor Review and the ELO Cycle
 
-Peer review adds accountability. The cycle is closed automatically by
+Auditor review adds accountability. The cycle is closed automatically by
 `mission spawn` since M7.3:
 
 ```

@@ -61,7 +61,7 @@ enum Commands {
         #[command(subcommand)]
         action: LibraryAction,
     },
-    /// Peer review management
+    /// Auditor review management
     Review {
         #[command(subcommand)]
         action: ReviewAction,

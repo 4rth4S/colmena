@@ -84,7 +84,7 @@ struct EvaluateInput {
     agent_type: Option<String>,
 }
 
-// ── Peer Review + ELO + Findings input types ─────────────────────────────────
+// ── Auditor Review + ELO + Findings input types ──────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
 struct ReviewSubmitInput {
@@ -934,7 +934,7 @@ impl ColmenaServer {
         ))
     }
 
-    // ── Peer Review tools ────────────────────────────────────────────────────
+    // ── Auditor Review tools ─────────────────────────────────────────────────
 
     #[rmcp::tool(
         description = "Submit an artifact for auditor review — assigns a reviewer and creates a pending review"

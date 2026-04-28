@@ -459,7 +459,7 @@
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Peer Review Multi-Agente</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Revisión por Auditor Multi-Agente</p>
       <p style="font-size: 0.8rem; color: var(--text-dim);">QPC scoring y accountability por rol</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
@@ -494,7 +494,7 @@
       <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">?</div>
       <h3 style="color: var(--text);">Sin visibilidad de calidad</h3>
       <p style="font-size: 0.95rem;">Un agente produce codigo, otro produce mas codigo. Nadie revisa nada. Confias en el output porque estas cansado, no porque fue validado.</p>
-      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">No hay peer review entre agentes. No hay metricas. No hay senial de calidad.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">No hay revisión por auditor sobre los agentes. No hay metricas. No hay senial de calidad.</p>
     </div>
     <div class="card">
       <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">/dev/null</div>
@@ -517,7 +517,7 @@
       <h3 style="color: var(--blue);">Incident Response Coordinado</h3>
       <p style="font-size: 0.9rem; margin-bottom: 12px;"><strong>Situacion:</strong> Incidente de seguridad activo. 4 agentes en paralelo: analisis de logs, revision de codigo afectado, busqueda de IOCs, redaccion de postmortem.</p>
       <p style="font-size: 0.9rem; margin-bottom: 12px;"><span class="red"><strong>Sin Colmena:</strong></span> ~120 prompts manuales mientras el clock del incidente corre. El humano es relay entre agentes.</p>
-      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Trust rules por rol (el de logs corre queries en Splunk, el de codigo solo lee). El humano aprueba solo acciones criticas. Peer review del postmortem asegura calidad. Findings quedan para futuras investigaciones.</p>
+      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Trust rules por rol (el de logs corre queries en Splunk, el de codigo solo lee). El humano aprueba solo acciones criticas. Revisión por auditor del postmortem asegura calidad. Findings quedan para futuras investigaciones.</p>
     </div>
     <div class="card purple-border">
       <h3>Compliance Audit Multi-Framework</h3>
@@ -737,10 +737,10 @@
   </div>
 </div>
 
-<!-- Slide 7: Peer Review Protocol -->
+<!-- Slide 7: Auditor Review Protocol -->
 <div class="slide" id="s7">
-  <span class="tag blue">Peer Review Protocol</span>
-  <h2 style="margin-top: 20px;">Sin peer review, no hay <span class="blue">senial de calidad</span></h2>
+  <span class="tag blue">Auditor Review Protocol</span>
+  <h2 style="margin-top: 20px;">Sin revisión por auditor, no hay <span class="blue">senial de calidad</span></h2>
   <p style="margin-bottom: 16px; font-size: 1.05rem;">Evaluacion cruzada estructurada entre agentes. Reviews producen findings, scores, y decisiones de trust gate.</p>
   <div class="grid-2" style="align-items: start;">
     <div>
@@ -788,7 +788,7 @@
 <!-- Slide 8: ELO Engine + Findings Store -->
 <div class="slide slide-dense" id="s8">
   <span class="tag purple">ELO Engine + Findings Store</span>
-  <h2 style="margin-top: 20px;">Sin ELO, el peer review es solo <span class="purple">opinion</span></h2>
+  <h2 style="margin-top: 20px;">Sin ELO, la revisión por auditor es solo <span class="purple">opinion</span></h2>
   <div class="grid-2" style="align-items: start;">
     <div>
       <h3 style="font-size: 1rem; color: var(--text);">ELO: rating append-only con decay temporal</h3>
@@ -909,7 +909,7 @@
       </div>
       <div class="card" style="margin-bottom: 12px;">
         <h3><span style="color: var(--text-dim);">Paso 4</span> Work + Review</h3>
-        <p style="font-size: 0.9rem;">Los agentes producen artefactos. El protocolo de peer review valida calidad. Trust gate decide si se necesita aprobacion humana.</p>
+        <p style="font-size: 0.9rem;">Los agentes producen artefactos. El protocolo de revisión por auditor valida calidad. Trust gate decide si se necesita aprobacion humana.</p>
       </div>
       <div class="card">
         <h3><span style="color: var(--text-dim);">Paso 5</span> Learn</h3>
@@ -1026,7 +1026,7 @@
         <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
           <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
           <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M2</span> Peer Review + ELO + Findings</p>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M2</span> Auditor Review + ELO + Findings</p>
             <p style="font-size: 0.85rem; color: var(--text-dim);">Cross-review, trust gate, ELO con temporal decay, findings store</p>
           </div>
         </div>
@@ -1061,7 +1061,7 @@
         <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
           <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
           <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6.4</span> Enforced Peer Review</p>
+            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6.4</span> Enforced Auditor Review</p>
             <p style="font-size: 0.85rem; color: var(--text-dim);">SubagentStop hook, auditor centralizado, alertas, calibracion de auditor (25 MCP tools)</p>
           </div>
         </div>

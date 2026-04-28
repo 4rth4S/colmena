@@ -315,7 +315,7 @@ No databases, no servers. All state is on disk.
 | `missions/<mission>/mission.yaml`        | write-once                | Mission config (pattern, roles, TTL)                             |
 | `missions/<mission>/agents/<role>/CLAUDE.md` | write-once            | Per-agent prompt (includes scope, task, review protocol)         |
 | `queue/pending/*.json`                   | per-entry (30-day prune)  | Pending approval requests (ms timestamp + tool_use_id filenames) |
-| `reviews/pending/*.json` → `completed/`  | per-entry, moved on finish| Peer review lifecycle                                            |
+| `reviews/pending/*.json` → `completed/`  | per-entry, moved on finish| Auditor review lifecycle                                         |
 | `findings/<mission>/*.json`              | per-entry, 5000 hard cap  | Findings extracted from reviews                                  |
 | `~/.claude/agents/<role>.md`             | atomic temp+rename + .md.colmena-backup on overwrite | Subagent files (M7.3, outside config_dir)     |
 
@@ -479,7 +479,7 @@ arguments. The binary resolves `config_dir` from `colmena_home()` at startup.
   `delegate`, `delegate_list`, `delegate_revoke`.
 - **Wisdom Library (6):** `library_list`, `library_show`, `library_select`,
   `library_generate`, `library_create_role`, `library_create_pattern`.
-- **Peer Review & Findings (6):** `review_submit`, `review_list`,
+- **Auditor Review & Findings (6):** `review_submit`, `review_list`,
   `review_evaluate`, `elo_ratings`, `findings_query`, `findings_list`.
 - **Alerts & Calibration (4):** `alerts_list`, `alerts_ack`,
   `calibrate_auditor`, `calibrate_auditor_feedback`.

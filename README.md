@@ -293,7 +293,7 @@ colmena doctor                        # Health check (7 categories)
 colmena delegate add/list/revoke      # Manage trust delegations
 colmena library list/show/select      # Browse roles and patterns
 colmena library create-role/create-pattern   # Create your own
-colmena review list/show              # Peer reviews
+colmena review list/show              # Auditor reviews
 colmena elo show                      # ELO leaderboard
 colmena calibrate run/show/reset      # Trust calibration
 colmena mission list/deactivate       # Mission lifecycle
