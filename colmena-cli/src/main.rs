@@ -502,11 +502,12 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
                     }
                 }
             }
-            // Stop hook: no response needed — CC doesn't read stdout for Stop events.
-            // Write an empty passthrough to satisfy any potential stdout read.
-            let response = hook::PostToolUseResponse::passthrough();
-            serde_json::to_writer(std::io::stdout(), &response)
-                .context("Failed to write Stop passthrough response")?;
+            // Stop hook: no JSON response. CC validates `hookEventName` in any
+            // structured stdout against the hook it dispatched, so reusing
+            // `PostToolUseResponse::passthrough` (which carries
+            // `hookEventName: "PostToolUse"`) made every Stop event surface
+            // `expected 'Stop' but got 'PostToolUse'` in the CC UI. An empty
+            // stdout + exit 0 is the documented default-continue contract.
             Ok(())
         }
         other => {
