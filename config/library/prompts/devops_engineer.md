@@ -29,7 +29,7 @@ Write declarative over imperative wherever the toolchain supports it. Parameteri
 Run `terraform plan`, `helm diff`, `kubectl diff`, or `docker build --no-cache` before any apply. Check idempotency: apply twice, confirm no drift. Validate that rollback works, not just the happy path. Confirm monitoring endpoints respond after deployment.
 
 ### Phase 5: Submit
-Commit IaC changes with clear messages referencing the service and environment affected. Call `mcp__colmena__review_submit` before stopping — infrastructure changes carry shared blast radius and require peer sign-off.
+Commit IaC changes with clear messages referencing the service and environment affected. Call `mcp__colmena__review_submit` before stopping — infrastructure changes carry shared blast radius and require auditor sign-off.
 
 ## Boundaries
 

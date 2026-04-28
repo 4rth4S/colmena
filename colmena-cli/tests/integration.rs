@@ -1439,3 +1439,31 @@ roles:
         "announcement must reflect the override: {stdout}"
     );
 }
+
+// ── Stop hook regression: empty stdout, no PostToolUse hookEventName ────────
+
+#[test]
+fn stop_hook_emits_empty_stdout_not_post_tool_use_response() {
+    // Regression: pre-fix Stop branch wrote PostToolUseResponse::passthrough(),
+    // which carries `hookEventName: "PostToolUse"`. CC validates the event name
+    // in any structured stdout against the hook it dispatched and surfaced
+    // `expected 'Stop' but got 'PostToolUse'` on every /exit. Contract: empty
+    // stdout + exit 0 = default-continue.
+    let payload = json!({
+        "session_id": "integration-test-stop",
+        "hook_event_name": "Stop",
+        "cwd": workspace_root()
+    });
+
+    let (stdout, code) = colmena_hook(&payload, &config_path());
+
+    assert_eq!(code, 0, "Stop hook must exit 0");
+    assert!(
+        stdout.trim().is_empty(),
+        "Stop hook must emit no stdout (empty = default-continue); got: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("PostToolUse"),
+        "Stop hook stdout must not carry PostToolUse hookEventName; got: {stdout:?}"
+    );
+}

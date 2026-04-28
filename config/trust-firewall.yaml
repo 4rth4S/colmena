@@ -95,10 +95,10 @@ restricted:
     action: ask
     reason: 'Push to remote requires human confirmation'
 
-  # Peer review operations — human oversees submissions and evaluations
+  # Auditor review operations — human oversees submissions and evaluations
   - tools: [mcp__colmena__review_submit, mcp__colmena__review_evaluate]
     action: ask
-    reason: 'Peer review operations require human oversight'
+    reason: 'Auditor review operations require human oversight'
 
   # Library creation requires human review (prevent library poisoning)
   - tools: [mcp__colmena__library_create_role, mcp__colmena__library_create_pattern]

@@ -20,7 +20,7 @@ pub struct TrustThresholds {
     /// ELO >= this → Restricted tier (ask for everything)
     /// Below this → Probation tier (block dangerous tools)
     pub floor_elo: i32,
-    /// Minimum peer reviews before ELO calibration applies
+    /// Minimum auditor reviews before ELO calibration applies
     pub min_reviews_to_calibrate: u32,
 }
 

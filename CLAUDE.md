@@ -28,7 +28,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 **Three differentiators.**
 
 1. **Deterministic governance.** Every tool call is evaluated against YAML rules with compiled regexes. Zero LLM calls in the hot path, zero per-call cost, `<15ms` hook latency. Every decision is written to `config/audit.log` with the matching rule ID — any auditor can replay the log and explain why a call was allowed, asked, or blocked.
-2. **Multi-agent governance with peer review.** Missions spawn agents with mission markers (`<!-- colmena:mission_id=... -->`); workers submit artifacts through `review_submit`, a centralized auditor evaluates with the QPC framework (Quality + Precision + Comprehensiveness, 1–10 each), and `SubagentStop` gates block workers and reviewers from stopping until the cycle closes. Accountability is per-agent and per-role, not per-call.
+2. **Multi-agent governance with centralized auditor review.** Missions spawn agents with mission markers (`<!-- colmena:mission_id=... -->`); workers submit artifacts through `review_submit`, a centralized auditor evaluates with the QPC framework (Quality + Precision + Comprehensiveness, 1–10 each), and `SubagentStop` gates block workers and reviewers from stopping until the cycle closes. Accountability is per-agent and per-role, not per-call.
 3. **ELO-calibrated trust progression.** Role trust is not declared — it's earned. Review outcomes feed a per-role ELO log with temporal decay. Roles climb from Uncalibrated → Standard → Elevated (auto-approve role-scoped tools) or drop to Restricted / Probation. ELO overrides live in a separate file so config stays human-readable, and YAML overrides always win (human authority > ELO).
 
 **Relationship to Claude Code auto-mode.** Anthropic's `--enable-auto-mode` (research preview, 2026-03-24) does semantic intent detection with an LLM classifier — it catches things a rule can't, like prompt injection attempts or context the agent didn't have. Colmena does deterministic rule-based governance plus multi-agent accountability and a local, tamper-evident audit trail. They solve different layers of the same problem and are intended to be used together, not as alternatives. Auto-mode handles "is this request aligned with user intent?", Colmena handles "is this action allowed by the policy I wrote, and who on my team is accountable for the outcome?".
@@ -221,7 +221,7 @@ Every active mission must feed per-agent ELO. Six mechanisms keep the cycle clos
 
 **Pitfall from prior missions:** if an agent spawns with an ad-hoc `name` like `squad-a` not matching any delegation, or the role YAML's `tools_allowed` omits review MCP tools, ELO stays flat. See memory: `project_elo_success_recipe.md` (working case) vs `project_tm_pattern_learnings.md` (failing case).
 
-**Reviewer pool selection:** `submit_review` picks randomly from `available_roles` passed by the caller, filtered by author != reviewer and no reciprocal pairs (`review.rs`). To force a centralized auditor today, pass `available_roles: ["auditor"]`. Ad-hoc broad pools land on whichever non-author role is alive — not always what the mission intended.
+**Auditor pool selection:** `submit_review` picks randomly from `available_roles` passed by the caller, filtered by author != reviewer and no reciprocal pairs (`review.rs`). The production-recommended pool is `available_roles: ["auditor"]` to enforce the centralized-auditor invariant. Ad-hoc broad pools land on whichever non-author role is alive — not always what the mission intended, and they break the centralized-auditor guarantee.
 
 **Future (M7.3):** `mission_spawn` will auto-generate subagent files, bundle review delegations, pre-fill prompt protocol blocks, auto-activate Mission Gate when `source: role` delegations are present, and expose `colmena prompt-inject --mode terse` to emit `INTER_AGENT_DIRECTIVE` standalone.
 
@@ -250,7 +250,7 @@ colmena library show <id>             # Show role or pattern details
 colmena library select --mission "…"  # Pattern selector + mission generator
 colmena library create-role --id X --description "Y" [--category Z]  # Intelligent role creation
 colmena library create-pattern --id X --description "Y" [--topology Z]  # Pattern scaffolding
-colmena review list [--state pending]  # List peer reviews
+colmena review list [--state pending]  # List auditor reviews
 colmena review show <review-id>        # Review detail
 colmena elo show                       # ELO leaderboard
 colmena mission list                   # List active missions with delegation counts
@@ -283,9 +283,9 @@ Wisdom Library:
   library_create_role — create role with intelligent defaults (8 categories)
   library_create_pattern — create pattern with topology detection (7 topologies)
 
-Peer Review & Findings:
-  review_submit      — submit artifact for peer review (assigns reviewer)
-  review_list        — list peer reviews (pending/completed)
+Auditor Review & Findings:
+  review_submit      — submit artifact for auditor review (assigns reviewer)
+  review_list        — list auditor reviews (pending/completed)
   review_evaluate    — submit scores + findings as reviewer (triggers ELO + trust gate + alerts)
   elo_ratings        — ELO leaderboard with temporal decay
   findings_query     — search findings by role/category/severity/date/mission
@@ -316,7 +316,7 @@ Operations:
 - **M0** Trust Firewall + Approval Hub (done)
 - **M0.5** Workspace refactor + MCP server (done)
 - **M1** Wisdom Library + Pattern Selector + RRA hardening (done)
-- **M2** Peer Review Protocol + ELO Engine + Findings Store (done)
+- **M2** Auditor Review Protocol + ELO Engine + Findings Store (done)
 - **M2.5** Output Filtering — PostToolUse hook + colmena-filter pipeline (done)
 - **M3** Dynamic trust calibration — role-bound permissions + ELO → firewall rules (done)
 - **M3.5** Security hardening + Mission bridge — STRIDE/DREAD fixes, session stats, ELO reviewer lead (done)
@@ -327,7 +327,7 @@ Operations:
 - **M6.1** Security hardening — STRIDE/DREAD threat model fixes: error sanitization, rate limiting, log rotation, orphan cleanup, permissions checks (done)
 - **M6.2** P0+P1 hardening — MCP calibrate/evaluate precision, reviewer randomization, Elevated Bash guard, --session delegations, regex validation, expire audit trail (done)
 - **M6.3** Role tools_allowed firewall — PermissionRequest hook auto-approves role tools via CC session rules, mission revocation kill switch (done)
-- **M6.4** Enforced Peer Review — SubagentStop hook blocks workers without review, centralized auditor, alerts system, auditor calibration (done)
+- **M6.4** Enforced Auditor Review — SubagentStop hook blocks workers without review, centralized auditor, alerts system, auditor calibration (done)
 - **M7** Generic roles + patterns + topology mapping — 4 dev roles, 3 dev patterns, map_topology_roles, QPC auditor framework, inter-agent directive (done)
 - **M7.1** Mission Spawn + Mission Gate — one-step mission creation, enforce_missions opt-in gate (done)
 - **M7.2** Mission Sizing / colmena suggest — complexity analysis, recommends Colmena vs vanilla CC, min 3-agent enforcement (done)

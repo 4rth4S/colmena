@@ -422,7 +422,7 @@ colmena suggest "refactor auth module, migrate database schema, update all consu
 # → complexity=high, recommended_agents=5+, verdict: use Colmena
 ```
 
-The threshold is 3+ recommended agents. Below that, Colmena's orchestration overhead is not worth it. At 3+, the trust firewall, scoped permissions, peer review enforcement, and ELO calibration start paying off.
+The threshold is 3+ recommended agents. Below that, Colmena's orchestration overhead is not worth it. At 3+, the trust firewall, scoped permissions, auditor review enforcement, and ELO calibration start paying off.
 
 ---
 

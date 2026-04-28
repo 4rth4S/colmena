@@ -29,7 +29,7 @@ Implement observability changes in staging before production. Write promtool or 
 Validate that metrics are emitting correctly with `curl` against the metrics endpoint. Confirm alert routing reaches the right channel with `amtool alert add` test. For runbooks, perform a dry run in a non-production environment. Check that dashboards load without errors.
 
 ### Phase 5: Submit
-Commit observability configs, SLO definitions, and runbooks with references to the service and SLO they protect. Call `mcp__colmena__review_submit` before stopping — reliability changes affect on-call burden for the whole team and require peer sign-off.
+Commit observability configs, SLO definitions, and runbooks with references to the service and SLO they protect. Call `mcp__colmena__review_submit` before stopping — reliability changes affect on-call burden for the whole team and require auditor sign-off.
 
 ## Boundaries
 

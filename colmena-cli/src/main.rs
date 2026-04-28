@@ -61,7 +61,7 @@ enum Commands {
         #[command(subcommand)]
         action: LibraryAction,
     },
-    /// Peer review management
+    /// Auditor review management
     Review {
         #[command(subcommand)]
         action: ReviewAction,
@@ -502,11 +502,12 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
                     }
                 }
             }
-            // Stop hook: no response needed — CC doesn't read stdout for Stop events.
-            // Write an empty passthrough to satisfy any potential stdout read.
-            let response = hook::PostToolUseResponse::passthrough();
-            serde_json::to_writer(std::io::stdout(), &response)
-                .context("Failed to write Stop passthrough response")?;
+            // Stop hook: no JSON response. CC validates `hookEventName` in any
+            // structured stdout against the hook it dispatched, so reusing
+            // `PostToolUseResponse::passthrough` (which carries
+            // `hookEventName: "PostToolUse"`) made every Stop event surface
+            // `expected 'Stop' but got 'PostToolUse'` in the CC UI. An empty
+            // stdout + exit 0 is the documented default-continue contract.
             Ok(())
         }
         other => {
@@ -960,7 +961,7 @@ fn build_permission_updates(
     }]
 }
 
-/// SubagentStop: enforce peer review before mission workers can stop.
+/// SubagentStop: enforce auditor review before mission workers can stop.
 /// Safe fallback: any error → approve (never trap an agent).
 ///
 /// Fix Finding #19 (DREAD 5.4): When safe fallback triggers, create a warning-level
@@ -1072,7 +1073,7 @@ fn subagent_stop_inner(payload: &hook::SubagentStopPayload) -> Result<hook::Suba
         // 7. No review → block
         Ok(hook::SubagentStopResponse::block(format!(
             "You must call mcp__colmena__review_submit before stopping. \
-             Your work needs peer review as part of mission '{}' protocol. \
+             Your work needs auditor review as part of mission '{}' protocol. \
              Submit your work for review, then you can stop.",
             mission_id
         )))

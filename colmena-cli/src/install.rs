@@ -143,7 +143,7 @@ pub fn run_install() -> Result<()> {
         }));
     }
 
-    // Also register SubagentStop hook for enforced peer review
+    // Also register SubagentStop hook for enforced auditor review
     let subagent_stop = hooks_obj.entry("SubagentStop").or_insert_with(|| json!([]));
 
     let subagent_arr = subagent_stop
