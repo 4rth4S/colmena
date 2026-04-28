@@ -66,7 +66,7 @@ One idempotent command. You can re-run it safely — your edits are preserved, n
    - `PreToolUse` — evaluates every tool call
    - `PostToolUse` — filters noisy Bash output
    - `PermissionRequest` — auto-approves role-scoped tools
-   - `SubagentStop` — enforces peer review before agents stop
+   - `SubagentStop` — enforces auditor review before agents stop
 5. **Registers MCP** in `~/.mcp.json` so CC sees the 27 Colmena tools natively.
 
 `--force` overwrites custom files. `--dry-run` previews without writing.

@@ -2,7 +2,7 @@
 
 > A walking example: running a PCI-DSS audit of a payments API with a
 > three-agent mission via `colmena mission spawn --from manifest.yaml`.
-> From ~100 permission prompts per session to ~20, with peer review and
+> From ~100 permission prompts per session to ~20, with auditor review and
 > ELO calibration closing the cycle automatically.
 
 This guide is the "I-saw-it-work" artifact. If you want feature-level *why*,
@@ -667,7 +667,7 @@ includes them in scope automatically.
 
 ## 9. Dynamic Trust Calibration
 
-After agents accumulate ≥3 peer reviews, their ELO determines a trust tier.
+After agents accumulate ≥3 auditor reviews, their ELO determines a trust tier.
 
 ```bash
 colmena calibrate show
@@ -904,7 +904,7 @@ All delegations expire automatically (max 24h). For mission-wide revocation:
 | `colmena mission spawn --mission "…" --pattern X --role A --role B …` | Shortcut, no manifest |
 | `colmena mission deactivate --id X` | Revoke all delegations + subagent files for a mission |
 | `colmena mission prompt-inject --mode terse` | Emit INTER_AGENT_DIRECTIVE for manual Agent spawns |
-| `colmena review list [--state pending]` | List peer reviews |
+| `colmena review list [--state pending]` | List auditor reviews |
 | `colmena review show <id>` | Review detail |
 | `colmena elo show` | ELO leaderboard |
 | `colmena calibrate run` | Apply ELO-based trust tiers |
@@ -929,7 +929,7 @@ All delegations expire automatically (max 24h). For mission-wide revocation:
 | `library_generate` | Generate per-agent CLAUDE.md |
 | `library_create_role` | Create role (intelligent defaults) |
 | `library_create_pattern` | Create pattern (topology detection) |
-| `review_submit` | Submit artifact for peer review |
+| `review_submit` | Submit artifact for auditor review |
 | `review_list` | List reviews |
 | `review_evaluate` | Score + review artifact |
 | `elo_ratings` | ELO leaderboard |
