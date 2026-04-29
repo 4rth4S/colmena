@@ -490,6 +490,56 @@ fn normalize_unicode_operators(cmd: &str) -> String {
         .collect()
 }
 
+/// Recognize a bare shell variable assignment piece: `KEY=value` or `KEY="..."`
+/// or `KEY='...'`, with no following command.
+///
+/// Used by the chain-aware evaluator (M7.10) to auto-approve assignment-only
+/// pieces produced by splitting `KEY=v; cmd` chains. Safety relies on the
+/// caller already having rejected `$(...)` and backticks at the whole-input
+/// scan, so the assignment value cannot embed command substitution.
+///
+/// Conservative grammar: key is `^[A-Z_][A-Z0-9_]*` (uppercase only). Anything
+/// after the value (a space + extra tokens) disqualifies the piece.
+#[allow(dead_code)] // consumed by Task 6 evaluate_chain_aware (M7.10)
+fn is_bare_assignment(piece: &str) -> bool {
+    let trimmed = piece.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Find '=' and validate the key.
+    let eq_pos = match trimmed.find('=') {
+        Some(p) => p,
+        None => return false,
+    };
+    let key = &trimmed[..eq_pos];
+    if key.is_empty() {
+        return false;
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        return false;
+    }
+    if !key
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase() || c == '_')
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    // Validate the value: must be a single token (no unescaped spaces unless
+    // they sit inside matched quotes).
+    let value = &trimmed[eq_pos + 1..];
+    let stripped_value = strip_quoted_regions(value);
+    // After quote stripping, quoted regions have been replaced with spaces.
+    // Trim surrounding spaces (artifact of quote replacement), then check
+    // that no interior whitespace remains — interior whitespace would mean
+    // a follow-up command token outside any quoted region.
+    !stripped_value.trim().contains(char::is_whitespace)
+}
+
 /// Detect shell chain operators in a Bash command.
 ///
 /// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick
@@ -1447,5 +1497,41 @@ mod tests {
             normalize_unicode_operators("foo\u{FF06}\u{FF06}bar"),
             "foo&&bar"
         );
+    }
+
+    // ── is_bare_assignment tests (M7.10) ────────────────────────────────────
+
+    #[test]
+    fn test_bare_assignment_simple() {
+        assert!(is_bare_assignment("TOKEN=abc"));
+        assert!(is_bare_assignment("SDK=/path/to/sdk"));
+        assert!(is_bare_assignment("FOO_BAR=value123"));
+    }
+
+    #[test]
+    fn test_bare_assignment_quoted() {
+        assert!(is_bare_assignment("TOKEN=\"some value\""));
+        assert!(is_bare_assignment("PATH='abc:def'"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_command() {
+        assert!(!is_bare_assignment("TOKEN=abc echo hi"));
+        assert!(!is_bare_assignment("FOO=bar; rm -rf /"));
+        assert!(!is_bare_assignment("echo hello"));
+        assert!(!is_bare_assignment("git status"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_lowercase_key() {
+        // Conservative: uppercase + underscore + digits only.
+        assert!(!is_bare_assignment("token=abc"));
+        assert!(!is_bare_assignment("MyVar=foo"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_empty() {
+        assert!(!is_bare_assignment(""));
+        assert!(!is_bare_assignment("   "));
     }
 }
