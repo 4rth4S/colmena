@@ -9,11 +9,17 @@ defaults:
 # Off by default — opt-in. Human can always override.
 enforce_missions: false  # Opt-in; set true per-session when a mission requires strict gating.
 
+# Chain-aware Bash evaluator (M7.10): when true, &&/||/;/| chains are split
+# and each piece re-evaluated; auto-approves only if all pieces are safe.
+# Subshells $(...) and backticks fall back to chain_guard ask. Set false to
+# restore pre-M7.10 behaviour as a kill switch.
+chain_aware: true
+
 trust_circle:
   # Local read operations - always safe
   - tools: [Read, Glob, Grep, Bash]
     conditions:
-      bash_pattern: '^(cat|head|tail|less|ls|find|grep|rg|wc|file|stat|which|type|echo|printf|date|uname|whoami|hostname|pwd|env|printenv|id|df|du|free|uptime|ps|sort|uniq|tr|cut|awk|sed|tee|xargs|jq|yq|base64|sha256sum|shasum|md5|openssl dgst|xxd|hexdump|strings)\b'
+      bash_pattern: '^(cat|head|tail|less|ls|find|grep|rg|wc|file|stat|which|type|echo|printf|date|uname|whoami|hostname|pwd|cd|env|printenv|id|df|du|free|uptime|ps|sort|uniq|tr|cut|awk|sed|tee|xargs|jq|yq|base64|sha256sum|shasum|md5|openssl dgst|xxd|hexdump|strings)\b'
     action: auto-approve
     reason: 'Read-only local operations'
 
@@ -27,7 +33,7 @@ trust_circle:
   # Git read operations - always safe
   - tools: [Bash]
     conditions:
-      bash_pattern: '^git (log|diff|status|blame|show|branch|tag|remote|stash list|ls-files|rev-parse|describe|shortlog|reflog|config --get|config --list)\b'
+      bash_pattern: '^git (log|diff|status|blame|show|branch|tag|remote|stash list|ls-files|rev-parse|describe|shortlog|reflog|config --get|config --list|clone|fetch|pull|checkout)\b'
     action: auto-approve
     reason: 'Git read-only operations'
 
@@ -41,7 +47,7 @@ trust_circle:
   # Package managers and build tools (read/build, not install)
   - tools: [Bash]
     conditions:
-      bash_pattern: '^(cargo (build|test|check|clippy|fmt|run|bench|doc|tree|metadata)|npm (test|run|list|info|outdated|audit)|npx |pip list|pip show|python -c|node -e|rustc --version|rustup show|brew list|brew info)\b'
+      bash_pattern: '^(cargo (build|test|check|clippy|fmt|run|bench|doc|tree|metadata)|go (build|test|mod tidy|mod download|vet|fmt)|npm (test|run|list|info|outdated|audit)|npx |pip list|pip show|python -c|node -e|rustc --version|rustup show|brew list|brew info)\b'
     action: auto-approve
     reason: 'Build tools and package manager reads'
 

