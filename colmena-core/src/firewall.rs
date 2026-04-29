@@ -545,8 +545,9 @@ fn is_bare_assignment(piece: &str) -> bool {
 /// caller must NOT chain-evaluate: presence of `$(`, backticks, or unmatched
 /// quotes — those should fall through to the legacy `chain_guard` ask.
 ///
-/// The returned slices include any surrounding whitespace; callers should
-/// `trim` each piece before evaluating.
+/// The returned strings are allocated (owned) from the normalized input,
+/// including any surrounding whitespace. Callers should `trim` each piece
+/// before evaluating.
 ///
 /// A non-chained input still returns `Some(vec![cmd])` (single element); the
 /// caller decides whether to short-circuit. Unicode homoglyphs are normalized
@@ -1685,5 +1686,22 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "git status ");
         assert_eq!(parts[1], " git log");
+    }
+
+    #[test]
+    fn test_split_chain_empty_input() {
+        // Empty string → Some(vec![""]) — single empty piece, no chain to evaluate.
+        let parts = split_top_level_chain("").unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0], "");
+    }
+
+    #[test]
+    fn test_split_chain_only_operators() {
+        // ";;" splits into 3 empty pieces (before first ;, between, after last ;).
+        // The chain-aware evaluator will skip empty pieces during fold.
+        let parts = split_top_level_chain(";;").unwrap();
+        assert_eq!(parts.len(), 3);
+        assert!(parts.iter().all(|p| p.is_empty()));
     }
 }
