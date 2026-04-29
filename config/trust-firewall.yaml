@@ -33,7 +33,7 @@ trust_circle:
   # Git read operations - always safe
   - tools: [Bash]
     conditions:
-      bash_pattern: '^git (log|diff|status|blame|show|branch|tag|remote|stash list|ls-files|rev-parse|describe|shortlog|reflog|config --get|config --list)\b'
+      bash_pattern: '^git (log|diff|status|blame|show|branch|tag|remote|stash list|ls-files|rev-parse|describe|shortlog|reflog|config --get|config --list|clone|fetch|pull|checkout)\b'
     action: auto-approve
     reason: 'Git read-only operations'
 
