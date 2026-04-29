@@ -138,6 +138,16 @@ pub struct FirewallConfig {
     /// Queue lifecycle settings (M7.14). Optional — defaults apply when absent.
     #[serde(default)]
     pub queue: QueueConfig,
+    /// Chain-aware Bash evaluator (M7.10). When true, top-level `&&`/`||`/`;`/`|`
+    /// chains are split and each piece re-evaluated; chain auto-approves only if
+    /// every piece auto-approves. Subshells/backticks fall back to chain_guard ask.
+    /// Default true; set false to restore pre-M7.10 chain_guard-asks-everything.
+    #[serde(default = "default_chain_aware")]
+    pub chain_aware: bool,
+}
+
+fn default_chain_aware() -> bool {
+    true
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -500,6 +510,7 @@ action: auto-approve
             notifications: None,
             enforce_missions: Some(false),
             queue: Default::default(),
+            chain_aware: true,
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -526,6 +537,7 @@ action: auto-approve
             notifications: None,
             enforce_missions: Some(false),
             queue: Default::default(),
+            chain_aware: true,
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -551,6 +563,7 @@ action: auto-approve
             notifications: None,
             enforce_missions: Some(false),
             queue: Default::default(),
+            chain_aware: true,
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -575,6 +588,7 @@ action: auto-approve
             notifications: None,
             enforce_missions: Some(false),
             queue: Default::default(),
+            chain_aware: true,
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -732,6 +746,7 @@ enforce_missions: true
             notifications: None,
             enforce_missions: enforce,
             queue: Default::default(),
+            chain_aware: true,
         }
     }
 
@@ -875,5 +890,30 @@ queue:
         let config: FirewallConfig = serde_yml::from_str(yaml).unwrap();
         assert_eq!(config.queue.retention_pending_seconds, 300);
         assert_eq!(config.queue.retention_decided_hours, 48);
+    }
+
+    // ── chain_aware tests (M7.10) ────────────────────────────────────────────
+
+    #[test]
+    fn test_chain_aware_default_true() {
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+"#;
+        let cfg: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert!(cfg.chain_aware, "chain_aware must default to true");
+    }
+
+    #[test]
+    fn test_chain_aware_explicit_false() {
+        let yaml = r#"
+version: 1
+defaults:
+  action: ask
+chain_aware: false
+"#;
+        let cfg: FirewallConfig = serde_yml::from_str(yaml).unwrap();
+        assert!(!cfg.chain_aware);
     }
 }
