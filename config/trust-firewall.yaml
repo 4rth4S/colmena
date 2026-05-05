@@ -121,6 +121,15 @@ restricted:
     action: ask
     reason: 'Mission spawn creates patterns and delegations — requires human review'
 
+  # PR merges — assistant can merge after verifying CI green.
+  # gh pr merge doesn't carry branch context in the command string,
+  # so every merge requires human confirmation regardless of branch.
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^gh pr merge\b'
+    action: ask
+    reason: 'PR merges require human confirmation — assistant verifies CI green before proposing'
+
   # External communications
   - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]
     action: ask
@@ -143,18 +152,20 @@ blocked:
     action: block
     reason: 'Destructive Bash operations on critical config files are blocked — use dedicated Colmena tools'
 
-  # PR merges are human-only — Claude creates PRs, Coco merges
-  - tools: [Bash]
-    conditions:
-      bash_pattern: '^gh pr merge\b'
-    action: block
-    reason: 'PR merges are human-initiated only — Claude pushes branches and creates PRs'
 
 # Per-agent overrides (used by ELO engine in M3)
 agent_overrides: {}
 
 notifications:
   enabled: true
+
+# Auto-elevate (M7.15) — session-scoped trust via 2× operator confirmation.
+# When enabled, confirming the same binary skeleton twice within the window
+# auto-creates a session-scoped delegation. Only the main session; never blocked commands.
+# auto_elevate:
+#   enabled: true
+#   window_minutes: 10
+#   threshold: 2
 
 # Queue lifecycle (M7.14) — optional overrides. Defaults shown.
 # Omit this block entirely for zero-diff behaviour on existing deployments.

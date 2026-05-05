@@ -302,10 +302,15 @@ pub fn resolve_pending(
 
         // Match new format: ends with "-{session}-{tool_use_id}.json"
         let new_suffix = format!("-{}-{}.json", session_sanitized, tool_use_id);
-        // Match old format: ends with "-{tool_use_id}.json"
+
+        let parsed = parse_queue_filename(&fname);
+        // Match old format only when the file truly has no session_id;
+        // otherwise old_suffix (-{tool_use_id}.json) spuriously matches
+        // new-format files whose session component also ends in the same chars.
+        let old_match = parsed.as_ref().is_some_and(|p| p.session_id.is_none());
         let old_suffix = format!("-{}.json", tool_use_id);
 
-        let matched = fname.ends_with(&new_suffix) || fname.ends_with(&old_suffix);
+        let matched = fname.ends_with(&new_suffix) || (old_match && fname.ends_with(&old_suffix));
         if !matched {
             continue;
         }
@@ -616,7 +621,9 @@ pub fn list_pending_filtered(
         return Ok(Vec::new());
     }
 
-    // Auto-prune entries older than 30 days (legacy fallback, S4 now does this lazily)
+    // Legacy safety net: auto-prune entries older than 30 days.
+    // The primary lifecycle (S4 lazy GC + Stop sweep) handles normal flow;
+    // this keeps the backlog bounded even if the hook event never fires.
     let _ = prune_old_entries(config_dir, Duration::days(30));
 
     let session_sanitized = session_filter.map(sanitize_session_id);
@@ -1513,17 +1520,26 @@ mod tests {
         std::fs::create_dir_all(&pending_dir).unwrap();
 
         // Old-format file: filename has no session segment, JSON has no session_id field
-        let old_json = r#"{
-            "id": "1234567890-tu_backcompat",
-            "timestamp": "2026-04-01T00:00:00Z",
+        // Use a recent timestamp so the legacy prune_old_entries(30d) doesn't sweep it.
+        let ts = chrono::Utc::now().timestamp_millis();
+        let old_json = format!(
+            r#"{{
+            "id": "{ts}-tu_backcompat",
+            "timestamp": "{}",
             "agent_id": null,
             "tool": "Bash",
-            "input": {"command": "ls"},
+            "input": {{"command": "ls"}},
             "rule_matched": null,
             "priority": "low",
             "reason": "backcompat"
-        }"#;
-        std::fs::write(pending_dir.join("1234567890-tu_backcompat.json"), old_json).unwrap();
+        }}"#,
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        );
+        std::fs::write(
+            pending_dir.join(format!("{ts}-tu_backcompat.json")),
+            old_json,
+        )
+        .unwrap();
 
         // list_pending(None) includes it
         let all = list_pending_filtered(config_dir, None).unwrap();

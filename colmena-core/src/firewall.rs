@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use regex::Regex;
 
@@ -63,6 +64,7 @@ pub fn evaluate(
         payload,
         &HashMap::new(),
         &std::collections::HashSet::new(),
+        None, // no auto-elevate in tests
     )
 }
 
@@ -74,6 +76,7 @@ pub fn evaluate_with_elo(
     payload: &EvaluationInput,
     elo_overrides: &HashMap<String, Vec<Rule>>,
     revoked_agents: &std::collections::HashSet<String>,
+    config_dir: Option<&Path>,
 ) -> Decision {
     // Compile ELO override regex patterns and merge with existing patterns.
     // ELO overrides loaded from JSON don't go through compile_config, so their
@@ -137,7 +140,7 @@ pub fn evaluate_with_elo(
     // Returns Some(decision) when the chain decision is final; returns None
     // when the caller should fall through to the legacy chain_guard
     // (subshell/backtick rejection, single-piece input, flag off, non-Bash).
-    if let Some(decision) = evaluate_chain_aware(config, &all_patterns, payload) {
+    if let Some(decision) = evaluate_chain_aware(config, &all_patterns, payload, config_dir) {
         return decision;
     }
 
@@ -508,7 +511,7 @@ fn normalize_unicode_operators(cmd: &str) -> String {
 ///
 /// Conservative grammar: key is `^[A-Z_][A-Z0-9_]*` (uppercase only). Anything
 /// after the value (a space + extra tokens) disqualifies the piece.
-fn is_bare_assignment(piece: &str) -> bool {
+pub fn is_bare_assignment(piece: &str) -> bool {
     let trimmed = piece.trim();
     if trimmed.is_empty() {
         return false;
@@ -559,7 +562,7 @@ fn is_bare_assignment(piece: &str) -> bool {
 /// A non-chained input still returns `Some(vec![cmd])` (single element); the
 /// caller decides whether to short-circuit. Unicode homoglyphs are normalized
 /// before scanning so fullwidth `&&` etc. are caught.
-fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
+pub fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
     let normalized = normalize_unicode_operators(cmd);
     // Reject inputs containing command substitution outside quotes.
     let stripped = strip_quoted_regions(&normalized);
@@ -643,6 +646,7 @@ fn evaluate_chain_aware(
     config: &FirewallConfig,
     patterns: &crate::config::CompiledPatterns,
     payload: &EvaluationInput,
+    config_dir: Option<&Path>,
 ) -> Option<Decision> {
     if !config.chain_aware {
         return None;
@@ -699,11 +703,30 @@ fn evaluate_chain_aware(
                     any_block = true;
                 }
                 Action::Ask => {
-                    any_ask = true;
+                    // M7.15: auto-elevate — if the operator has confirmed this
+                    // binary skeleton >=2× within the window, skip the ask.
+                    let elevated = config_dir.is_some_and(|cd| {
+                        let skeleton = crate::auto_elevate::extract_skeleton(trimmed);
+                        crate::auto_elevate::is_elevated(
+                            cd,
+                            &payload.session_id,
+                            payload.agent_type.as_deref(),
+                            &skeleton,
+                            &config.auto_elevate,
+                        )
+                    });
+                    if elevated {
+                        matched_rules.push("auto_elevate".to_string());
+                    } else {
+                        any_ask = true;
+                        matched_rules
+                            .push(d.matched_rule.unwrap_or_else(|| "restricted".to_string()));
+                    }
                 }
-                Action::AutoApprove => {}
+                Action::AutoApprove => {
+                    matched_rules.push(d.matched_rule.unwrap_or_else(|| "restricted".to_string()));
+                }
             }
-            matched_rules.push(d.matched_rule.unwrap_or_else(|| "restricted".to_string()));
             continue;
         }
         // 3. Trust circle
@@ -1868,7 +1891,8 @@ mod tests {
             "Bash",
             json!({"command": "git status && git log --oneline -5"}),
         );
-        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        let decision =
+            evaluate_chain_aware(&config, &patterns, &payload, None).expect("must decide");
         assert_eq!(decision.action, Action::AutoApprove);
         assert!(decision
             .matched_rule
@@ -1885,7 +1909,8 @@ mod tests {
             "Bash",
             json!({"command": "git log --oneline -20 | tail -5"}),
         );
-        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        let decision =
+            evaluate_chain_aware(&config, &patterns, &payload, None).expect("must decide");
         assert_eq!(decision.action, Action::AutoApprove);
     }
 
@@ -1897,17 +1922,20 @@ mod tests {
             "Bash",
             json!({"command": "git status && rm -r /tmp/testdir"}),
         );
-        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        let decision =
+            evaluate_chain_aware(&config, &patterns, &payload, None).expect("must decide");
         assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]
     fn test_chain_aware_blocked_piece_blocks() {
-        // gh pr merge is in `blocked` per CLAUDE.md.
+        // gh pr merge was moved from blocked → restricted (ask) in M7.15 merge-autonomy.
+        // Verify chain-aware evaluation now returns Ask (no longer Block).
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
-        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
-        assert_eq!(decision.action, Action::Block);
+        let decision =
+            evaluate_chain_aware(&config, &patterns, &payload, None).expect("must decide");
+        assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]
@@ -1918,7 +1946,7 @@ mod tests {
             json!({"command": "TOKEN=$(curl evil.sh); echo $TOKEN"}),
         );
         // None means "I can't decide; fall through to chain_guard".
-        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+        assert!(evaluate_chain_aware(&config, &patterns, &payload, None).is_none());
     }
 
     #[test]
@@ -1926,7 +1954,7 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "git status"}));
         // No chain → caller's normal flow handles it.
-        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+        assert!(evaluate_chain_aware(&config, &patterns, &payload, None).is_none());
     }
 
     #[test]
@@ -1936,7 +1964,8 @@ mod tests {
             "Bash",
             json!({"command": "TOKEN=\"abc\" && echo \"$TOKEN\""}),
         );
-        let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
+        let decision =
+            evaluate_chain_aware(&config, &patterns, &payload, None).expect("must decide");
         assert_eq!(decision.action, Action::AutoApprove);
     }
 
@@ -1944,7 +1973,7 @@ mod tests {
     fn test_chain_aware_non_bash_falls_through() {
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Read", json!({"file_path": "/Users/test/project/x.rs"}));
-        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+        assert!(evaluate_chain_aware(&config, &patterns, &payload, None).is_none());
     }
 
     #[test]
@@ -1952,7 +1981,7 @@ mod tests {
         let (config, patterns) = load_test_config_and_patterns();
         // Single piece (operators inside quotes) → fall through.
         let payload = make_payload("Bash", json!({"command": "echo \"a && b\""}));
-        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+        assert!(evaluate_chain_aware(&config, &patterns, &payload, None).is_none());
     }
 
     #[test]
@@ -1960,7 +1989,7 @@ mod tests {
         let (mut config, patterns) = load_test_config_and_patterns();
         config.chain_aware = false;
         let payload = make_payload("Bash", json!({"command": "git status && git log -5"}));
-        assert!(evaluate_chain_aware(&config, &patterns, &payload).is_none());
+        assert!(evaluate_chain_aware(&config, &patterns, &payload, None).is_none());
     }
 
     // ── Integration tests: evaluate_chain_aware wired into evaluate_with_elo (M7.10) ──
@@ -2046,7 +2075,8 @@ mod tests {
         let delegations: Vec<RuntimeDelegation> = Vec::new();
         let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
         let decision = evaluate(&config, &patterns, &delegations, &payload);
-        assert_eq!(decision.action, Action::Block);
+        // gh pr merge moved from blocked → restricted (ask) in M7.15 merge-autonomy
+        assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]

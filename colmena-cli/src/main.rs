@@ -147,7 +147,7 @@ enum QueueAction {
     Prune {
         /// Maximum age in days (default: 7)
         #[arg(long, default_value = "7")]
-        older_than: i64,
+        older_than: u64,
     },
 }
 
@@ -613,6 +613,7 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         &eval_input,
         &elo_overrides,
         &revoked_agents,
+        Some(config_dir),
     );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
@@ -746,6 +747,27 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
             Err(e) => log_error(&format!(
                 "PostToolUse: queue resolve error (non-fatal): {e:#}"
             )),
+        }
+
+        // M7.15: record operator approval for auto-elevate (main session, Bash, not interrupted).
+        if !interrupted && payload.tool_name == "Bash" {
+            if let Some(cmd) = payload.tool_input.get("command").and_then(|v| v.as_str()) {
+                // Load auto_elevate config (cheap, once per Bash execution).
+                let auto_config = match colmena_core::config::load_config(
+                    &config_dir.join("trust-firewall.yaml"),
+                    &payload.cwd,
+                ) {
+                    Ok(cfg) => cfg.auto_elevate,
+                    Err(_) => Default::default(),
+                };
+                colmena_core::auto_elevate::record_approval(
+                    &config_dir,
+                    &payload.session_id,
+                    payload.agent_type.as_deref(),
+                    cmd,
+                    &auto_config,
+                );
+            }
         }
     }
 
@@ -1138,11 +1160,11 @@ fn run_queue_list(session_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_queue_prune(older_than_days: i64) -> Result<()> {
+fn run_queue_prune(older_than_days: u64) -> Result<()> {
     let config_dir = colmena_core::paths::default_config_dir();
     // M7.14: queue prune now cleans decided/ (manual reclaim).
     // Stale pending/ → decided/ is handled automatically by lazy GC + Stop sweep.
-    let retention_hours = (older_than_days * 24) as u64;
+    let retention_hours = older_than_days * 24;
     let now = chrono::Utc::now();
     let deleted = colmena_core::queue::purge_expired_decided(&config_dir, retention_hours, now)?;
     if deleted == 0 {
