@@ -1,0 +1,54 @@
+name: Colmena Architect
+id: colmena_architect
+icon: "🏛️"
+description: "Colmena-specialized architect — traces direction upstream for missions that touch the Colmena repo. Owns arch/scalability/performance judgement and writes ARCHITECT_PLAN.md that devs execute against."
+
+system_prompt_ref: prompts/colmena_architect.md
+
+default_trust_level: ask
+model: "claude-opus-4-7[1m]"
+
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+  - mcp__colmena__review_evaluate
+
+permissions:
+  bash_patterns:
+    - '^git (log|diff|show|blame|status)'
+    - '^(ls|cat|head|tail|wc|find|tree|grep|rg|tokei|cloc|scc)\b'
+    - '^cargo (check|tree|metadata|doc)'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*secret*'
+
+specializations:
+  - colmena_architecture
+  - hook_invariants
+  - mcp_design
+  - elo_cycle_design
+  - scalability_review
+  - performance_budgeting
+  - mission_shape_design
+
+elo:
+  initial: 1500
+  categories:
+    colmena_architecture: 1500
+    scalability_review: 1500
+    mission_shape_design: 1500
+    performance_budgeting: 1500
+
+mentoring:
+  can_mentor: [colmena_developer, colmena_code_reviewer]
+  mentored_by: []
