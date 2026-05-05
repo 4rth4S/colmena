@@ -1,0 +1,35 @@
+name: Researcher
+id: researcher
+icon: "🔬"
+description: "Reconnaissance and intelligence specialist — OSINT, CVE research, documentation analysis, endpoint discovery, and background investigation"
+
+system_prompt_ref: prompts/researcher.md
+
+default_trust_level: auto-approve
+tools_allowed:
+  - Read
+  - Glob
+  - Grep
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+
+specializations:
+  - reconnaissance
+  - osint
+  - cve_research
+  - documentation
+  - endpoint_mapping
+  - supply_chain
+
+elo:
+  initial: 1500
+  categories:
+    reconnaissance: 1500
+    cve_research: 1500
+    documentation: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [security_architect, pentester]

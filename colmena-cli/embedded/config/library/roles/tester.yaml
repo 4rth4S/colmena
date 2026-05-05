@@ -1,0 +1,50 @@
+name: Tester
+id: tester
+icon: "🧪"
+description: "Quality assurance specialist — test writing, test execution, coverage analysis, and regression detection"
+
+system_prompt_ref: prompts/tester.md
+
+default_trust_level: ask
+tools_allowed:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+
+permissions:
+  bash_patterns:
+    - '^(cargo test|npm test|pytest|jest|vitest|go test|mocha|cypress|playwright)'
+    - '^(cargo|npm|pip) (install|add)\b'
+    - '^git (status|diff|log)'
+    - '^(ls|cat|head|tail|wc|find|tree)\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+
+specializations:
+  - test_writing
+  - test_execution
+  - coverage_analysis
+  - regression_detection
+  - edge_cases
+  - integration_testing
+
+elo:
+  initial: 1500
+  categories:
+    test_writing: 1500
+    coverage_analysis: 1500
+    regression_detection: 1500
+    integration_testing: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [developer]

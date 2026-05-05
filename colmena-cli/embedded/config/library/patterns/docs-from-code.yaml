@@ -1,0 +1,34 @@
+name: Docs from Code
+id: docs-from-code
+source: builtin
+description: >
+  Sequential pipeline for generating documentation from an existing codebase.
+  Architect reads and analyzes structure, developer generates documentation,
+  auditor validates accuracy against the code. Best for documentation sprints.
+topology: sequential
+communication: chain
+when_to_use:
+  - "Documentation generation from existing codebase"
+  - "Technical writing that requires code understanding"
+  - "API documentation or architecture docs needed"
+  - "Each phase depends on previous output"
+  - "Accuracy validation against source code is critical"
+when_not_to_use:
+  - "Tasks that are naturally parallel and independent"
+  - "Documentation without a codebase to reference"
+  - "Time-sensitive missions requiring fast results"
+pros:
+  - "Lower cost — each agent runs sequentially"
+  - "Each stage builds on validated previous analysis"
+  - "Accuracy checked against actual code"
+cons:
+  - "Slower — fully sequential execution"
+  - "No cross-pollination between agents"
+  - "Late-stage agents can't inform early-stage decisions"
+estimated_token_cost: low
+estimated_agents: "3"
+roles_suggested:
+  stage_1: architect
+  stage_2: developer
+  stage_3: auditor
+elo_lead_selection: false

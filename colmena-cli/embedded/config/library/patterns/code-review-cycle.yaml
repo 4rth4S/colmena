@@ -1,0 +1,34 @@
+name: Code Review Cycle
+id: code-review-cycle
+source: builtin
+description: >
+  Developer implements a feature, code reviewer checks for bugs/style/performance,
+  auditor evaluates the overall output with QPC scoring. Sequential pipeline
+  ensuring separation of concerns between implementation, review, and evaluation.
+topology: sequential
+communication: chain
+when_to_use:
+  - "Feature implementation with structured code review"
+  - "Code writing followed by quality review and evaluation"
+  - "Quality improves through review before final evaluation"
+  - "Need both code quality review and process evaluation"
+  - "Single feature with clear review checkpoints"
+when_not_to_use:
+  - "Tasks requiring multiple parallel specialists"
+  - "Broad exploration where coverage matters more than depth"
+  - "First draft quality is sufficient"
+pros:
+  - "Separation of concerns — reviewer finds bugs, auditor evaluates process"
+  - "Clear checkpoints between implementation, review, and evaluation"
+  - "ELO signal for both code reviewer and developer"
+cons:
+  - "Slower — fully sequential execution"
+  - "Three agents for what might be a simple feature"
+  - "Late-stage agents can't inform early-stage decisions"
+estimated_token_cost: low
+estimated_agents: "3"
+roles_suggested:
+  stage_1: developer
+  stage_2: code_reviewer
+  stage_3: auditor
+elo_lead_selection: false

@@ -1,0 +1,51 @@
+name: Colmena Code Reviewer
+id: colmena_code_reviewer
+icon: "🔎"
+description: "Code reviewer with dual optics — security (STRIDE-aware) and API design (public surface + Rust idioms). Reviews colmena_developer output in an iterative loop (cap 3 rounds, LGTM via QPC ≥ 8.0) before handing off to the centralized auditor."
+
+system_prompt_ref: prompts/colmena_code_reviewer.md
+
+default_trust_level: ask
+model: "claude-opus-4-7[1m]"
+
+tools_allowed:
+  - Bash
+  - Read
+  - Glob
+  - Grep
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+  - mcp__colmena__review_evaluate
+
+permissions:
+  bash_patterns:
+    - '^git (diff|log|blame|show|status)'
+    - '^(cargo test|cargo clippy|cargo fmt|cargo check|cargo doc)'
+    - '^(ls|cat|head|tail|wc|find|tree|grep|rg)\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*secret*'
+
+specializations:
+  - security_code_review
+  - api_design_review
+  - rust_idioms
+  - hot_path_performance
+  - regression_detection
+  - test_coverage_review
+
+elo:
+  initial: 1500
+  categories:
+    security_code_review: 1500
+    api_design_review: 1500
+    rust_idioms: 1500
+    regression_detection: 1500
+
+mentoring:
+  can_mentor: [colmena_developer]
+  mentored_by: [colmena_architect]

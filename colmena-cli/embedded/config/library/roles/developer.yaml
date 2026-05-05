@@ -1,0 +1,52 @@
+name: Developer
+id: developer
+icon: "💻"
+description: "Software developer — feature implementation, code writing, build/test execution, and technical problem solving"
+
+system_prompt_ref: prompts/developer.md
+
+default_trust_level: ask
+tools_allowed:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Agent
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+
+permissions:
+  bash_patterns:
+    - '^(cargo|npm|pnpm|yarn|bun|make|go |python |pip |pytest|jest|vitest|eslint|prettier|rustfmt|clippy)'
+    - '^git (status|diff|log|add|commit|branch|checkout|stash|show)'
+    - '^(ls|cat|head|tail|wc|find|tree|mkdir|cp|mv)\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*secret*'
+
+specializations:
+  - feature_implementation
+  - code_writing
+  - refactoring
+  - build_systems
+  - testing
+  - debugging
+  - technical_debt
+
+elo:
+  initial: 1500
+  categories:
+    feature_implementation: 1500
+    refactoring: 1500
+    debugging: 1500
+    code_quality: 1500
+
+mentoring:
+  can_mentor: [tester]
+  mentored_by: [architect]

@@ -1,0 +1,43 @@
+name: Security Architect
+id: security_architect
+icon: "🛡"
+description: "Strategic security leader — threat modeling, architecture review, design patterns, and synthesis of findings from other agents"
+
+system_prompt_ref: prompts/security-architect.md
+
+default_trust_level: ask
+tools_allowed:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - WebFetch
+  - WebSearch
+  - Agent
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+  - mcp__colmena__review_list
+  - mcp__colmena__review_evaluate
+  - mcp__colmena__elo_ratings
+
+specializations:
+  - architecture_review
+  - threat_modeling
+  - design_patterns
+  - compliance
+  - risk_assessment
+  - security_architecture
+
+elo:
+  initial: 1500
+  categories:
+    architecture_review: 1500
+    threat_modeling: 1500
+    compliance: 1500
+
+mentoring:
+  can_mentor: [pentester, auditor, researcher]
+  mentored_by: []
