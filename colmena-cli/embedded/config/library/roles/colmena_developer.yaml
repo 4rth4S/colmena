@@ -1,0 +1,53 @@
+name: Colmena Developer
+id: colmena_developer
+icon: "🐝"
+description: "Rust developer specialized in the Colmena workspace — knows the 4 crates, hook invariants, MCP server, mission/ELO model, and the conventions in CLAUDE.md. Executes against an ARCHITECT_PLAN.md rather than improvising."
+
+system_prompt_ref: prompts/colmena_developer.md
+
+default_trust_level: ask
+model: "claude-sonnet-4-7[1m]"
+
+tools_allowed:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+
+permissions:
+  bash_patterns:
+    - '^(cargo|rustfmt|clippy)'
+    - '^git (status|diff|log|add|commit|branch|checkout|stash|show)'
+    - '^(ls|cat|head|tail|wc|find|tree|grep|rg)\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*secret*'
+
+specializations:
+  - colmena_rust
+  - hook_path_discipline
+  - mcp_tool_authoring
+  - trust_firewall_yaml
+  - mission_spawn_internals
+  - test_driven_rust
+  - workspace_refactoring
+
+elo:
+  initial: 1500
+  categories:
+    colmena_rust: 1500
+    hook_path_discipline: 1500
+    test_driven_rust: 1500
+    workspace_refactoring: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [colmena_architect, colmena_code_reviewer]

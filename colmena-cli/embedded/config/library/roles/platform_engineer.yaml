@@ -1,0 +1,59 @@
+name: Platform Engineer
+id: platform_engineer
+icon: "🏗"
+description: "Platform engineer — internal platforms, developer experience, self-service infrastructure, golden paths, and platform APIs"
+
+system_prompt_ref: prompts/platform_engineer.md
+
+default_trust_level: ask
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__review_submit
+  - mcp__colmena__findings_list
+
+permissions:
+  bash_patterns:
+    - '^docker\b'
+    - '^kubectl\b'
+    - '^helm\b'
+    - '^terraform\b'
+    - '^crossplane\b'
+    - '^argocd\b'
+    - '^flux\b'
+    - '^backstage\b'
+    - '^gh\b'
+    - '^git\b'
+    - '^cargo (build|test|check)\b'
+    - '^npm (run|test|install)\b'
+    - '^pnpm (run|test|install)\b'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+    - '*.pem'
+
+specializations:
+  - internal_platforms
+  - developer_experience
+  - self_service_infra
+  - golden_paths
+  - platform_apis
+
+elo:
+  initial: 1500
+  categories:
+    internal_platforms: 1500
+    developer_experience: 1500
+    self_service_infra: 1500
+    platform_apis: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [architect]

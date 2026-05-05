@@ -1,0 +1,48 @@
+name: Code Reviewer
+id: code_reviewer
+icon: "🔍"
+description: "Code quality specialist — reviews code for bugs, style, performance, and maintainability"
+
+system_prompt_ref: prompts/code-reviewer.md
+
+default_trust_level: ask
+tools_allowed:
+  - Bash
+  - Read
+  - Glob
+  - Grep
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+  - mcp__colmena__review_evaluate
+
+permissions:
+  bash_patterns:
+    - '^git (diff|log|blame|show|status)'
+    - '^(cargo test|npm test|pytest|jest|vitest|go test)'
+    - '^(ls|cat|head|tail|wc|find|tree|grep|rg)\b'
+  path_within:
+    - '${MISSION_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+
+specializations:
+  - code_review
+  - bug_detection
+  - style_analysis
+  - performance_review
+  - maintainability
+  - best_practices
+
+elo:
+  initial: 1500
+  categories:
+    code_review: 1500
+    bug_detection: 1500
+    performance_review: 1500
+    style_analysis: 1500
+
+mentoring:
+  can_mentor: [developer]
+  mentored_by: [architect]

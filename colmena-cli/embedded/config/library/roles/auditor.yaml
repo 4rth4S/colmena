@@ -1,0 +1,41 @@
+name: Auditor
+id: auditor
+icon: "🔍"
+description: "Compliance and governance specialist — standards mapping, evidence collection, policy review, and regulatory gap analysis"
+
+system_prompt_ref: prompts/auditor.md
+
+default_trust_level: ask
+role_type: auditor
+tools_allowed:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - WebFetch
+  - WebSearch
+  - mcp__colmena__findings_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__review_submit
+  - mcp__colmena__review_evaluate
+
+specializations:
+  - compliance
+  - standards_mapping
+  - data_exposure
+  - risk_assessment
+  - pci_dss
+  - gdpr
+  - owasp
+
+elo:
+  initial: 1500
+  categories:
+    compliance: 1500
+    standards_mapping: 1500
+    data_exposure: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [security_architect]

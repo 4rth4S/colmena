@@ -1,0 +1,33 @@
+name: Swarm Consensus
+id: swarm-consensus
+source: custom
+description: >
+  All agents explore the same problem independently, then compare findings
+  and reach consensus. Maximizes coverage and catches what individual
+  agents might miss.
+topology: peer
+communication: broadcast
+when_to_use:
+  - "Broad exploration where coverage matters most"
+  - "Unknown attack surface that needs mapping"
+  - "Complex system where different perspectives find different issues"
+  - "Validation of findings through independent discovery"
+  - "Comprehensive security assessment of new system"
+when_not_to_use:
+  - "Well-defined scope with clear task decomposition"
+  - "Budget-constrained missions"
+  - "Simple tasks that don't benefit from multiple perspectives"
+pros:
+  - "Maximum coverage — independent exploration"
+  - "Findings validated when multiple agents converge"
+  - "No single point of failure"
+cons:
+  - "Highest token cost — all agents run fully"
+  - "Duplicate work likely"
+  - "Consensus phase can be complex"
+estimated_token_cost: high
+estimated_agents: "3-4"
+roles_suggested:
+  explorers: [pentester, auditor, researcher]
+  synthesizer: security_architect
+elo_lead_selection: false

@@ -1,0 +1,43 @@
+name: Colmena Self Dev
+id: colmena-self-dev
+source: private
+description: >
+  Iterative pattern for missions where the target codebase is the Colmena repo
+  itself. Architect traces direction upstream (writes ARCHITECT_PLAN.md),
+  colmena_developer executes, colmena_code_reviewer reviews in a cap-3 loop
+  with LGTM via QPC ≥ 8.0 and architect escalation on no-convergence, and the
+  centralized auditor closes the cycle with role-agnostic QPC evaluation that
+  moves ELO for every participant. Scope is repo-wide so file tools can touch
+  production code without per-call approval.
+topology: iterative
+communication: chain
+when_to_use:
+  - "Refactor or feature on the Colmena Rust workspace"
+  - "Work that requires architectural judgement before coding"
+  - "Changes that must stay zero-behavior-change or carry invariants"
+  - "Missions where dev and reviewer should converge iteratively"
+  - "Cross-crate work that benefits from a specialist Colmena dev"
+when_not_to_use:
+  - "Missions targeting repos other than Colmena"
+  - "First-draft throwaway prototypes"
+  - "Trivial one-file edits where one dev + auditor is enough"
+  - "Broad parallel exploration (use fan-out-merge instead)"
+pros:
+  - "Architect upstream prevents random-walk implementation"
+  - "Dev ↔ reviewer loop catches regressions before the auditor sees them"
+  - "Workspace-wide scope eliminates per-file approval friction"
+  - "ELO moves for architect, dev, and reviewer — not just dev"
+  - "Role specialization (Colmena-aware) cuts onboarding per mission"
+cons:
+  - "Slower than code-review-cycle — adds architect stage + iteration loop"
+  - "Higher token cost — three Opus roles + one Sonnet"
+  - "Only valuable for Colmena-internal work; generic patterns fit elsewhere"
+estimated_token_cost: high
+estimated_agents: "4"
+workspace_scope: repo-wide
+roles_suggested:
+  stage_1_lead: colmena_architect
+  stage_2_worker: colmena_developer
+  stage_3_reviewer: colmena_code_reviewer
+  stage_4_judge: auditor
+elo_lead_selection: false

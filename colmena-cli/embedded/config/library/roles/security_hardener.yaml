@@ -1,0 +1,41 @@
+name: security hardener
+id: security_hardener
+icon: "🛡"
+description: "Implements fixes from STRIDE/DREAD threat model reports. Writes code + tests, never removes functionality. DREAD >7 = fix mandatory, DREAD 5-7 = fix or mitigate preserving features, generate advisory if tradeoff needed."
+
+system_prompt_ref: prompts/security_hardener.md
+
+default_trust_level: ask
+tools_allowed: [Read, Write, Edit, Glob, Grep, Bash]
+
+permissions:
+  bash_patterns:
+    - '^cargo\b'
+    - '^grep\b'
+    - '^cat\b'
+    - '^wc\b'
+  path_within:
+    - '${PROJECT_DIR}'
+  path_not_match:
+    - '*.env'
+    - '*credentials*'
+    - '*.key'
+    - '*trust-firewall*'
+    - '*runtime-delegations*'
+
+specializations:
+  - security_hardening
+  - threat_model_remediation
+  - defensive_coding
+  - test_writing
+
+elo:
+  initial: 1500
+  categories:
+    security_hardening: 1500
+    defensive_coding: 1500
+    test_writing: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: [security_architect]

@@ -1,0 +1,174 @@
+# Trust Firewall Configuration
+# Rule precedence: blocked > restricted > trust_circle > defaults
+version: 1
+
+defaults:
+  action: ask
+
+# Mission Gate: when true, Agent calls without a Colmena mission marker trigger "ask".
+# Off by default — opt-in. Human can always override.
+enforce_missions: false  # Opt-in; set true per-session when a mission requires strict gating.
+
+# Chain-aware Bash evaluator (M7.10): when true, &&/||/;/| chains are split
+# and each piece re-evaluated; auto-approves only if all pieces are safe.
+# Subshells $(...) and backticks fall back to chain_guard ask. Set false to
+# restore pre-M7.10 behaviour as a kill switch.
+chain_aware: true
+
+trust_circle:
+  # Local read operations - always safe
+  - tools: [Read, Glob, Grep, Bash]
+    conditions:
+      bash_pattern: '^(cat|head|tail|less|ls|find|grep|rg|wc|file|stat|which|type|echo|printf|date|uname|whoami|hostname|pwd|cd|env|printenv|id|df|du|free|uptime|ps|sort|uniq|tr|cut|awk|sed|tee|xargs|jq|yq|base64|sha256sum|shasum|md5|openssl dgst|xxd|hexdump|strings)\b'
+    action: auto-approve
+    reason: 'Read-only local operations'
+
+  # Safe filesystem creation - mkdir never overwrites existing files/dirs
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^mkdir\b'
+    action: auto-approve
+    reason: 'Directory creation is non-destructive'
+
+  # Git read operations - always safe
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^git (log|diff|status|blame|show|branch|tag|remote|stash list|ls-files|rev-parse|describe|shortlog|reflog|config --get|config --list|clone|fetch|pull|checkout)\b'
+    action: auto-approve
+    reason: 'Git read-only operations'
+
+  # GitHub/GitLab CLI read operations - safe API reads
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^(gh (api|repo view|pr view|pr list|pr checks|issue view|issue list|run view|run list|release view|release list|search)|glab (api|repo view|mr view|mr list|issue view|issue list))\b'
+    action: auto-approve
+    reason: 'GitHub/GitLab CLI read operations'
+
+  # Package managers and build tools (read/build, not install)
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^(cargo (build|test|check|clippy|fmt|run|bench|doc|tree|metadata)|go (build|test|mod tidy|mod download|vet|fmt)|npm (test|run|list|info|outdated|audit)|npx |pip list|pip show|python -c|node -e|rustc --version|rustup show|brew list|brew info)\b'
+    action: auto-approve
+    reason: 'Build tools and package manager reads'
+
+  # Piped commands starting with safe operations
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^(cat|head|tail|echo|printf|gh api|glab api) .+\|'
+    action: auto-approve
+    reason: 'Safe commands piped to processors'
+
+  # Research - auto-approve web fetches for investigation
+  - tools: [WebFetch, WebSearch]
+    action: auto-approve
+    reason: 'Research operations'
+
+  # File writes within project directory
+  - tools: [Write, Edit]
+    conditions:
+      path_within: ['${PROJECT_DIR}']
+      path_not_match: ['*.env', '*credentials*', '*secret*', '*.key', '*trust-firewall*', '*runtime-delegations*', '*elo-*', '*audit.log*', '*colmena-errors*', '*filter-config*', '*filter-stats*', '*settings.json', '*revoked-missions*', '*alerts*', '*reviews*', '*findings*']
+    action: auto-approve
+    reason: 'Project-scoped file writes excluding secrets'
+
+  # Task management - internal CC todo tracking, no side effects
+  - tools: [TaskCreate, TaskUpdate, TaskGet, TaskList, TaskOutput, TaskStop]
+    action: auto-approve
+    reason: 'Internal task tracking operations'
+
+  # CC internal tools - no side effects, just orchestration plumbing
+  - tools: [Skill, ToolSearch, EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree, SendMessage, AskUserQuestion, NotebookEdit]
+    action: auto-approve
+    reason: 'CC internal orchestration tools'
+
+restricted:
+  # Agent spawning requires human confirmation (Fix 3, DREAD 8.8)
+  - tools: [Agent]
+    action: ask
+    reason: 'Agent spawning requires human review to prevent autonomous chains'
+
+  # Destructive bash commands
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^(rm|chmod|chown|kill|pkill|curl.*-X|wget.*-O|docker|kubectl)'
+    action: ask
+    reason: 'Potentially destructive system command'
+
+  # Git push - human confirms target branch, but not blocked
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^git push\b'
+    action: ask
+    reason: 'Push to remote requires human confirmation'
+
+  # Auditor review operations — human oversees submissions and evaluations
+  - tools: [mcp__colmena__review_submit, mcp__colmena__review_evaluate]
+    action: ask
+    reason: 'Auditor review operations require human oversight'
+
+  # Library creation requires human review (prevent library poisoning)
+  - tools: [mcp__colmena__library_create_role, mcp__colmena__library_create_pattern]
+    action: ask
+    reason: 'Library creation requires human review to prevent prompt poisoning'
+
+  # Alert acknowledgment and auditor calibration require human oversight
+  - tools: [mcp__colmena__alerts_ack, mcp__colmena__calibrate_auditor_feedback]
+    action: ask
+    reason: 'Alert acknowledgment and auditor calibration require human review'
+
+  # Mission spawn creates patterns, delegations, and missions — requires human review
+  - tools: [mcp__colmena__mission_spawn]
+    action: ask
+    reason: 'Mission spawn creates patterns and delegations — requires human review'
+
+  # PR merges — assistant can merge after verifying CI green.
+  # gh pr merge doesn't carry branch context in the command string,
+  # so every merge requires human confirmation regardless of branch.
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^gh pr merge\b'
+    action: ask
+    reason: 'PR merges require human confirmation — assistant verifies CI green before proposing'
+
+  # External communications
+  - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]
+    action: ask
+    reason: 'External communication requires human review'
+
+blocked:
+  # Never auto-approve — truly destructive operations (Fix 11: expanded patterns)
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^(git (push.*--force|push\s+-[A-Za-z]*f|reset --hard)|rm\s+-rf\s+/|shred\b|dd\s+if=|mkfs\b|find\s+.*-delete)'
+    action: block
+    reason: 'Destructive operation requires explicit human confirmation'
+
+  # Critical config files protected against destructive Bash manipulation (Finding #4/#6, DREAD 7.6/6.8)
+  # Only blocks DESTRUCTIVE operations (truncate, rm, sed -i, echo >, tee, python write, jq write)
+  # targeting protected files. Read-only commands (cat, grep, git add/commit) are NOT blocked.
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '(truncate|rm\s|rm$|shred|dd\s+of=|cp\s|mv\s|sed\s+-i|perl\s+-[ip]|python3?\s+-c|ruby\s+-e|node\s+-e|jq\s+--arg|tee\s|>\s*|>>\s*).*(audit\.log|colmena-errors\.log|elo-overrides\.json|revoked-missions\.json|alerts\.json|runtime-delegations\.json|trust-firewall\.yaml|filter-config\.yaml|filter-stats\.jsonl|reviews/|findings/)'
+    action: block
+    reason: 'Destructive Bash operations on critical config files are blocked — use dedicated Colmena tools'
+
+
+# Per-agent overrides (used by ELO engine in M3)
+agent_overrides: {}
+
+notifications:
+  enabled: true
+
+# Auto-elevate (M7.15) — session-scoped trust via 2× operator confirmation.
+# When enabled, confirming the same binary skeleton twice within the window
+# auto-creates a session-scoped delegation. Only the main session; never blocked commands.
+# auto_elevate:
+#   enabled: true
+#   window_minutes: 10
+#   threshold: 2
+
+# Queue lifecycle (M7.14) — optional overrides. Defaults shown.
+# Omit this block entirely for zero-diff behaviour on existing deployments.
+# queue:
+#   retention_pending_seconds: 600    # stale-GC TTL for pending entries (range: 60–3600)
+#   retention_decided_hours: 24       # decided/ retention before automatic purge (range: 1–720)
