@@ -147,7 +147,9 @@ pub fn all_defaults() -> Vec<DefaultFile> {
         },
         DefaultFile {
             rel_path: "library/prompts/review-worker-instructions.md",
-            content: include_str!("../embedded/config/library/prompts/review-worker-instructions.md"),
+            content: include_str!(
+                "../embedded/config/library/prompts/review-worker-instructions.md"
+            ),
         },
         DefaultFile {
             rel_path: "library/prompts/review-lead-instructions.md",
