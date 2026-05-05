@@ -1,0 +1,317 @@
+# Colmena Backlog — fecha: 2026-05-05
+# Formato: lista de problemas/features con dependencias, esfuerzo estimado,
+# y agrupación en waves para ejecución paralela (dark factory).
+#
+# Cada entry tiene:
+#   id:         slug único
+#   title:      una línea descriptiva
+#   what:       qué hay que hacer (conciso, machine-readable)
+#   why:        motivación (una frase)
+#   effort:     S (<2h) / M (2-8h) / L (8-24h) / XL (>24h)
+#   risk:       low / medium / high (probabilidad de romper algo)
+#   blocks:     [ids que esto bloquea]
+#   blocked_by: [ids que bloquean esto]
+#   wave:       grupo de paralelismo sugerido (0 = ya, 1 = primera wave, etc.)
+#   status:     pending / in_progress / done
+
+problems:
+  # ── Wave 0 — Cleanup inmediato (< 1 sesión) ──
+
+  - id: m7.14-followups
+    title: "M7.14 post-merge followups — 6 low-sev fixes"
+    what: |
+      1. queue.rs:304 — resolve_pending old_suffix match gate on session_id
+      2. config.rs:80 — mover eprintln! de hot path a config-load time
+      3. queue.rs:620 — comentar o remover legacy prune_old_entries
+      4. cli/main.rs:1140 — fix negative wrap en older_than_days (u64)
+      5. ARCHITECT_PLAN.md S4 vs S6 drift (doc)
+      6. ARCHITECT_PLAN.md Appendix A notification count (doc)
+    why: "Surfaced by code_reviewer + auditor durante PR #52. ≤10 LOC cada uno."
+    effort: S
+    risk: low
+    blocks: []
+    blocked_by: []
+    wave: 0
+    status: pending
+    tags: [bug, chore, cleanup]
+    produces_pr: true
+
+  - id: merge-autonomy
+    title: "Auto-merge para PRs de library/docs/chore + mergear yo mismo"
+    what: |
+      1. Mover gh pr merge de blocked → restricted con bash_pattern scoped
+      2. bash_pattern permite merge en branches feature/library-*, docs/*, chore/*
+      3. Regla: CI verde es precondición (verifico antes de mergear)
+      4. branches de código (feature/*, fix/*) siguen requiriendo Coco
+    why: "Dark factory necesita merge autónomo para fluir entre waves."
+    effort: S
+    risk: low
+    blocks: [dark-factory-coordination]
+    blocked_by: []
+    wave: 0
+    status: pending
+    tags: [feature, firewall, devops]
+    produces_pr: true
+
+  - id: auto-elevate-skeleton
+    title: "Auto-elevate por esqueleto de binario — 2× Y → delegación session-scoped"
+    what: |
+      Cuando evaluate_chain_aware (M7.10) retorna ask para una pieza de una cadena:
+      1. Extraer el esqueleto: el binario base + flag principal si aplica.
+         curl -I https://api.coinbase.com/v2/accounts/123 → esqueleto: curl
+         git diff colmena-core/src/firewall.rs        → esqueleto: git diff
+         cargo test -p colmena-core                   → esqueleto: cargo test
+         tee test.log                                 → esqueleto: tee
+         head -20                                     → esqueleto: head
+      2. Si mismo (agent_type, skeleton) recibe Y del operador 2× en ventana 10min:
+         → auto-crear delegación session-scoped con bash_pattern: '^skeleton\b'
+      3. Delegación: session-scoped, TTL 1h (max 8h), reason "auto-elevated:2x-confirm"
+      4. Audit log registra la elevación
+      5. Si operador responde N → reset counter para ese skeleton
+      6. Kill switch: trust-firewall.yaml auto_elevate: false
+      7. NO aplica a comandos en blocked (nunca se auto-eleva rm -rf, gh pr merge, etc.)
+    why: |
+      Hash exacto del comando no funciona en práctica: curl api/v2/accounts/123
+      y curl api/v2/accounts/456 tienen distinto hash pero son "mismo comando".
+      El esqueleto captura la primitiva bash real que el operador está aprobando.
+      M7.10 ya hace el split de cadenas — esto capitaliza ese trabajo.
+    effort: M
+    risk: medium
+    blocks: []
+    blocked_by: []
+    wave: 0
+    status: pending
+    tags: [feature, ux, firewall, chain-aware]
+    produces_pr: true
+    memory_ref: project_firewall_auto_elevate_2x_yes.md
+
+  # ── Wave 1 — Independientes entre sí ──
+
+  - id: m7.11-session-end-banner
+    title: "M7.11 SessionEnd value banner — stats al cerrar sesión"
+    what: |
+      1. Nuevo handler en colmena-cli para evento Stop/SessionEnd
+      2. Lee audit.log + filter-stats.jsonl para la sesión actual
+      3. Imprime banner a stderr con prompts-saved + tokens-saved
+      4. Safe fallback: cualquier error → sin output, zero impacto en /exit
+      5. Registrar hook en install.rs + setup.rs
+    why: "Cada sesión cierra con prueba de valor. No depende de que el assistant recuerde."
+    effort: M
+    risk: low
+    blocks: []
+    blocked_by: []
+    wave: 1
+    status: pending
+    tags: [feature, marketing, hooks]
+    produces_pr: true
+    memory_ref: project_m711_session_end_value_banner.md
+
+  - id: m7.4-role-ergonomics
+    title: "M7.4 Role ergonomics CLI — clone, inherit, doctor"
+    what: |
+      1. colmena role clone <existing> --as <new_id> — copiar como template
+      2. colmena role inherit --from <base> --specializations X,Y --name <new> — scaffold
+      3. colmena role doctor <id> — validar YAML + sugerir category/bash_patterns/tools_allowed
+      4. Bundled fixes:
+         a. colmena suggest agent count inflation (suma auditor extra)
+         b. library select CLI no-op on EOF en vez de tomar default
+         c. delegate add --path / --bash-pattern flags (condiciones desde CLI)
+         d. mission_spawn --code-paths para scope de workers
+    why: "Pedido explícito de los 4 power users. Mayor fricción reportada."
+    effort: L
+    risk: medium
+    blocks: []
+    blocked_by: []
+    wave: 1
+    status: pending
+    tags: [feature, ux, cli]
+    produces_pr: true
+    memory_ref: project_m712_state.md
+
+  - id: m7.13-crates-io
+    title: "M7.13 crates.io publication — diseño + ejecución"
+    what: |
+      1. Diseñar: package rename (colmena-cli → colmena), publish order, path-dep versions
+      2. Verificar nombres reservados en crates.io (ya confirmados free 2026-04-23)
+      3. Agregar version = "0.14.0" a path deps en Cargo.toml
+      4. Configurar CARGO_REGISTRY_TOKEN
+      5. Publicar en orden: core → filter → mcp → cli
+      6. Decidir publish=false para algún crate (si aplica)
+      7. Release automation en release.yml (tag-driven)
+    why: "Los 5 nombres están free. Publicar abre distribución fuera de git clone."
+    effort: M
+    risk: medium
+    blocks: []
+    blocked_by: []
+    wave: 1
+    status: pending
+    tags: [feature, release, distribution]
+    produces_pr: true
+    memory_ref: project_m713_crates_io_pub.md
+
+  # ── Wave 2 — Dependen de Wave 1 o entre sí ──
+
+  - id: m7.3.1-anti-reciprocal-fix
+    title: "M7.3.1 Anti-reciprocal invariant scoped per-mission, not global"
+    what: |
+      submit_review filtra reviewer candidates contra el store completo de reviews
+      (review.rs:141-147). Debería scoped a existing.mission == current.mission.
+      Auditor también: verificar cross-mission leaks en stale-review auto-invalidation.
+    why: "Bloquea reutilización legítima de reviewer entre misiones. M7.15 lo declara hard blocker."
+    effort: S
+    risk: low
+    blocks: [m7.15-mission-manifest]
+    blocked_by: []
+    wave: 2
+    status: pending
+    tags: [bug, review, elo]
+    produces_pr: true
+    memory_ref: project_review_reciprocal_cross_mission_bug.md
+
+  - id: m7.3-description-omission
+    title: "M7.3 mission_spawn omite description en subagent files"
+    what: |
+      Auto-generated subagent files (~/.claude/agents/<role>.md) no incluyen
+      description en frontmatter → CC los omite silenciosamente en el listado.
+      Agregar description derivada del role YAML en la generación.
+    why: "ELO cycle roto end-to-end si CC omite agentes. M7.15 hard blocker."
+    effort: S
+    risk: low
+    blocks: [m7.15-mission-manifest]
+    blocked_by: []
+    wave: 2
+    status: pending
+    tags: [bug, mission-spawn, elo]
+    produces_pr: true
+    memory_ref: project_mission_spawn_missing_description.md
+
+  - id: m7.3-scope-gap
+    title: "M7.3 mission_spawn scopea workers a mission_dir — no pueden tocar prod"
+    what: |
+      mission_spawn genera delegations con path_within: [mission_dir].
+      Misiones de refactor necesitan acceso al repo root.
+      Fix: --code-paths flag en mission_spawn o inferir de la descripción.
+      M7.4 bundled fix (d) cubre esto parcialmente con delegate add --path.
+    why: "Bloquea cualquier misión de refactor sobre el código de producción."
+    effort: S
+    risk: low
+    blocks: [m7.15-mission-manifest]
+    blocked_by: [m7.4-role-ergonomics]  # bundled fix (d)
+    wave: 2
+    status: pending
+    tags: [bug, mission-spawn, scope]
+    produces_pr: true
+    memory_ref: project_mission_spawn_scope_gap.md
+
+  - id: m7.15-mission-manifest
+    title: "M7.15 Mission Manifest — extend MissionManifest + multi-instance + ops surface"
+    what: |
+      Basado en docs/architect/M7-15-mission-manifest/:
+      1. Extender MissionManifest struct en colmena-core
+      2. Multi-instance: count > 1 → N squads paralelos mismo rol
+      3. mission_spawn --manifest <file> CLI (no MCP-callable)
+      4. MCP mission_manifest_show como preview read-only
+      5. runtime-agent-overrides.json (separado de trust-firewall.yaml)
+      6. mission init/status/abort CLI
+      7. Acceptance criteria doc-only en v1 (mecanizado en M7.16)
+    why: "Dark factory: lanzar 3 squads en paralelo desde un manifiesto. Diseño listo (4 architect reviews)."
+    effort: XL
+    risk: high
+    blocks: [dark-factory-coordination]
+    blocked_by: [m7.3.1-anti-reciprocal-fix, m7.3-description-omission, m7.3-scope-gap]
+    wave: 2
+    status: pending
+    tags: [feature, mission-spawn, architecture]
+    produces_pr: true
+    memory_ref: docs/architect/M7-15-mission-manifest/
+
+  # ── Wave 3 — Features que dependen de wave 2 ──
+
+  - id: dark-factory-coordination
+    title: "Dark factory coordination — multi-session parallelism con git merge gate"
+    what: |
+      1. Documentar el flujo: operator escribe manifiesto → N sesiones CC en paralelo
+      2. Cada sesión produce un PR contra main
+      3. PRs de library/docs se auto-mergean; PRs de código requieren Coco
+      4. Entre waves: merge secuencial → cargo test --workspace → next wave
+      5. Tooling: script que lance N sesiones CC con prompts independientes
+      (Futuro M7.16+: orquestador automático que lee backlog.yaml y dispara waves)
+    why: "Llevar el dark factory concept a operación real. v1 manual, v2 automatizado."
+    effort: M
+    risk: low
+    blocks: []
+    blocked_by: [merge-autonomy, m7.15-mission-manifest]
+    wave: 3
+    status: pending
+    tags: [feature, devops, orchestration]
+    produces_pr: false  # doc + tooling, no código en el repo
+
+  # ── Futuro (post wave-3, no planeado aún) ──
+
+  - id: m7.7-multi-perspective-reviewers
+    title: "M7.7 Multi-perspective reviewer diversification"
+    what: |
+      Reviewer selection con complementariedad de categorías ELO, no random puro.
+      Evitar same-tribe approval. Exponer colmena review perspectives <mission>.
+    why: "Near-future need flagged by Coco. ELO events deben reflejar cross-viewpoint judgement."
+    effort: L
+    risk: medium
+    blocks: []
+    blocked_by: []
+    wave: future
+    status: pending
+    tags: [feature, review, elo]
+    produces_pr: true
+
+  - id: m7.6-install-mode-b
+    title: "M7.6 Install Mode B como first-class en README"
+    what: |
+      Documentar y pulir el onboarding donde CC del usuario lee el repo y se autoconfigura.
+      No reemplazar Mode A, agregar B al lado.
+    why: "Validado con 4 power users. Más rápido que leer docs."
+    effort: S
+    risk: low
+    blocks: []
+    blocked_by: []
+    wave: future
+    status: pending
+    tags: [docs, onboarding]
+    produces_pr: true
+
+  - id: colmena.space-landing
+    title: "Landing page colmena.space — frontend + use-case cards"
+    what: |
+      Domain comprado. 4 use-case cards propuestas. Frontend + presentación + docs linking.
+    why: "First-time visitor feedback: diseño gustó, pidieron use-case cards."
+    effort: M
+    risk: low
+    blocks: []
+    blocked_by: []
+    wave: future
+    status: pending
+    tags: [feature, frontend, marketing]
+    produces_pr: true
+
+  # ── Métricas de referencia ──
+
+metrics:
+  total_problems: 15
+  wave_0_small: 3     # followups + merge autonomy + auto-elevate
+  wave_1_parallel: 3  # M7.11, M7.4, M7.13 — independientes
+  wave_2_parallel: 4  # M7.3 fixes + M7.15 — algunos dependen de wave 1
+  wave_3_parallel: 1  # dark-factory coordination
+  future: 3           # M7.7, M7.6, landing
+  total_prs_estimated: 13
+
+  effort_summary:
+    S: 4   # m7.14-followups, merge-autonomy, m7.3.1, m7.3-description, m7.3-scope-gap
+    M: 5   # auto-elevate, m7.11, m7.13, dark-factory, colmena.space
+    L: 2   # m7.4, m7.7
+    XL: 1  # m7.15
+
+  # Waves visual:
+  # Wave 0 (ahora):  [followups] [merge-autonomy] [auto-elevate]  → 3 PRs, paralelo
+  # Wave 1 (indep):  [M7.11] [M7.4] [M7.13]                      → 3 PRs, paralelo
+  # Wave 2 (dep w1): [M7.3.1] [M7.3-desc] [M7.3-scope] [M7.15]   → 4 PRs
+  # Wave 3 (dep w2): [dark-factory]                                → docs + tooling
+  # Future:          [M7.7] [M7.6] [landing]
