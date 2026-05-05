@@ -508,6 +508,12 @@ fn run_hook(config_path: Option<PathBuf>) -> Result<()> {
             // `hookEventName: "PostToolUse"`) made every Stop event surface
             // `expected 'Stop' but got 'PostToolUse'` in the CC UI. An empty
             // stdout + exit 0 is the documented default-continue contract.
+
+            // M7.11: print session-end value banner to stderr.
+            // Safe fallback: any error is silently ignored.
+            if !session_id.is_empty() {
+                let _ = print_session_end_banner(session_id);
+            }
             Ok(())
         }
         other => {
@@ -1863,6 +1869,68 @@ fn run_elo_show() -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// M7.11: print a compact value banner to stderr on session end.
+///
+/// Reads audit.log + filter-stats.jsonl for the current session. Any I/O or
+/// parse error is silently swallowed — the banner is a best-effort feature
+/// that must never interfere with the Stop hook (empty stdout + exit 0).
+fn print_session_end_banner(session_id: &str) -> Result<()> {
+    let config_dir = colmena_core::paths::default_config_dir();
+    let audit_path = config_dir.join("audit.log");
+    let stats_path = config_dir.join("filter-stats.jsonl");
+
+    let audit = colmena_core::audit::session_stats(&audit_path, Some(session_id));
+    let filter_summary = match colmena_filter::stats::read_filter_stats(&stats_path) {
+        Ok(events) => {
+            let session_events: Vec<_> = events
+                .into_iter()
+                .filter(|e| e.session_id == session_id)
+                .collect();
+            Some(colmena_filter::stats::summarize(&session_events))
+        }
+        Err(_) => None,
+    };
+
+    let prompts_saved = audit.allow_count.saturating_sub(audit.delegation_matches);
+    let tokens_saved = filter_summary.map_or(0, |s| s.total_chars_saved);
+    let agents = audit.unique_agents;
+    let queue_total = audit.total_decisions;
+
+    // Build a compact value banner to stderr.
+    // Use Box Drawings Light Horizontal for visual separation (safe in most terminals).
+    let line = "\u{2500}".repeat(44);
+    eprintln!();
+    eprintln!("\u{250c}{line}\u{2510}");
+    eprintln!(
+        "\u{2502}  Colmena \u{2014} session summary{:>20} \u{2502}",
+        ""
+    );
+    eprintln!("\u{2502}{:>42}  \u{2502}", "");
+    eprintln!(
+        "\u{2502}  Prompts auto-approved: {:>5}                        \u{2502}",
+        prompts_saved
+    );
+    eprintln!(
+        "\u{2502}  Tokens filtered:       {:>5}                        \u{2502}",
+        tokens_saved
+    );
+    if agents > 0 {
+        eprintln!(
+            "\u{2502}  Agents active:         {:>5}                        \u{2502}",
+            agents
+        );
+    }
+    if queue_total > 0 {
+        eprintln!(
+            "\u{2502}  Queue decisions:       {:>5}                        \u{2502}",
+            queue_total
+        );
+    }
+    eprintln!("\u{2514}{line}\u{2518}");
+    eprintln!();
     Ok(())
 }
 
