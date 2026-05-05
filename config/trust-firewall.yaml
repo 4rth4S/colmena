@@ -121,6 +121,15 @@ restricted:
     action: ask
     reason: 'Mission spawn creates patterns and delegations — requires human review'
 
+  # PR merges — assistant can merge after verifying CI green.
+  # gh pr merge doesn't carry branch context in the command string,
+  # so every merge requires human confirmation regardless of branch.
+  - tools: [Bash]
+    conditions:
+      bash_pattern: '^gh pr merge\b'
+    action: ask
+    reason: 'PR merges require human confirmation — assistant verifies CI green before proposing'
+
   # External communications
   - tools: [mcp__claude_ai_Slack__slack_send_message, mcp__claude_ai_Atlassian__createJiraIssue]
     action: ask
@@ -143,12 +152,6 @@ blocked:
     action: block
     reason: 'Destructive Bash operations on critical config files are blocked — use dedicated Colmena tools'
 
-  # PR merges are human-only — Claude creates PRs, Coco merges
-  - tools: [Bash]
-    conditions:
-      bash_pattern: '^gh pr merge\b'
-    action: block
-    reason: 'PR merges are human-initiated only — Claude pushes branches and creates PRs'
 
 # Per-agent overrides (used by ELO engine in M3)
 agent_overrides: {}

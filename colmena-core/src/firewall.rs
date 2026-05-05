@@ -1903,11 +1903,12 @@ mod tests {
 
     #[test]
     fn test_chain_aware_blocked_piece_blocks() {
-        // gh pr merge is in `blocked` per CLAUDE.md.
+        // gh pr merge was moved from blocked → restricted (ask) in M7.15 merge-autonomy.
+        // Verify chain-aware evaluation now returns Ask (no longer Block).
         let (config, patterns) = load_test_config_and_patterns();
         let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
         let decision = evaluate_chain_aware(&config, &patterns, &payload).expect("must decide");
-        assert_eq!(decision.action, Action::Block);
+        assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]
@@ -2046,7 +2047,8 @@ mod tests {
         let delegations: Vec<RuntimeDelegation> = Vec::new();
         let payload = make_payload("Bash", json!({"command": "git status && gh pr merge"}));
         let decision = evaluate(&config, &patterns, &delegations, &payload);
-        assert_eq!(decision.action, Action::Block);
+        // gh pr merge moved from blocked → restricted (ask) in M7.15 merge-autonomy
+        assert_eq!(decision.action, Action::Ask);
     }
 
     #[test]
