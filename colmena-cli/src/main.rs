@@ -147,7 +147,7 @@ enum QueueAction {
     Prune {
         /// Maximum age in days (default: 7)
         #[arg(long, default_value = "7")]
-        older_than: i64,
+        older_than: u64,
     },
 }
 
@@ -1138,11 +1138,11 @@ fn run_queue_list(session_filter: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn run_queue_prune(older_than_days: i64) -> Result<()> {
+fn run_queue_prune(older_than_days: u64) -> Result<()> {
     let config_dir = colmena_core::paths::default_config_dir();
     // M7.14: queue prune now cleans decided/ (manual reclaim).
     // Stale pending/ → decided/ is handled automatically by lazy GC + Stop sweep.
-    let retention_hours = (older_than_days * 24) as u64;
+    let retention_hours = older_than_days * 24;
     let now = chrono::Utc::now();
     let deleted = colmena_core::queue::purge_expired_decided(&config_dir, retention_hours, now)?;
     if deleted == 0 {

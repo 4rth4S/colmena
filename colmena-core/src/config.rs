@@ -88,30 +88,14 @@ impl Default for QueueConfig {
 }
 
 impl QueueConfig {
-    /// Return clamped retention_pending_seconds, logging a warning if out of range.
+    /// Return clamped retention_pending_seconds (validated at config-load time).
     pub fn effective_pending_ttl(&self) -> u64 {
-        let raw = self.retention_pending_seconds;
-        let clamped = raw.clamp(60, 3600);
-        if clamped != raw {
-            eprintln!(
-                "colmena config: queue.retention_pending_seconds={raw} is out of range [60, 3600]; \
-                 using {clamped}"
-            );
-        }
-        clamped
+        self.retention_pending_seconds.clamp(60, 3600)
     }
 
-    /// Return clamped retention_decided_hours, logging a warning if out of range.
+    /// Return clamped retention_decided_hours (validated at config-load time).
     pub fn effective_decided_retention(&self) -> u64 {
-        let raw = self.retention_decided_hours;
-        let clamped = raw.clamp(1, 720);
-        if clamped != raw {
-            eprintln!(
-                "colmena config: queue.retention_decided_hours={raw} is out of range [1, 720]; \
-                 using {clamped}"
-            );
-        }
-        clamped
+        self.retention_decided_hours.clamp(1, 720)
     }
 }
 
