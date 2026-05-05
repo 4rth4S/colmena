@@ -121,6 +121,12 @@ enum DelegateAction {
         /// Optional session ID — limits delegation to this CC session only
         #[arg(long)]
         session: Option<String>,
+        /// Regex pattern for Bash command (required for Bash tool)
+        #[arg(long)]
+        bash_pattern: Option<String>,
+        /// Restrict file operations to this directory (repeatable)
+        #[arg(long = "path-within", value_name = "DIR")]
+        path_within: Vec<String>,
     },
     /// List active delegations
     List,
@@ -193,6 +199,21 @@ enum LibraryAction {
         /// Category: offensive, defensive, compliance, architecture, research, development, operations, creative
         #[arg(long)]
         category: Option<String>,
+    },
+    /// Clone an existing role as a template
+    CloneRole {
+        /// Source role ID to copy
+        #[arg(long)]
+        id: String,
+        /// New role ID for the clone
+        #[arg(long)]
+        as_: String,
+    },
+    /// Validate a role and suggest improvements
+    Doctor {
+        /// Role ID to diagnose
+        #[arg(long)]
+        id: String,
     },
     /// Create a new pattern scaffold
     CreatePattern {
@@ -312,7 +333,9 @@ fn main() {
                 agent,
                 ttl,
                 session,
-            } => run_delegate(tool, agent, ttl, session),
+                bash_pattern,
+                path_within,
+            } => run_delegate(tool, agent, ttl, session, bash_pattern, path_within),
             DelegateAction::List => run_delegate_list(),
             DelegateAction::Revoke { tool, agent } => run_delegate_revoke(tool, agent),
         },
@@ -333,6 +356,8 @@ fn main() {
                 description,
                 category,
             } => run_library_create_role(id, description, category),
+            LibraryAction::CloneRole { id, as_ } => run_role_clone(id, as_),
+            LibraryAction::Doctor { id } => run_role_doctor(id),
             LibraryAction::CreatePattern {
                 id,
                 description,
@@ -1188,24 +1213,43 @@ fn run_delegate(
     agent: Option<String>,
     ttl_hours: i64,
     session: Option<String>,
+    bash_pattern: Option<String>,
+    path_within: Vec<String>,
 ) -> Result<()> {
     for w in colmena_core::config::validate_tool_name_single(&tool) {
         eprintln!("WARNING: {w}");
     }
 
-    // Bash delegations blocked at CLI level: unscoped Bash auto-approve is a security risk.
-    // The CLI does not support --bash-pattern or --path-within flags.
-    if tool == "Bash" {
+    // Build conditions from CLI flags.
+    let conditions = if bash_pattern.is_some() || !path_within.is_empty() {
+        // Validate bash_pattern as compilable regex before persisting.
+        if let Some(ref pat) = bash_pattern {
+            if let Err(e) = regex::Regex::new(pat) {
+                anyhow::bail!("Invalid --bash-pattern regex: {e}");
+            }
+        }
+        Some(colmena_core::delegate::DelegationConditions {
+            bash_pattern,
+            path_within: if path_within.is_empty() {
+                None
+            } else {
+                Some(path_within.clone())
+            },
+            path_not_match: None,
+        })
+    } else {
+        None
+    };
+
+    // Bash delegations require conditions (scope enforcement).
+    if tool == "Bash" && conditions.is_none() {
         anyhow::bail!(
-            "Bash delegations blocked: unscoped Bash auto-approve means ALL commands \
-             run without human review.\n\n\
-             To grant scoped Bash access:\n  \
-             1. Edit trust-firewall.yaml → agent_overrides, add rules with \
-             bash_pattern (regex) or path_within conditions.\n  \
-             2. Or use 'colmena library select --mission <desc>' to generate a \
-             mission with scoped Bash patterns automatically.\n\n\
-             Note: --bash-pattern and --path-within are NOT CLI flags. \
-             Scoped Bash is configured via YAML or mission generation only."
+            "Bash delegations require --bash-pattern and/or --path-within to scope the \
+             delegation.\n\n\
+             Examples:\n  \
+             colmena delegate add --tool Bash --bash-pattern '^curl\\b' --ttl 4\n  \
+             colmena delegate add --tool Bash --path-within /home/user/project --ttl 8\n  \
+             colmena delegate add --tool Bash --bash-pattern '^git\\b' --path-within /repo --ttl 4"
         );
     }
 
@@ -1228,7 +1272,7 @@ fn run_delegate(
         session_id: session.clone(),
         source: Some("human".to_string()),
         mission_id: None,
-        conditions: None,
+        conditions: conditions.clone(),
     };
 
     delegations.push(new_delegation);
@@ -1648,6 +1692,171 @@ fn run_library_select(
         "Next: open each agent's CLAUDE.md and launch Claude Code with --project pointing to its directory."
     );
 
+    Ok(())
+}
+
+/// Clone an existing role to a new ID. Copies the YAML file, updates the `id`
+/// and `name` fields, and writes the new role to the public library directory.
+fn run_role_clone(source_id: String, as_id: String) -> Result<()> {
+    let library_dir = default_library_dir();
+    let roles = load_roles(&library_dir)?;
+
+    let _source = roles
+        .iter()
+        .find(|r| r.id == source_id)
+        .with_context(|| format!("Source role '{}' not found in library", source_id))?;
+
+    let source_path = library_dir
+        .join("roles")
+        .join(format!("{}.yaml", source_id));
+    let target_path = library_dir.join("roles").join(format!("{}.yaml", as_id));
+    if target_path.exists() {
+        anyhow::bail!(
+            "Role '{}' already exists at {}. Use a different --as name.",
+            as_id,
+            target_path.display()
+        );
+    }
+
+    // Copy and patch the YAML — replace id and name inline.
+    let raw = std::fs::read_to_string(&source_path)
+        .with_context(|| format!("Failed to read source role: {}", source_path.display()))?;
+    let patched = raw
+        .replacen(&format!("id: {}", source_id), &format!("id: {}", as_id), 1)
+        .replacen(
+            &format!("name: {}", source_id),
+            &format!("name: {}", as_id),
+            1,
+        );
+
+    std::fs::write(&target_path, patched)
+        .with_context(|| format!("Failed to write {}", target_path.display()))?;
+
+    println!("Cloned '{}' → '{}'", source_id, as_id);
+    println!("  {}", target_path.display());
+    Ok(())
+}
+
+/// Validate a role YAML and report potential issues with tools_allowed,
+/// bash_patterns, permissions, prompt file, and ELO configuration.
+fn run_role_doctor(role_id: String) -> Result<()> {
+    let library_dir = default_library_dir();
+    let roles = load_roles(&library_dir)?;
+
+    let role = roles
+        .iter()
+        .find(|r| r.id == role_id)
+        .with_context(|| format!("Role '{}' not found in library", role_id))?;
+
+    println!("Role Doctor — {}", role_id);
+    println!("{:=<40}", "");
+
+    let mut issues = 0u32;
+    let mut ok = 0u32;
+
+    // 1. Description
+    if role.description.len() < 20 {
+        println!(
+            "[WARN] Description too short ({} chars)",
+            role.description.len()
+        );
+        issues += 1;
+    } else {
+        println!("[OK]   Description: {} chars", role.description.len());
+        ok += 1;
+    }
+
+    // 2. Tools_allowed
+    let tools = &role.tools_allowed;
+    if tools.is_empty() {
+        println!("[WARN] tools_allowed is empty");
+        issues += 1;
+    } else {
+        let has_review_submit = tools.iter().any(|t| t.contains("review_submit"));
+        let has_review_evaluate = tools.iter().any(|t| t.contains("review_evaluate"));
+        println!("[OK]   tools_allowed: {} tools", tools.len());
+        ok += 1;
+
+        let is_worker = role.description.contains("implement")
+            || role.description.contains("developer")
+            || role.description.contains("pentest");
+        let is_reviewer = role.description.contains("review") && !is_worker;
+
+        if is_worker && !has_review_submit {
+            println!("[WARN] Worker role should have mcp__colmena__review_submit for ELO cycle");
+            issues += 1;
+        }
+        if is_reviewer && !has_review_evaluate {
+            println!(
+                "[WARN] Reviewer role should have mcp__colmena__review_evaluate for ELO cycle"
+            );
+            issues += 1;
+        }
+    }
+
+    // 3. Permissions
+    if let Some(ref perms) = role.permissions {
+        if !perms.bash_patterns.is_empty() {
+            let mut bad = 0u32;
+            for p in &perms.bash_patterns {
+                if regex::Regex::new(p).is_err() {
+                    println!("[WARN] Invalid regex in bash_patterns: '{}'", p);
+                    bad += 1;
+                }
+            }
+            if bad > 0 {
+                issues += bad;
+            } else {
+                println!("[OK]   bash_patterns: {} valid", perms.bash_patterns.len());
+                ok += 1;
+            }
+        }
+        if !perms.path_within.is_empty() {
+            println!("[OK]   path_within: {} dirs", perms.path_within.len());
+            ok += 1;
+        }
+    } else {
+        println!(
+            "[INFO]  No permissions block — add bash_patterns + path_within for scoped access"
+        );
+    }
+
+    // 4. System prompt
+    if role.system_prompt_ref.is_empty() {
+        println!("[WARN] No system_prompt_ref");
+        issues += 1;
+    } else {
+        let prompt_path = library_dir.join("prompts").join(&role.system_prompt_ref);
+        if prompt_path.exists() {
+            println!("[OK]   Prompt: {} (exists)", role.system_prompt_ref);
+            ok += 1;
+        } else {
+            println!("[WARN] Prompt file '{}' not found", role.system_prompt_ref);
+            issues += 1;
+        }
+    }
+
+    // 5. ELO config
+    if role.elo.categories.is_empty() {
+        println!("[INFO]  No ELO categories — trust calibration won't track this role");
+    } else {
+        println!("[OK]   ELO categories: {}", role.elo.categories.len());
+        ok += 1;
+    }
+
+    // 6. Model
+    if role.model.is_some() {
+        println!("[OK]   Model specified");
+        ok += 1;
+    } else {
+        println!("[INFO]  No model — agent spawn won't carry model hint");
+    }
+
+    println!("{:=<40}", "");
+    println!("{} OK, {} warnings", ok, issues);
+    if issues == 0 {
+        println!("Role '{}' looks good!", role_id);
+    }
     Ok(())
 }
 
