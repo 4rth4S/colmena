@@ -17,8 +17,8 @@ name = "colmena-mcp"
 path = "src/main.rs"
 
 [dependencies]
-colmena-core = { path = "../colmena-core" }
-colmena-filter = { path = "../colmena-filter" }
+colmena-core = { path = "../colmena-core", version = "0.14.0" }
+colmena-filter = { path = "../colmena-filter", version = "0.14.0" }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
