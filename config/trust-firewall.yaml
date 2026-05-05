@@ -159,6 +159,14 @@ agent_overrides: {}
 notifications:
   enabled: true
 
+# Auto-elevate (M7.15) — session-scoped trust via 2× operator confirmation.
+# When enabled, confirming the same binary skeleton twice within the window
+# auto-creates a session-scoped delegation. Only the main session; never blocked commands.
+# auto_elevate:
+#   enabled: true
+#   window_minutes: 10
+#   threshold: 2
+
 # Queue lifecycle (M7.14) — optional overrides. Defaults shown.
 # Omit this block entirely for zero-diff behaviour on existing deployments.
 # queue:

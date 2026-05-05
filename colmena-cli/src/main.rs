@@ -613,6 +613,7 @@ fn run_pre_tool_use_hook(payload: hook::HookPayload, config_path: Option<PathBuf
         &eval_input,
         &elo_overrides,
         &revoked_agents,
+        Some(config_dir),
     );
 
     // 4b. Audit log — record EVERY decision (Fix 4, DREAD 8.8)
@@ -746,6 +747,27 @@ fn run_post_tool_use_hook_inner(payload: &hook::HookPayload) -> Result<()> {
             Err(e) => log_error(&format!(
                 "PostToolUse: queue resolve error (non-fatal): {e:#}"
             )),
+        }
+
+        // M7.15: record operator approval for auto-elevate (main session, Bash, not interrupted).
+        if !interrupted && payload.tool_name == "Bash" {
+            if let Some(cmd) = payload.tool_input.get("command").and_then(|v| v.as_str()) {
+                // Load auto_elevate config (cheap, once per Bash execution).
+                let auto_config = match colmena_core::config::load_config(
+                    &config_dir.join("trust-firewall.yaml"),
+                    &payload.cwd,
+                ) {
+                    Ok(cfg) => cfg.auto_elevate,
+                    Err(_) => Default::default(),
+                };
+                colmena_core::auto_elevate::record_approval(
+                    &config_dir,
+                    &payload.session_id,
+                    payload.agent_type.as_deref(),
+                    cmd,
+                    &auto_config,
+                );
+            }
         }
     }
 

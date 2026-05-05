@@ -1,5 +1,6 @@
 pub mod alerts;
 pub mod audit;
+pub mod auto_elevate;
 pub mod calibrate;
 pub mod config;
 pub mod delegate;

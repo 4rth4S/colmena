@@ -546,6 +546,7 @@ impl ColmenaServer {
             &eval_input,
             &elo_overrides,
             &revoked_agents,
+            None, // MCP evaluate is diagnostic, no auto-elevate
         );
 
         let result = serde_json::json!({

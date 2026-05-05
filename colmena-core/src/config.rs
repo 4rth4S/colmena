@@ -128,10 +128,53 @@ pub struct FirewallConfig {
     /// Default true; set false to restore pre-M7.10 chain_guard-asks-everything.
     #[serde(default = "default_chain_aware")]
     pub chain_aware: bool,
+    /// Auto-elevate configuration (M7.15). Session-scoped trust elevation via
+    /// 2× operator confirmation of the same binary skeleton.
+    #[serde(default)]
+    pub auto_elevate: AutoElevateConfig,
 }
 
 fn default_chain_aware() -> bool {
     true
+}
+
+/// Auto-elevate configuration (M7.15).
+///
+/// When the operator answers Y twice to the same binary skeleton within
+/// `window_minutes`, auto-create a session-scoped delegation so subsequent
+/// calls pass without prompting. Only applies to the main session (no agent
+/// delegation); never elevates commands in the `blocked` tier.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoElevateConfig {
+    /// Master kill-switch. When false, auto-elevate is completely disabled.
+    #[serde(default = "default_auto_elevate_enabled")]
+    pub enabled: bool,
+    /// Time window in minutes for counting operator approvals (default: 10).
+    #[serde(default = "default_auto_elevate_window")]
+    pub window_minutes: u64,
+    /// Number of approvals needed before auto-elevating (default: 2).
+    #[serde(default = "default_auto_elevate_threshold")]
+    pub threshold: u64,
+}
+
+fn default_auto_elevate_enabled() -> bool {
+    true
+}
+fn default_auto_elevate_window() -> u64 {
+    10
+}
+fn default_auto_elevate_threshold() -> u64 {
+    2
+}
+
+impl Default for AutoElevateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            window_minutes: 10,
+            threshold: 2,
+        }
+    }
 }
 
 /// Validate the cwd before using it as ${PROJECT_DIR}.
@@ -495,6 +538,7 @@ action: auto-approve
             enforce_missions: Some(false),
             queue: Default::default(),
             chain_aware: true,
+            auto_elevate: Default::default(),
         };
         let result = compile_config(&config);
         assert!(result.is_err());
@@ -522,6 +566,7 @@ action: auto-approve
             enforce_missions: Some(false),
             queue: Default::default(),
             chain_aware: true,
+            auto_elevate: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert_eq!(warnings.len(), 1);
@@ -548,6 +593,7 @@ action: auto-approve
             enforce_missions: Some(false),
             queue: Default::default(),
             chain_aware: true,
+            auto_elevate: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -573,6 +619,7 @@ action: auto-approve
             enforce_missions: Some(false),
             queue: Default::default(),
             chain_aware: true,
+            auto_elevate: Default::default(),
         };
         let warnings = validate_tool_names(&config);
         assert!(warnings.is_empty());
@@ -731,6 +778,7 @@ enforce_missions: true
             enforce_missions: enforce,
             queue: Default::default(),
             chain_aware: true,
+            auto_elevate: Default::default(),
         }
     }
 
