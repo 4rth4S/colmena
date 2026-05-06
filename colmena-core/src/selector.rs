@@ -3555,13 +3555,16 @@ mod tests {
         )];
 
         let manifest = MissionManifest::from_yaml(
-            "id: m73-centralize-test\n\
+            "version: 1\n\
+             mission_id: m73-centralize-test\n\
+             description: test\n\
+             author: test\n\
              pattern: code-review-cycle\n\
              mission_ttl_hours: 1\n\
-             roles:\n  \
-               - name: developer\n    \
+             agents:\n  \
+               - role: developer\n    \
                  task: Implement feature\n  \
-               - name: auditor\n    \
+               - role: auditor\n    \
                  task: Evaluate developer work\n",
         )
         .unwrap();
