@@ -1,14 +1,14 @@
-id: test-peer-mission
+version: 1
+mission_id: test-peer-mission
+description: "Test peer review mission"
+author: test
 pattern: peer
 mission_ttl_hours: 4
-roles:
-  - name: developer
+agents:
+  - role: developer
     scope:
-      owns: ["src/lib.rs"]
-      forbidden: ["tests/**"]
+      paths: ["src/lib.rs"]
+      path_not_match: ["tests/**"]
     task: "Implement feature X"
-  - name: auditor
-    scope:
-      owns: []
-      forbidden: []
+  - role: auditor
     task: "Evaluate developer artifacts with QPC"

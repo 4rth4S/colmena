@@ -8,6 +8,15 @@ use sha2::{Digest, Sha256};
 
 use crate::findings::Finding;
 
+// ── Multi-instance ELO helpers (M7.15) ─────────────────────────────
+
+/// Recover the role_id from a namespaced agent_id for ELO bucketing.
+/// "m7-15-impl__colmena_developer-core" → "colmena_developer"
+/// "auditor" → "auditor"
+pub fn elo_bucket_for(agent_id: &str) -> &str {
+    crate::mission_manifest::role_for_agent_id(agent_id)
+}
+
 // ── Constants ──────────────────────────────────────────────────────
 
 /// Score threshold for automatic approval (>= this means auto-approve).

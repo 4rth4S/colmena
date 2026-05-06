@@ -464,12 +464,15 @@ pub fn generate_mission(
 
         // Manifest-driven sections (M7.3): scope + task + review protocol.
         // Empty strings if no manifest — the existing prompt structure is preserved.
-        let manifest_role = manifest.and_then(|m| m.role(&assignment.role_id));
-        let scope_section = manifest_role
-            .map(|r| crate::emitters::claude_code::scope_block(&r.scope.owns, &r.scope.forbidden))
+        let manifest_agent = manifest.and_then(|m| m.role(&assignment.role_id));
+        let scope_section = manifest_agent
+            .map(|a| {
+                let s = a.scope.clone().unwrap_or_default();
+                crate::emitters::claude_code::scope_block(&s.paths, &s.path_not_match)
+            })
             .unwrap_or_default();
-        let task_section = manifest_role
-            .map(|r| crate::emitters::claude_code::task_block(&r.task))
+        let task_section = manifest_agent
+            .map(|a| crate::emitters::claude_code::task_block(&a.task))
             .unwrap_or_default();
         // M7.3 fix: role_type=auditor is exempt from submitting artifact reviews
         // (it evaluates others via review_evaluate, it doesn't author work that
@@ -1413,7 +1416,7 @@ pub fn spawn_mission(
     // 1. Select best pattern.
     // If a manifest provides an explicit pattern id, try to find it in the
     // library first (exact id match) before falling back to score-based selection.
-    let manifest_pattern_id = manifest.map(|m| m.pattern.as_str());
+    let manifest_pattern_id = manifest.and_then(|m| m.pattern.as_deref());
     let mut recommendations = if let Some(pid) = manifest_pattern_id {
         let exact: Vec<Recommendation> = patterns
             .iter()
@@ -1518,20 +1521,20 @@ pub fn spawn_mission(
     // spawn honours the exact squad the caller specified, regardless of which
     // pattern was selected or auto-created.
     if let Some(m) = manifest {
-        if !m.roles.is_empty() {
+        if !m.agents.is_empty() {
             let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
             let manifest_assignments: Vec<RoleAssignment> = m
-                .roles
+                .agents
                 .iter()
                 .enumerate()
                 .map(|(i, mr)| {
                     let (name, icon) = role_map
-                        .get(mr.name.as_str())
+                        .get(mr.role.as_str())
                         .map(|r| (r.name.clone(), r.icon.clone()))
-                        .unwrap_or_else(|| (mr.name.clone(), "?".to_string()));
+                        .unwrap_or_else(|| (mr.role.clone(), "?".to_string()));
                     RoleAssignment {
                         slot: format!("slot_{}", i + 1),
-                        role_id: mr.name.clone(),
+                        role_id: mr.role.clone(),
                         role_name: name,
                         icon,
                     }
@@ -3552,13 +3555,16 @@ mod tests {
         )];
 
         let manifest = MissionManifest::from_yaml(
-            "id: m73-centralize-test\n\
+            "version: 1\n\
+             mission_id: m73-centralize-test\n\
+             description: test\n\
+             author: test\n\
              pattern: code-review-cycle\n\
              mission_ttl_hours: 1\n\
-             roles:\n  \
-               - name: developer\n    \
+             agents:\n  \
+               - role: developer\n    \
                  task: Implement feature\n  \
-               - name: auditor\n    \
+               - role: auditor\n    \
                  task: Evaluate developer work\n",
         )
         .unwrap();

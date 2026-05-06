@@ -1,7 +1,8 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use chrono;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -24,7 +25,7 @@ pub struct SessionGateOverride {
 }
 
 /// Conditions that must all be satisfied for a rule to match.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conditions {
     /// Regex pattern matched against Bash tool_input["command"].
     pub bash_pattern: Option<String>,
@@ -35,7 +36,7 @@ pub struct Conditions {
 }
 
 /// A single firewall rule.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
     pub tools: Vec<String>,
     pub conditions: Option<Conditions>,
@@ -448,6 +449,94 @@ pub fn clear_session_gate_override(config_dir: &std::path::Path) -> anyhow::Resu
             .with_context(|| format!("removing sentinel {}", path.display()))?;
     }
     Ok(())
+}
+
+/// Runtime agent overrides injected by mission manifests (§3 ARCHITECT_PLAN).
+/// Stored in `$COLMENA_HOME/config/runtime-agent-overrides.json`.
+/// Loaded by the firewall AFTER `agent_overrides` from trust-firewall.yaml.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeAgentOverrides {
+    pub missions: HashMap<String, MissionRuntimeOverrides>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissionRuntimeOverrides {
+    pub applied_at: String,
+    pub manifest_sha256: String,
+    pub mission_ttl_hours: i64,
+    pub overrides: HashMap<String, Vec<Rule>>,
+}
+
+impl RuntimeAgentOverrides {
+    /// Load from the runtime overrides file. Returns empty if file doesn't exist.
+    pub fn load(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if content.trim().is_empty() {
+            return Ok(Self::default());
+        }
+        let overrides: Self = serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse {}", path.display()))?;
+        Ok(overrides)
+    }
+
+    /// Save atomically (write to temp + rename).
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = path.with_extension("tmp");
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(&tmp, &json)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Get merged overrides for all active missions, keyed by agent_id.
+    pub fn merged_overrides(&self) -> HashMap<String, Vec<Rule>> {
+        let mut merged: HashMap<String, Vec<Rule>> = HashMap::new();
+        for mission in self.missions.values() {
+            for (agent_id, rules) in &mission.overrides {
+                merged
+                    .entry(agent_id.clone())
+                    .or_default()
+                    .extend(rules.clone());
+            }
+        }
+        merged
+    }
+
+    /// Garbage-collect expired missions. Returns count of removed missions.
+    pub fn gc_expired(&mut self) -> usize {
+        let now = chrono::Utc::now();
+        let expired: Vec<String> = self
+            .missions
+            .iter()
+            .filter_map(|(id, m)| {
+                chrono::DateTime::parse_from_rfc3339(&m.applied_at)
+                    .ok()
+                    .map(|ts| {
+                        let deadline = ts + chrono::Duration::hours(m.mission_ttl_hours);
+                        (id.clone(), now > deadline)
+                    })
+            })
+            .filter(|(_, is_expired)| *is_expired)
+            .map(|(id, _)| id)
+            .collect();
+        let count = expired.len();
+        for id in &expired {
+            self.missions.remove(id);
+        }
+        count
+    }
+}
+
+/// Path to runtime-agent-overrides.json, resolved from config dir.
+pub fn runtime_overrides_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("runtime-agent-overrides.json")
 }
 
 #[cfg(test)]
@@ -947,5 +1036,58 @@ chain_aware: false
 "#;
         let cfg: FirewallConfig = serde_yml::from_str(yaml).unwrap();
         assert!(!cfg.chain_aware);
+    }
+
+    // ── RuntimeAgentOverrides tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_runtime_overrides_merge() {
+        let mut overrides = RuntimeAgentOverrides::default();
+        let mut m = HashMap::new();
+        m.insert(
+            "dev1".into(),
+            vec![Rule {
+                tools: vec!["Bash".into()],
+                conditions: Some(Conditions {
+                    bash_pattern: Some("^cargo\\b".into()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
+                action: Action::AutoApprove,
+                reason: Some("test".into()),
+            }],
+        );
+        overrides.missions.insert(
+            "m1".into(),
+            MissionRuntimeOverrides {
+                applied_at: "2026-05-06T00:00:00Z".into(),
+                manifest_sha256: "abc".into(),
+                mission_ttl_hours: 8,
+                overrides: m,
+            },
+        );
+        let merged = overrides.merged_overrides();
+        assert_eq!(merged.len(), 1);
+        assert!(merged.contains_key("dev1"));
+    }
+
+    #[test]
+    fn test_runtime_overrides_gc_expired() {
+        let mut overrides = RuntimeAgentOverrides::default();
+        let past = (chrono::Utc::now() - chrono::Duration::hours(25))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        overrides.missions.insert(
+            "expired-mission".into(),
+            MissionRuntimeOverrides {
+                applied_at: past,
+                manifest_sha256: "abc".into(),
+                mission_ttl_hours: 8,
+                overrides: HashMap::new(),
+            },
+        );
+        let removed = overrides.gc_expired();
+        assert_eq!(removed, 1);
+        assert!(overrides.missions.is_empty());
     }
 }

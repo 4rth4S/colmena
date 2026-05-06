@@ -1,8 +1,8 @@
-id: test-bad-role
+version: 1
+mission_id: test-bad-role
+description: "Test invalid role"
+author: test
 pattern: peer
-roles:
-  - name: nonexistent_role_xyz
-    scope:
-      owns: []
-      forbidden: []
+agents:
+  - role: nonexistent_role_xyz
     task: "Impossible task"

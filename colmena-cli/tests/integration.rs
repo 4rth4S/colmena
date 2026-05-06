@@ -1157,12 +1157,16 @@ fn test_mission_spawn_rejects_ttl_over_max() {
 
     // Write a temp manifest with ttl = 25 (> MAX_TTL_HOURS = 24)
     let manifest_content = r#"
-id: ttl-overflow
+version: 1
+mission_id: ttl-overflow
+description: "test"
+author: test
 pattern: peer
 mission_ttl_hours: 25
-roles:
-  - name: developer
+agents:
+  - role: developer
     task: "x"
+  - role: auditor
 "#;
     let manifest_path = tmp.path().join("bad-ttl.yaml");
     std::fs::write(&manifest_path, manifest_content).unwrap();
@@ -1349,15 +1353,18 @@ fn test_mission_spawn_aborts_on_false_enforce_with_3_roles() {
 
     // 3-role manifest triggers the border case
     let manifest = r#"
-id: border-case-mission
+version: 1
+mission_id: border-case-mission
+description: "test"
+author: test
 pattern: peer
 mission_ttl_hours: 2
-roles:
-  - name: developer
+agents:
+  - role: developer
     task: "x"
-  - name: auditor
+  - role: auditor
     task: "y"
-  - name: code_reviewer
+  - role: code_reviewer
     task: "z"
 "#;
     let manifest_path = tmp.path().join("border.yaml");
@@ -1397,15 +1404,18 @@ fn test_mission_spawn_proceeds_with_session_gate() {
     std::fs::create_dir_all(&agents_dir).unwrap();
 
     let manifest = r#"
-id: session-gate-mission
+version: 1
+mission_id: session-gate-mission
+description: "test"
+author: test
 pattern: peer
 mission_ttl_hours: 2
-roles:
-  - name: developer
+agents:
+  - role: developer
     task: "x"
-  - name: auditor
+  - role: auditor
     task: "y"
-  - name: code_reviewer
+  - role: code_reviewer
     task: "z"
 "#;
     let manifest_path = tmp.path().join("sess.yaml");

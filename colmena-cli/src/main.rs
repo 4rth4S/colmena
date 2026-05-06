@@ -6,7 +6,7 @@ mod notify;
 mod setup;
 
 use std::io::{BufReader, Read as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
@@ -307,6 +307,41 @@ enum MissionAction {
         #[arg(long, default_value = "terse")]
         mode: String,
     },
+    /// Validate a mission manifest YAML file (schema v1).
+    Validate {
+        /// Path to the manifest YAML file.
+        file: PathBuf,
+    },
+    /// Initialize a new mission manifest from a template.
+    Init {
+        /// Mission slug (e.g., "bbp-followup").
+        slug: String,
+        /// Library pattern to pre-fill agent list.
+        #[arg(long)]
+        pattern: Option<String>,
+        /// Mission description (defaults to placeholder).
+        #[arg(long = "for")]
+        description: Option<String>,
+        /// Output path (defaults to ./<slug>.mission.yaml).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+    /// Show mission status dashboard — agents, reviews, ELO, budget, alerts.
+    Status {
+        /// Mission ID (slug).
+        id: String,
+    },
+    /// Emergency abort — revoke all delegations, remove overrides, mark reviews Aborted.
+    Abort {
+        /// Mission ID to abort.
+        id: String,
+        /// Reason for abort (logged in audit).
+        #[arg(long)]
+        reason: Option<String>,
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -402,6 +437,22 @@ fn main() {
                 no_gate_confirmed,
             ),
             MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
+            MissionAction::Validate { file } => run_mission_validate(&file),
+            MissionAction::Init {
+                slug,
+                pattern,
+                description,
+                output,
+            } => run_mission_init(
+                &slug,
+                pattern.as_deref(),
+                description.as_deref(),
+                output.as_deref(),
+            ),
+            MissionAction::Status { id } => run_mission_status(&id),
+            MissionAction::Abort { id, reason, force } => {
+                run_mission_abort(&id, reason.as_deref(), force)
+            }
         },
         Commands::Calibrate { action } => match action {
             CalibrateAction::Run => run_calibrate(),
@@ -2456,7 +2507,11 @@ fn run_mission_spawn(
     session_gate: bool,
     no_gate_confirmed: bool,
 ) -> Result<()> {
-    use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
+    use colmena_core::mission_manifest::{
+        InterAgentProtocol, ManifestAgent, ManifestBashPatterns, ManifestScope, MissionBudget,
+        MissionGate, MissionManifest,
+    };
+    use std::collections::HashMap;
 
     let manifest: MissionManifest = if let Some(path) = from {
         match MissionManifest::from_path(&path) {
@@ -2476,13 +2531,15 @@ fn run_mission_spawn(
         if roles_arg.is_empty() {
             anyhow::bail!("at least one --role required when --from not provided");
         }
-        let roles: Vec<ManifestRole> = roles_arg
+        let agents: Vec<ManifestAgent> = roles_arg
             .iter()
             .enumerate()
-            .map(|(i, name)| ManifestRole {
-                name: name.clone(),
-                scope: ManifestScope {
-                    owns: scopes_arg
+            .map(|(i, name)| ManifestAgent {
+                role: name.clone(),
+                count: 1,
+                instances: Vec::new(),
+                scope: {
+                    let paths: Vec<String> = scopes_arg
                         .get(i)
                         .map(|csv| {
                             csv.split(',')
@@ -2490,17 +2547,37 @@ fn run_mission_spawn(
                                 .filter(|s| !s.is_empty())
                                 .collect()
                         })
-                        .unwrap_or_default(),
-                    forbidden: Vec::new(),
+                        .unwrap_or_default();
+                    if paths.is_empty() {
+                        None
+                    } else {
+                        Some(ManifestScope {
+                            paths,
+                            path_not_match: Vec::new(),
+                            bash_patterns: ManifestBashPatterns::default(),
+                        })
+                    }
                 },
                 task: tasks_arg.get(i).cloned().unwrap_or_default(),
+                model: None,
             })
             .collect();
         let m = MissionManifest {
-            id: mission_text.clone(),
-            pattern: pattern_id,
+            version: 1,
+            mission_id: mission_text.clone(),
+            description: mission_text.clone(),
+            author: "cli".to_string(),
+            pattern: Some(pattern_id),
             mission_ttl_hours: mission_ttl,
-            roles,
+            agents,
+            scope: ManifestScope::default(),
+            mission_gate: MissionGate::default(),
+            auditor_pool: vec!["auditor".to_string()],
+            inter_agent_protocol: InterAgentProtocol::default(),
+            budget: MissionBudget::default(),
+            acceptance_criteria: Vec::new(),
+            metadata: HashMap::new(),
+            tags: Vec::new(),
         };
         if let Err(e) = m.validate() {
             eprintln!("ERROR: {e}");
@@ -2516,12 +2593,12 @@ fn run_mission_spawn(
         colmena_core::library::load_patterns(&library_dir).context("failed to load patterns")?;
 
     // Validate all roles referenced by the manifest exist in the library.
-    for r in &manifest.roles {
-        if !all_roles.iter().any(|lr| lr.id == r.name) {
+    for r in &manifest.agents {
+        if !all_roles.iter().any(|lr| lr.id == r.role) {
             eprintln!(
                 "ERROR: Role '{}' referenced in manifest but not found in library. \
                  Create it first with: colmena library create-role --id {} --description \"...\"",
-                r.name, r.name
+                r.role, r.role
             );
             std::process::exit(1);
         }
@@ -2540,7 +2617,7 @@ fn run_mission_spawn(
     let cfg = colmena_core::config::load_config(&firewall_yaml, &cwd_str)?;
 
     if matches!(cfg.enforce_missions, Some(false))
-        && manifest.roles.len() >= 3
+        && manifest.agents.len() >= 3
         && !session_gate
         && !no_gate_confirmed
     {
@@ -2555,7 +2632,7 @@ fn run_mission_spawn(
              [2] Edit trust-firewall.yaml and set enforce_missions: true\n  \
              [3] Re-run with --no-gate-confirmed (observation mode, no audit-of-closure)\n\n\
              Aborting by default.",
-            manifest.roles.len()
+            manifest.agents.len()
         );
         std::process::exit(1);
     }
@@ -2570,7 +2647,7 @@ fn run_mission_spawn(
     let agents_dir = colmena_core::paths::default_agents_dir()?;
 
     let result = colmena_core::selector::spawn_mission(
-        &manifest.id,
+        &manifest.mission_id,
         Some(&manifest),
         &all_roles,
         &all_patterns,
@@ -2680,6 +2757,318 @@ fn run_mission_prompt_inject(mode: &str) -> Result<()> {
             std::process::exit(1);
         }
     }
+    Ok(())
+}
+
+// ── Mission subcommands (M7.15) ───────────────────────────────────────────────
+
+fn run_mission_validate(file: &Path) -> Result<()> {
+    match colmena_core::mission_manifest::MissionManifest::from_path(file) {
+        Ok(manifest) => {
+            let total_agents: u32 = manifest.agents.iter().map(|a| a.count as u32).sum();
+            println!(
+                "\u{2713} Manifest valid — mission '{}'",
+                manifest.mission_id
+            );
+            println!("  Version:       {}", manifest.version);
+            println!("  Author:        {}", manifest.author);
+            println!(
+                "  Pattern:       {}",
+                manifest.pattern.as_deref().unwrap_or("custom")
+            );
+            println!("  Agent roles:   {}", manifest.agents.len());
+            println!("  Total agents:  {}", total_agents);
+            println!("  TTL:           {}h", manifest.mission_ttl_hours);
+            println!("  Scope paths:   {}", manifest.scope.paths.len());
+            println!(
+                "  Extra allows:  {}",
+                manifest.scope.bash_patterns.extra_allow.len()
+            );
+            println!(
+                "  Extra denies:  {}",
+                manifest.scope.bash_patterns.extra_deny.len()
+            );
+            println!("  Mission Gate:  {:?}", manifest.mission_gate);
+            if !manifest.acceptance_criteria.is_empty() {
+                println!(
+                    "  Acceptance criteria ({}):",
+                    manifest.acceptance_criteria.len()
+                );
+                for ac in &manifest.acceptance_criteria {
+                    println!("    - {}", ac);
+                }
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            eprintln!("\u{2717} {}", err_str);
+            if err_str.contains("unknown variant") || err_str.contains("unknown field") {
+                eprintln!("  Suggestion: check field names against the v1 schema");
+            }
+            if err_str.contains("agents cannot be empty") {
+                eprintln!("  Suggestion: add at least one agent role");
+                eprintln!("  Run: colmena library list --kind role");
+            }
+            if err_str.contains("version must be 1") {
+                eprintln!("  Suggestion: add 'version: 1' at the top of the manifest");
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_mission_init(
+    slug: &str,
+    pattern_id: Option<&str>,
+    description: Option<&str>,
+    output: Option<&Path>,
+) -> Result<()> {
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    let mission_id = format!("{}-{}", today, slug);
+    let desc = description.unwrap_or("FILL: describe the mission goal");
+    let filename = format!("{}.mission.yaml", slug);
+
+    // Build agent list from pattern if provided
+    let agents_yaml = if let Some(pid) = pattern_id {
+        let library_dir = default_library_dir();
+        let roles = load_roles(&library_dir).unwrap_or_default();
+        let patterns = load_patterns(&library_dir).unwrap_or_default();
+        if let Some(pattern) = patterns.iter().find(|p| p.id == pid) {
+            let role_map: std::collections::HashMap<&str, &colmena_core::library::Role> =
+                roles.iter().map(|r| (r.id.as_str(), r)).collect();
+            let mut agents = String::from("agents:\n");
+            let mut has_auditor = false;
+            for slot in pattern.roles_suggested.0.values() {
+                let role_ids = match slot {
+                    colmena_core::library::RoleSlot::Single(id) => vec![id.clone()],
+                    colmena_core::library::RoleSlot::Multiple(ids) => ids.clone(),
+                };
+                for role_id in &role_ids {
+                    if role_map.contains_key(role_id.as_str()) {
+                        agents.push_str(&format!("  - role: {}\n", role_id));
+                        if role_id == "auditor" {
+                            has_auditor = true;
+                        }
+                    }
+                }
+            }
+            if !has_auditor {
+                agents.push_str("  - role: auditor\n");
+            }
+            agents
+        } else {
+            format!(
+                "# Pattern '{}' not found in library.\nagents:\n  # FILL: list roles from 'colmena library list --kind role'\n  - role: developer\n  - role: auditor\n",
+                pid
+            )
+        }
+    } else {
+        "agents:\n  # FILL: list roles from 'colmena library list --kind role'\n  - role: developer\n  - role: auditor\n".to_string()
+    };
+
+    let author = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+    let template = format!(
+        r#"# {mission_id} — Mission Manifest v1
+# Generated: {now}
+# Validate: colmena mission validate {filename}
+
+version: 1
+mission_id: {mission_id}
+description: "{desc}"
+author: {author}                              # FILL: your name or handle
+
+# pattern: {pattern_hint}                     # library pattern to use (or "custom")
+mission_ttl_hours: 8                          # 1-24, default 8
+
+{agents}
+
+# Mission-wide scope — ALL agents can reach these paths.
+# Paths must be absolute. Use ${{MISSION_DIR}} for the mission workdir.
+scope:
+  paths:                                      # FILL: absolute paths agents can reach
+    - ${{MISSION_DIR}}
+  # path_not_match:                           # glob patterns to exclude
+  #   - "*.env"
+  # bash_patterns:                            # Bash command regexes
+  #   extra_allow:                            # commands to auto-approve
+  #     - '^cargo (build|test|clippy|fmt)\b'  #   MUST start with ^
+  #   extra_deny:                             # additional blocked commands
+  #     - '^rm -rf'
+
+# Mission Gate: enforce | observe | off
+mission_gate: enforce
+
+# Auditor pool — ONLY roles with role_type: auditor.
+auditor_pool: ["auditor"]
+
+# Inter-agent protocol: terse | verbose
+inter_agent_protocol: terse
+
+# Budget — caps enforced at spawn time.
+budget:
+  max_hours: 8                                # ≤ 24
+  max_agents: 12                              # ≤ 25
+
+# Acceptance criteria — surfaced in agent prompts (doc-only in v1).
+# acceptance_criteria:
+#   - "All tests pass"
+#   - "Code reviewed with QPC ≥ 7/10"
+
+# metadata:                                   # free-form, surfaced in prompts
+#   ticket: TICKET-123
+# tags: []                                    # for analytics
+"#,
+        mission_id = mission_id,
+        now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
+        filename = filename,
+        desc = desc,
+        author = author,
+        pattern_hint = pattern_id.unwrap_or("custom"),
+        agents = agents_yaml,
+    );
+
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&filename));
+    std::fs::write(&output_path, &template)?;
+    println!(
+        "\u{2713} Manifest template written to {}",
+        output_path.display()
+    );
+    println!(
+        "  Next: edit the file, then run 'colmena mission validate {}'",
+        output_path.display()
+    );
+    Ok(())
+}
+
+fn run_mission_status(mission_id: &str) -> Result<()> {
+    let config_dir = default_config_dir();
+    let runtime_path = colmena_core::config::runtime_overrides_path(&config_dir);
+    let delegations_path = config_dir.join("runtime-delegations.json");
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+
+    // Load runtime overrides for this mission
+    let overrides =
+        colmena_core::config::RuntimeAgentOverrides::load(&runtime_path).unwrap_or_default();
+    let mission_ov = overrides.missions.get(mission_id);
+
+    // Count delegations for this mission
+    let delegations = colmena_core::delegate::load_delegations(&delegations_path);
+    let active_delegations: Vec<_> = delegations
+        .iter()
+        .filter(|d| d.mission_id.as_deref() == Some(mission_id))
+        .collect();
+
+    println!("Mission: {}", mission_id);
+    if let Some(ov) = mission_ov {
+        println!(
+            "Spawned: {} ({}h TTL, sha256: {:.8})",
+            ov.applied_at, ov.mission_ttl_hours, ov.manifest_sha256
+        );
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&ov.applied_at) {
+            let elapsed = chrono::Utc::now().signed_duration_since(ts.with_timezone(&chrono::Utc));
+            let hours = elapsed.num_hours();
+            let mins = elapsed.num_minutes() % 60;
+            let remaining_h = (ov.mission_ttl_hours - hours).max(0);
+            println!("Elapsed:  {}h{}m ({}h remaining)", hours, mins, remaining_h);
+        }
+    } else {
+        println!("Spawned: NOT FOUND in runtime overrides");
+    }
+
+    // Count subagent files matching this mission
+    let mut subagent_count = 0;
+    if agents_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.contains(mission_id) || name.starts_with("colmena_") {
+                    subagent_count += 1;
+                }
+            }
+        }
+    }
+
+    println!(
+        "\nAgents:      {} subagent files, {} active delegations",
+        subagent_count,
+        active_delegations.len()
+    );
+    println!(
+        "Budget:      {} agent overrides in runtime config",
+        mission_ov.map(|o| o.overrides.len()).unwrap_or(0)
+    );
+
+    // Check alerts
+    let alerts_path = config_dir.join("alerts.json");
+    if let Ok(alerts) = colmena_core::alerts::list_alerts(&alerts_path, Some(false)) {
+        let unread = alerts.len();
+        if unread > 0 {
+            println!("Alerts:      {} unread", unread);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_mission_abort(mission_id: &str, reason: Option<&str>, force: bool) -> Result<()> {
+    if !force {
+        use std::io::Write;
+        eprint!(
+            "ABORT mission '{}'? This is irreversible. [y/N]: ",
+            mission_id
+        );
+        std::io::stderr().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if input.trim().to_lowercase() != "y" {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    let _reason_str = reason.unwrap_or("operator abort");
+    let config_dir = default_config_dir();
+    let runtime_delegations_path = config_dir.join("runtime-delegations.json");
+    let runtime_overrides_path = colmena_core::config::runtime_overrides_path(&config_dir);
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+
+    // 1. Revoke delegations for this mission
+    let revoked = colmena_core::delegate::revoke_by_mission(&runtime_delegations_path, mission_id)?;
+    let after = colmena_core::delegate::load_delegations(&runtime_delegations_path).len();
+    println!(
+        "Delegations:        {} revoked ({} remaining)",
+        revoked, after
+    );
+
+    // 2. Remove runtime overrides
+    let mut overrides = colmena_core::config::RuntimeAgentOverrides::load(&runtime_overrides_path)
+        .unwrap_or_default();
+    if overrides.missions.remove(mission_id).is_some() {
+        overrides.save(&runtime_overrides_path)?;
+        println!("Runtime overrides:   removed");
+    } else {
+        println!("Runtime overrides:   none found");
+    }
+
+    // 3. Remove auto-gen subagent files
+    let mut removed_files = 0;
+    if agents_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.contains(mission_id) && name.ends_with(".md") {
+                    let _ = std::fs::remove_file(entry.path());
+                    removed_files += 1;
+                }
+            }
+        }
+    }
+    println!("Subagent files:     {} removed", removed_files);
+
+    println!("\n\u{2713} Mission '{}' aborted.", mission_id);
     Ok(())
 }
 
