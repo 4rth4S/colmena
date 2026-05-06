@@ -19,7 +19,6 @@ pub fn elo_bucket_for(agent_id: &str) -> &str {
 
 // ── Constants ──────────────────────────────────────────────────────
 
-
 /// Score threshold for automatic approval (>= this means auto-approve).
 pub const DEFAULT_AUTO_APPROVE_THRESHOLD: f64 = 7.0;
 

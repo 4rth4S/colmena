@@ -2060,7 +2060,9 @@ impl ColmenaServer {
 
     // ── Mission Validate (M7.15) ─────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Validate a mission manifest YAML file (v1 schema). Returns summary or detailed errors.")]
+    #[rmcp::tool(
+        description = "Validate a mission manifest YAML file (v1 schema). Returns summary or detailed errors."
+    )]
     fn mission_validate(
         &self,
         Parameters(input): Parameters<MissionValidateInput>,
@@ -2083,7 +2085,9 @@ impl ColmenaServer {
 
     // ── Mission Status (M7.15) ──────────────────────────────────────────────
 
-    #[rmcp::tool(description = "Show mission status dashboard — runtime overrides, delegations, subagent files, alerts")]
+    #[rmcp::tool(
+        description = "Show mission status dashboard — runtime overrides, delegations, subagent files, alerts"
+    )]
     fn mission_status(
         &self,
         Parameters(input): Parameters<MissionStatusInput>,
@@ -2093,12 +2097,11 @@ impl ColmenaServer {
         let agents_dir = colmena_core::paths::default_agents_dir()
             .map_err(|e| sanitize_error(&e.to_string()))?;
 
-        let overrides = colmena_core::config::RuntimeAgentOverrides::load(&runtime_path)
-            .unwrap_or_default();
+        let overrides =
+            colmena_core::config::RuntimeAgentOverrides::load(&runtime_path).unwrap_or_default();
         let mission_ov = overrides.missions.get(&input.mission_id);
 
-        let delegations =
-            colmena_core::delegate::load_delegations(&delegations_path);
+        let delegations = colmena_core::delegate::load_delegations(&delegations_path);
         let active_count = delegations
             .iter()
             .filter(|d| d.mission_id.as_deref() == Some(&input.mission_id))
@@ -2146,7 +2149,9 @@ impl ColmenaServer {
 
     // ── Mission Manifest Show (M7.15) ──────────────────────────────────────
 
-    #[rmcp::tool(description = "Parse and preview a mission manifest YAML. Returns the CLI command to apply (read-only — same pattern as delegate MCP).")]
+    #[rmcp::tool(
+        description = "Parse and preview a mission manifest YAML. Returns the CLI command to apply (read-only — same pattern as delegate MCP)."
+    )]
     fn mission_manifest_show(
         &self,
         Parameters(input): Parameters<MissionManifestShowInput>,
