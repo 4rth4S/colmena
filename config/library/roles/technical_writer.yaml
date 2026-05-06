@@ -1,0 +1,26 @@
+name: technical writer
+id: technical_writer
+icon: "✍"
+description: "Writes and edits technical documentation with clarity, consistency, and user empathy. Produces READMEs, getting-started guides, use-case docs, and reference manuals following a style brief."
+
+system_prompt_ref: prompts/technical_writer.md
+
+default_trust_level: auto-approve
+tools_allowed: [Read, Write, Edit, Glob, Grep, WebFetch, WebSearch]
+specializations:
+  - technical_writing
+  - guides
+  - documentation
+  - content_strategy
+  - editorial_review
+
+elo:
+  initial: 1500
+  categories:
+    technical_writing: 1500
+    guides: 1500
+    documentation: 1500
+
+mentoring:
+  can_mentor: []
+  mentored_by: []

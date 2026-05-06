@@ -777,12 +777,12 @@
   <div class="grid-2" style="align-items: start;">
     <div>
       <div class="code-block" style="font-size: 0.75rem; padding: 16px; line-height: 1.6;">
-<span class="comment"># mission init --slug bbp-followup</span>
-<span class="comment"># colmena mission validate bbp-followup.mission.yaml</span>
+<span class="comment"># mission init --slug webapp-pentest</span>
+<span class="comment"># colmena mission validate webapp-pentest.mission.yaml</span>
 
 version: 1
-mission_id: bbp-followup
-description: "Coinbase BBP follow-up: origin
+mission_id: webapp-pentest
+description: "Web app pentest: origin bypass
   bypass on the widget endpoint"
 author: appsec-team
 mission_ttl_hours: 8
@@ -791,11 +791,11 @@ agents:
     count: 1
     task: |
       Test origin header bypass on
-      widget endpoint. Output: findings/
+      web endpoints. Output: findings/
   - role: bbp_pentester_api
     count: 1
     task: |
-      Test graphql endpoint for IDOR.
+      Test API endpoints for auth bugs.
       Output: findings/
   - role: auditor
     count: 1
@@ -804,7 +804,7 @@ agents:
       pentester artifacts.
 scope:
   paths:
-    - /home/user/coinbase
+    - /home/user/bugbounty/target
 auditor_pool:
   - auditor
 budget:
