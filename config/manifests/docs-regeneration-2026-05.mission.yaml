@@ -1,0 +1,61 @@
+version: 1
+mission_id: docs-regeneration-2026-05
+description: "Regenerate user-facing documentation with origin-story narrative thread reflecting post-M7.15 state"
+author: coco
+pattern: colmena-self-dev
+mission_ttl_hours: 8
+agents:
+  - role: colmena_architect
+    task: >
+      Write DOCS_BRIEF.md defining voice, tone, canonical terminology,
+      per-doc structure mandates, and cross-reference links.
+      Do NOT write final docs — you are the editor-in-chief, not a writer.
+      The brief must be ~200 lines, stored at the Colmena repo root.
+
+  - role: technical_writer
+    count: 2
+    instances: [user, guide]
+    task: >
+      Write assigned docs following DOCS_BRIEF.md exactly.
+      user: README.md, docs/user/getting-started.md, docs/user/use-cases.md, docs/install-mode-b.md
+      guide: docs/guide.md, docs/presentation.html
+
+  - role: auditor
+    task: >
+      Review every doc against DOCS_BRIEF.md with QPC framework.
+      Verify cross-document consistency (terminology, tone, cross-refs).
+      Report findings with specific line references.
+
+scope:
+  paths:
+    - /home/fr33m4n/colmena
+  bash_patterns:
+    extra_allow:
+      - '^cargo (build|test|clippy|fmt)\b'
+      - '^git (diff|log|status|add|commit|checkout|branch)\b'
+      - '^colmena (mission|doctor|setup|config|library|review|elo|calibrate|suggest|stats)\b'
+
+mission_gate: enforce
+auditor_pool: ["auditor"]
+inter_agent_protocol: terse
+
+budget:
+  max_hours: 8
+  max_agents: 12
+
+acceptance_criteria:
+  - "All 6 docs regenerated and internally consistent"
+  - "Consistent terminology across all docs (no doc calls ELO 'score' or manifest 'config')"
+  - "Origin story present in README Why section (under 200 words)"
+  - "All M7.15 features documented (manifests, auto-elevate, --from-history, runtime overrides)"
+  - "Every CLI command referenced is copy-pastable and correct against current binary"
+  - "Every MCP tool name matches the current 27-tool surface"
+  - "presentation.html metrics match current session stats output"
+  - "getting-started.md flow works: follow it from scratch, colmena doctor green at the end"
+
+metadata:
+  milestone: docs-regeneration
+  pattern: colmena-self-dev
+  dogfood: "this mission spawns itself with a manifest to write docs about manifests"
+
+tags: [docs, user-facing, regeneration]
