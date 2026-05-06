@@ -229,6 +229,24 @@ struct MissionDeactivateInput {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+struct MissionValidateInput {
+    /// Path to the mission manifest YAML file
+    path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MissionStatusInput {
+    /// Mission ID to query
+    mission_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MissionManifestShowInput {
+    /// Path to the mission manifest YAML file
+    path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 struct CalibrateInput {}
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -2037,6 +2055,136 @@ impl ColmenaServer {
         Ok(format!(
             "Auditor calibration recorded:\n  Auditor: {}\n  Review: {}\n  Choice: {}\n  ELO adjustment: {}{}\n  Reason: {}",
             auditor_role, input.review_id, input.choice, direction, delta, reason,
+        ))
+    }
+
+    // ── Mission Validate (M7.15) ─────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Validate a mission manifest YAML file (v1 schema). Returns summary or detailed errors.")]
+    fn mission_validate(
+        &self,
+        Parameters(input): Parameters<MissionValidateInput>,
+    ) -> Result<String, String> {
+        let path = std::path::PathBuf::from(&input.path);
+        match colmena_core::mission_manifest::MissionManifest::from_path(&path) {
+            Ok(m) => {
+                let total: u32 = m.agents.iter().map(|a| a.count as u32).sum();
+                Ok(format!(
+                    "✓ Manifest valid\n  Mission: {}\n  Version: {}\n  Author: {}\n  Pattern: {}\n  Agents: {} roles, {} total\n  TTL: {}h\n  Gate: {:?}",
+                    m.mission_id, m.version, m.author,
+                    m.pattern.as_deref().unwrap_or("custom"),
+                    m.agents.len(), total,
+                    m.mission_ttl_hours, m.mission_gate
+                ))
+            }
+            Err(e) => Err(sanitize_error(&e.to_string())),
+        }
+    }
+
+    // ── Mission Status (M7.15) ──────────────────────────────────────────────
+
+    #[rmcp::tool(description = "Show mission status dashboard — runtime overrides, delegations, subagent files, alerts")]
+    fn mission_status(
+        &self,
+        Parameters(input): Parameters<MissionStatusInput>,
+    ) -> Result<String, String> {
+        let runtime_path = colmena_core::config::runtime_overrides_path(&self.config_dir);
+        let delegations_path = self.config_dir.join("runtime-delegations.json");
+        let agents_dir = colmena_core::paths::default_agents_dir()
+            .map_err(|e| sanitize_error(&e.to_string()))?;
+
+        let overrides = colmena_core::config::RuntimeAgentOverrides::load(&runtime_path)
+            .unwrap_or_default();
+        let mission_ov = overrides.missions.get(&input.mission_id);
+
+        let delegations =
+            colmena_core::delegate::load_delegations(&delegations_path);
+        let active_count = delegations
+            .iter()
+            .filter(|d| d.mission_id.as_deref() == Some(&input.mission_id))
+            .count();
+
+        let mut subagent_count = 0;
+        if agents_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.contains(&input.mission_id) {
+                        subagent_count += 1;
+                    }
+                }
+            }
+        }
+
+        let mut result = format!("Mission: {}\n", input.mission_id);
+        if let Some(ov) = mission_ov {
+            result.push_str(&format!(
+                "Spawned: {} ({}h TTL, sha256: {:.8})\n",
+                ov.applied_at, ov.mission_ttl_hours, ov.manifest_sha256
+            ));
+        } else {
+            result.push_str("Spawned: NOT FOUND in runtime overrides\n");
+        }
+        result.push_str(&format!(
+            "Agents: {} subagent files, {} active delegations\n\
+             Budget: {} agent overrides",
+            subagent_count,
+            active_count,
+            mission_ov.map(|o| o.overrides.len()).unwrap_or(0)
+        ));
+
+        // Alerts
+        let alerts_path = self.config_dir.join("alerts.json");
+        if let Ok(alerts) = colmena_core::alerts::list_alerts(&alerts_path, Some(false)) {
+            if !alerts.is_empty() {
+                result.push_str(&format!("\nAlerts: {} unread", alerts.len()));
+            }
+        }
+
+        Ok(result)
+    }
+
+    // ── Mission Manifest Show (M7.15) ──────────────────────────────────────
+
+    #[rmcp::tool(description = "Parse and preview a mission manifest YAML. Returns the CLI command to apply (read-only — same pattern as delegate MCP).")]
+    fn mission_manifest_show(
+        &self,
+        Parameters(input): Parameters<MissionManifestShowInput>,
+    ) -> Result<String, String> {
+        self.rate_limiter.check("mission_manifest_show")?;
+        let path = std::path::PathBuf::from(&input.path);
+        let m = colmena_core::mission_manifest::MissionManifest::from_path(&path)
+            .map_err(|e| sanitize_error(&e.to_string()))?;
+
+        let total: u32 = m.agents.iter().map(|a| a.count as u32).sum();
+        Ok(format!(
+            "Manifest valid — mission '{id}'\n\
+             Version: {version}\n\
+             Author: {author}\n\
+             Pattern: {pattern}\n\
+             Agents: {agent_count} roles, {total} total instances\n\
+             TTL: {ttl}h\n\
+             Scope paths: {scope_paths}\n\
+             Mission Gate: {gate}\n\
+             Budget: {budget_hours}h / {budget_agents} agents\n\
+             \n\
+             To apply this manifest, run:\n\
+             colmena mission spawn --manifest {path}\n\
+             \n\
+             Dry-run first to review delegations:\n\
+             colmena mission spawn --manifest {path} --dry-run",
+            id = m.mission_id,
+            version = m.version,
+            author = m.author,
+            pattern = m.pattern.as_deref().unwrap_or("custom"),
+            agent_count = m.agents.len(),
+            total = total,
+            ttl = m.mission_ttl_hours,
+            scope_paths = m.scope.paths.len(),
+            gate = format!("{:?}", m.mission_gate).to_lowercase(),
+            budget_hours = m.budget.max_hours,
+            budget_agents = m.budget.max_agents,
+            path = input.path,
         ))
     }
 }

@@ -1,0 +1,34 @@
+version: 1
+mission_id: inc-example-prod-latency
+description: "Investigate p99 latency spike on API gateway production"
+author: sre-oncall
+pattern: custom
+mission_ttl_hours: 4
+agents:
+  - role: sre
+    task: "Diagnose latency root cause, check metrics and logs"
+  - role: software_engineer
+    task: "Review recent deploys for performance regressions"
+  - role: auditor
+scope:
+  paths:
+    - /home/sre/incident-2026-0501
+    - ${MISSION_DIR}
+  bash_patterns:
+    extra_allow:
+      - '^kubectl (get|describe|logs|top) '
+      - '^curl https://(grafana|prometheus)\.internal\b[^&;|`$()]*$'
+    extra_deny:
+      - '^kubectl (delete|apply|edit|patch|scale)'
+mission_gate: enforce
+budget:
+  max_hours: 4
+  max_agents: 6
+acceptance_criteria:
+  - "Root cause identified with evidence from logs/metrics"
+  - "Mitigation deployed or rollback confirmed"
+  - "Postmortem draft started"
+metadata:
+  ticket: INC-EXAMPLE
+  pager_id: PD-EXAMPLE
+tags: [incident, prod, sre]

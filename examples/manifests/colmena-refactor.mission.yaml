@@ -1,0 +1,33 @@
+version: 1
+mission_id: colmena-refactor-example
+description: "Refactor Colmena's review subsystem to reduce coupling"
+author: operator
+pattern: colmena-self-dev
+mission_ttl_hours: 16
+agents:
+  - role: colmena_developer
+    count: 2
+    instances: [core, cli]
+    task: "Implement review subsystem refactor per ARCHITECT_PLAN"
+  - role: colmena_code_reviewer
+    task: "Review diffs with QPC framework"
+  - role: auditor
+scope:
+  paths:
+    - /home/user/colmena
+    - ${MISSION_DIR}
+  bash_patterns:
+    extra_allow:
+      - '^cargo (build|test|clippy|fmt)\b'
+      - '^git (diff|log|status|add|commit)\b'
+mission_gate: enforce
+budget:
+  max_hours: 16
+  max_agents: 12
+acceptance_criteria:
+  - "All existing tests pass"
+  - "No regression in review cycle"
+  - "ELO events recorded for all agents"
+metadata:
+  milestone: M7.15
+tags: [dev, rust, colmena-self]
