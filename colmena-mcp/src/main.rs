@@ -192,6 +192,11 @@ struct MissionSpawnInput {
     mission: String,
     /// Optional pattern ID override — skip auto-selection and use this pattern directly
     pattern_id: Option<String>,
+    /// Optional path to a v1 mission manifest YAML.
+    /// When provided, validates the manifest and returns the CLI command
+    /// to spawn it (read-only -- same pattern as delegate MCP).
+    #[serde(default)]
+    manifest_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -244,6 +249,15 @@ struct MissionStatusInput {
 struct MissionManifestShowInput {
     /// Path to the mission manifest YAML file
     path: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct MissionAbortInput {
+    /// Mission ID to abort.
+    mission_id: String,
+    /// Reason for abort (logged in audit).
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1436,6 +1450,42 @@ impl ColmenaServer {
         let runtime_delegations_path = self.config_dir.join("runtime-delegations.json");
         let agents_dir = colmena_core::paths::default_agents_dir()
             .map_err(|e| sanitize_error(&format!("Failed to resolve agents dir: {e}")))?;
+
+        // If manifest_path is provided, validate and return CLI command (read-only pattern)
+        if let Some(ref manifest_path) = input.manifest_path {
+            let manifest = colmena_core::mission_manifest::MissionManifest::from_path(
+                std::path::Path::new(manifest_path),
+            )
+            .map_err(|e| sanitize_error(&format!("Manifest validation failed: {e}")))?;
+
+            let total_agents: u32 = manifest.agents.iter().map(|a| a.count as u32).sum();
+            return Ok(format!(
+                "Manifest valid -- mission '{}'\n\
+                 Version: {}\n\
+                 Author: {}\n\
+                 Agents: {} roles, {} total instances\n\
+                 TTL: {}h\n\
+                 Scope paths: {}\n\
+                 Mission Gate: {:?}\n\
+                 \n\
+                 To dry-run this mission and review delegations:\n\
+                 colmena mission spawn --manifest {} --dry-run\n\
+                 \n\
+                 To apply immediately:\n\
+                 colmena mission spawn --manifest {} --apply",
+                manifest.mission_id,
+                manifest.version,
+                manifest.author,
+                manifest.agents.len(),
+                total_agents,
+                manifest.mission_ttl_hours,
+                manifest.scope.paths.len(),
+                manifest.mission_gate,
+                manifest_path,
+                manifest_path,
+            ));
+        }
+
         let spawn_result = colmena_core::selector::spawn_mission(
             &input.mission,
             None, // manifest: MCP doesn't expose manifest yet
@@ -1603,6 +1653,39 @@ impl ColmenaServer {
         }
 
         Ok(output)
+    }
+
+    // ── Mission Abort ─────────────────────────────────────────────────────────
+
+    #[rmcp::tool(
+        description = "Request mission abort — returns CLI command for human confirmation (read-only, same pattern as delegate MCP). Aborts a mission: revokes all delegations, removes runtime overrides, marks pending reviews Aborted, removes auto-gen subagent files."
+    )]
+    fn mission_abort(
+        &self,
+        Parameters(input): Parameters<MissionAbortInput>,
+    ) -> Result<String, String> {
+        self.rate_limiter.check("mission_abort")?;
+
+        let reason_flag = input
+            .reason
+            .as_ref()
+            .map(|r| format!(" --reason \"{}\"", r))
+            .unwrap_or_default();
+
+        Ok(format!(
+            "To abort mission '{}', run:\n\
+             colmena mission abort --id {}{} --force\n\
+             \n\
+             This will:\n\
+             1. Revoke all delegations for this mission\n\
+             2. Remove runtime-agent-overrides.json entries\n\
+             3. Mark pending reviews as Aborted\n\
+             4. Remove auto-gen subagent files\n\
+             5. Log a MISSION_ABORT audit event\n\
+             \n\
+             WARNING: IRREVERSIBLE. Remove --force for confirmation prompt.",
+            input.mission_id, input.mission_id, reason_flag,
+        ))
     }
 
     // ── Calibration ──────────────────────────────────────────────────────────

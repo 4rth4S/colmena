@@ -8,6 +8,7 @@ pub mod elo;
 pub mod emitters;
 pub mod findings;
 pub mod firewall;
+pub mod history;
 pub mod library;
 pub mod mission_manifest;
 pub mod models;

@@ -139,9 +139,16 @@ where
 /// Compose the `[SCOPE]` section of a generated prompt.
 ///
 /// `owns` is the list of files this role can touch; `forbidden` is the explicit
-/// "do NOT touch" list. Empty lists yield an empty string (no section emitted).
-pub fn scope_block(owns: &[String], forbidden: &[String]) -> String {
-    if owns.is_empty() && forbidden.is_empty() {
+/// "do NOT touch" list. `extra_allow` and `extra_deny` are Bash command patterns
+/// that are auto-approved or blocked for this agent. Empty lists yield an empty
+/// string (no section emitted).
+pub fn scope_block(
+    owns: &[String],
+    forbidden: &[String],
+    extra_allow: &[String],
+    extra_deny: &[String],
+) -> String {
+    if owns.is_empty() && forbidden.is_empty() && extra_allow.is_empty() && extra_deny.is_empty() {
         return String::new();
     }
     let mut s = String::from("\n## Scope — ONLY these files\n\n");
@@ -156,6 +163,18 @@ pub fn scope_block(owns: &[String], forbidden: &[String]) -> String {
         s.push_str("\nDo NOT touch:\n");
         for f in forbidden {
             s.push_str(&format!("- {}\n", f));
+        }
+    }
+    if !extra_allow.is_empty() {
+        s.push_str("\nAuto-approved Bash commands:\n");
+        for p in extra_allow {
+            s.push_str(&format!("- `{}`\n", p));
+        }
+    }
+    if !extra_deny.is_empty() {
+        s.push_str("\nBlocked Bash commands:\n");
+        for p in extra_deny {
+            s.push_str(&format!("- `{}`\n", p));
         }
     }
     s
@@ -374,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_scope_block_empty() {
-        assert!(scope_block(&[], &[]).is_empty());
+        assert!(scope_block(&[], &[], &[], &[]).is_empty());
     }
 
     #[test]
@@ -427,7 +446,7 @@ mod tests {
     #[test]
     fn test_scope_block_owns_only() {
         let owns = vec!["Cargo.toml".to_string(), "docs/user/*.md".to_string()];
-        let out = scope_block(&owns, &[]);
+        let out = scope_block(&owns, &[], &[], &[]);
         assert!(out.contains("Cargo.toml"));
         assert!(out.contains("docs/user/*.md"));
         assert!(!out.contains("Do NOT touch"));
@@ -437,7 +456,7 @@ mod tests {
     fn test_scope_block_owns_and_forbidden() {
         let owns = vec!["Cargo.toml".to_string()];
         let forbidden = vec!["colmena-core/src/**".to_string()];
-        let out = scope_block(&owns, &forbidden);
+        let out = scope_block(&owns, &forbidden, &[], &[]);
         assert!(out.contains("Cargo.toml"));
         assert!(out.contains("Do NOT touch"));
         assert!(out.contains("colmena-core/src/**"));

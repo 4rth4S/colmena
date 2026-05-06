@@ -172,19 +172,19 @@ pub fn record_approval(
     agent_type: Option<&str>,
     command: &str,
     config: &AutoElevateConfig,
-) {
+) -> String {
     if !config.enabled {
-        return;
+        return String::new();
     }
     // Only record main-session approvals.
     if agent_type.is_some() {
-        return;
+        return String::new();
     }
 
     // Extract skeletons from the full command (split chain first, then skeleton per piece).
     let pieces = match crate::firewall::split_top_level_chain(command) {
         Some(p) => p,
-        None => return,
+        None => return String::new(),
     };
 
     let now = Utc::now();
@@ -223,11 +223,56 @@ pub fn record_approval(
     entries.truncate(MAX_ENTRIES);
 
     let _ = write_state(config_dir, &entries);
+
+    // Check if this command matches any active mission manifest pattern.
+    let mut suggestion = String::new();
+    if let Some(mission_id) = is_manifest_authorized(command, config_dir) {
+        suggestion.push_str(&format!(
+            "\n  Note: command matches manifest '{}' extra_allow pattern.",
+            mission_id
+        ));
+    }
+    suggestion
 }
 
 /// Fully qualified path to the state file (for test inspection).
 pub fn state_file_path(config_dir: &Path) -> PathBuf {
     config_dir.join(STATE_FILE)
+}
+
+/// Check whether a bash command is already authorized by any active
+/// mission manifest's `extra_allow` patterns. Returns the manifest
+/// mission_id that authorizes this command, if any.
+pub fn is_manifest_authorized(command: &str, config_dir: &Path) -> Option<String> {
+    let runtime_path = crate::config::runtime_overrides_path(config_dir);
+    let overrides = crate::config::RuntimeAgentOverrides::load(&runtime_path).ok()?;
+    let merged = overrides.merged_overrides();
+
+    for (agent_id, rules) in &merged {
+        for rule in rules {
+            if let Some(ref conditions) = rule.conditions {
+                if let Some(ref pattern) = conditions.bash_pattern {
+                    if let Ok(re) = regex::Regex::new(pattern) {
+                        if re.is_match(command) {
+                            // Find which mission this override belongs to
+                            for (mission_id, mission_ov) in &overrides.missions {
+                                if let Some(mission_rules) = mission_ov.overrides.get(agent_id) {
+                                    let matches = mission_rules.iter().any(|r| {
+                                        r.conditions.as_ref().and_then(|c| c.bash_pattern.as_ref())
+                                            == Some(pattern)
+                                    });
+                                    if matches {
+                                        return Some(mission_id.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -393,6 +438,85 @@ mod tests {
         assert!(!is_elevated(tmp.path(), "s1", None, "curl", &config));
         // Session s2 only has 1 too.
         assert!(!is_elevated(tmp.path(), "s2", None, "curl", &config));
+    }
+
+    #[test]
+    fn test_is_manifest_authorized_matches() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let overrides_path = crate::config::runtime_overrides_path(tmp.path());
+
+        let mut overrides = crate::config::RuntimeAgentOverrides::default();
+        let mut agent_map = std::collections::HashMap::new();
+        agent_map.insert(
+            "developer".to_string(),
+            vec![crate::config::Rule {
+                tools: vec!["Bash".to_string()],
+                conditions: Some(crate::config::Conditions {
+                    bash_pattern: Some("^cargo test\\b".to_string()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
+                action: crate::config::Action::AutoApprove,
+                reason: Some("Manifest test — scoped allow".to_string()),
+            }],
+        );
+        overrides.missions.insert(
+            "test-manifest".to_string(),
+            crate::config::MissionRuntimeOverrides {
+                applied_at: "2026-05-06T00:00:00Z".to_string(),
+                manifest_sha256: "abc".to_string(),
+                mission_ttl_hours: 8,
+                overrides: agent_map,
+            },
+        );
+        overrides.save(&overrides_path).unwrap();
+
+        assert_eq!(
+            is_manifest_authorized("cargo test --workspace", tmp.path()),
+            Some("test-manifest".to_string())
+        );
+    }
+
+    #[test]
+    fn test_is_manifest_authorized_no_match() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // Set up overrides with a pattern so the file exists but doesn't match.
+        let overrides_path = crate::config::runtime_overrides_path(tmp.path());
+        let mut overrides = crate::config::RuntimeAgentOverrides::default();
+        let mut agent_map = std::collections::HashMap::new();
+        agent_map.insert(
+            "developer".to_string(),
+            vec![crate::config::Rule {
+                tools: vec!["Bash".to_string()],
+                conditions: Some(crate::config::Conditions {
+                    bash_pattern: Some("^cargo test\\b".to_string()),
+                    path_within: None,
+                    path_not_match: None,
+                }),
+                action: crate::config::Action::AutoApprove,
+                reason: Some("Manifest test".to_string()),
+            }],
+        );
+        overrides.missions.insert(
+            "test-manifest".to_string(),
+            crate::config::MissionRuntimeOverrides {
+                applied_at: "2026-05-06T00:00:00Z".to_string(),
+                manifest_sha256: "abc".to_string(),
+                mission_ttl_hours: 8,
+                overrides: agent_map,
+            },
+        );
+        overrides.save(&overrides_path).unwrap();
+
+        // "rm -rf /" does not match "^cargo test\\b"
+        assert_eq!(is_manifest_authorized("rm -rf /", tmp.path()), None);
+    }
+
+    #[test]
+    fn test_is_manifest_authorized_no_file() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        // No runtime-agent-overrides.json exists
+        assert_eq!(is_manifest_authorized("cargo build", tmp.path()), None);
     }
 
     #[test]

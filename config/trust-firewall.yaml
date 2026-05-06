@@ -116,10 +116,10 @@ restricted:
     action: ask
     reason: 'Alert acknowledgment and auditor calibration require human review'
 
-  # Mission spawn creates patterns, delegations, and missions — requires human review
-  - tools: [mcp__colmena__mission_spawn]
+  # Mission lifecycle tools — spawn creates patterns/delegations, abort is irreversible
+  - tools: [mcp__colmena__mission_spawn, mcp__colmena__mission_abort]
     action: ask
-    reason: 'Mission spawn creates patterns and delegations — requires human review'
+    reason: 'MCP mission lifecycle — human reviews before executing'
 
   # PR merges — assistant can merge after verifying CI green.
   # gh pr merge doesn't carry branch context in the command string,

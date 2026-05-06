@@ -314,17 +314,23 @@ enum MissionAction {
     },
     /// Initialize a new mission manifest from a template.
     Init {
-        /// Mission slug (e.g., "bbp-followup").
-        slug: String,
+        /// Mission slug (e.g., "bbp-followup"). Required unless --from-history is set.
+        slug: Option<String>,
         /// Library pattern to pre-fill agent list.
         #[arg(long)]
         pattern: Option<String>,
         /// Mission description (defaults to placeholder).
         #[arg(long = "for")]
         description: Option<String>,
-        /// Output path (defaults to ./<slug>.mission.yaml).
+        /// Output path (defaults to ./<slug>.mission.yaml or ./YYYY-MM-DD-from-history.mission.yaml).
         #[arg(long)]
         output: Option<PathBuf>,
+        /// Generate manifest from audit.log Agent spawn history instead of a template.
+        #[arg(long)]
+        from_history: bool,
+        /// Filter history to a specific session ID (implies --from-history).
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Show mission status dashboard — agents, reviews, ELO, budget, alerts.
     Status {
@@ -443,12 +449,26 @@ fn main() {
                 pattern,
                 description,
                 output,
-            } => run_mission_init(
-                &slug,
-                pattern.as_deref(),
-                description.as_deref(),
-                output.as_deref(),
-            ),
+                from_history,
+                session,
+            } => {
+                if from_history || session.is_some() {
+                    let config_dir = default_config_dir();
+                    run_mission_init_from_history(
+                        session.as_deref(),
+                        output.as_deref(),
+                        &config_dir,
+                    )
+                } else {
+                    let s = slug.as_deref().unwrap_or("unnamed");
+                    run_mission_init(
+                        s,
+                        pattern.as_deref(),
+                        description.as_deref(),
+                        output.as_deref(),
+                    )
+                }
+            }
             MissionAction::Status { id } => run_mission_status(&id),
             MissionAction::Abort { id, reason, force } => {
                 run_mission_abort(&id, reason.as_deref(), force)
@@ -2934,6 +2954,147 @@ budget:
     std::fs::write(&output_path, &template)?;
     println!(
         "\u{2713} Manifest template written to {}",
+        output_path.display()
+    );
+    println!(
+        "  Next: edit the file, then run 'colmena mission validate {}'",
+        output_path.display()
+    );
+    Ok(())
+}
+
+/// Generate a mission manifest from audit.log Agent spawn history.
+fn run_mission_init_from_history(
+    session: Option<&str>,
+    output: Option<&Path>,
+    config_dir: &Path,
+) -> Result<()> {
+    let audit_log = config_dir.join("audit.log");
+    let history = colmena_core::history::SpawnHistory::from_audit_log(&audit_log, session)?;
+
+    if history.total_spawns == 0 {
+        println!("No Agent spawn events found in audit.log");
+        if session.is_some() {
+            println!("  (filtered by session -- try without --session to scan all)");
+        }
+        return Ok(());
+    }
+
+    // Log summary
+    println!(
+        "Detected {} Agent spawns across {} roles and {} sessions",
+        history.total_spawns,
+        history.roles.len(),
+        history.sessions.len()
+    );
+    println!(
+        "  Roles: {}",
+        if history.roles.is_empty() {
+            "(none)".to_string()
+        } else {
+            history.roles.join(", ")
+        }
+    );
+
+    let today = chrono::Utc::now().format("%Y-%m-%d");
+    let slug = "from-history";
+    let has_auditor = history.roles.iter().any(|r| r == "auditor");
+
+    // Build agents YAML block
+    let mut agents_yaml = String::from("agents:\n");
+    for role in &history.roles {
+        if role == "system" || role == "operator" {
+            continue;
+        }
+        agents_yaml.push_str(&format!("  - role: {}\n", role));
+    }
+    if !has_auditor {
+        agents_yaml.push_str("  # - role: auditor          # add if missing\n");
+    }
+
+    // Build scope paths
+    let paths_yaml = if history.paths.is_empty() {
+        "    - ${MISSION_DIR}\n".to_string()
+    } else {
+        history
+            .paths
+            .iter()
+            .take(5)
+            .map(|p| format!("    - {}\n", p))
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    // Build bash extra_allow from frequent commands
+    let bash_patterns_yaml = if history.frequent_commands.is_empty() {
+        String::new()
+    } else {
+        let mut out = String::from("    extra_allow:\n");
+        for line in history.frequent_commands.iter().take(5) {
+            let skeleton = line.split("  #").next().unwrap_or(line);
+            let escaped = regex::escape(skeleton.trim());
+            out.push_str(&format!("      - '^{}\\b'\n", escaped));
+        }
+        out
+    };
+
+    let author = std::env::var("USER").unwrap_or_else(|_| "operator".to_string());
+    let mission_id = format!("{}-{}", today, slug);
+    let filename = format!("{}.{}.mission.yaml", today, slug);
+
+    let template = format!(
+        r#"# {mission_id} — Mission Manifest v1 (generated from audit history)
+# Generated: {now}
+# Validate: colmena mission validate {filename}
+
+version: 1
+mission_id: {mission_id}
+description: "FILL: describe the mission goal"
+author: {author}                              # FILL: your name or handle
+
+# pattern: custom                          # library pattern to use (or "custom")
+mission_ttl_hours: 8                          # 1-24, default 8
+
+{agents}
+
+# Mission-wide scope — ALL agents can reach these paths.
+# Paths must be absolute. Use ${{MISSION_DIR}} for the mission workdir.
+scope:
+  paths:                                      # extracted from audit context
+{paths}
+{bash_patterns}
+  # path_not_match:                           # glob patterns to exclude
+  #   - "*.env"
+
+# Mission Gate: enforce | observe | off
+mission_gate: enforce
+
+# Auditor pool — ONLY roles with role_type: auditor.
+auditor_pool: ["auditor"]
+
+# Inter-agent protocol: terse | verbose
+inter_agent_protocol: terse
+
+# Budget — caps enforced at spawn time.
+budget:
+  max_hours: 8                                # <= 24
+  max_agents: 12                              # <= 25
+"#,
+        mission_id = mission_id,
+        now = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC"),
+        filename = filename,
+        author = author,
+        agents = agents_yaml,
+        paths = paths_yaml,
+        bash_patterns = bash_patterns_yaml,
+    );
+
+    let output_path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(&filename));
+    std::fs::write(&output_path, &template)?;
+    println!(
+        "\u{2713} Manifest skeleton written to {}",
         output_path.display()
     );
     println!(

@@ -468,7 +468,12 @@ pub fn generate_mission(
         let scope_section = manifest_agent
             .map(|a| {
                 let s = a.scope.clone().unwrap_or_default();
-                crate::emitters::claude_code::scope_block(&s.paths, &s.path_not_match)
+                crate::emitters::claude_code::scope_block(
+                    &s.paths,
+                    &s.path_not_match,
+                    &s.bash_patterns.extra_allow,
+                    &s.bash_patterns.extra_deny,
+                )
             })
             .unwrap_or_default();
         let task_section = manifest_agent
@@ -1765,6 +1770,97 @@ pub fn spawn_mission(
             .collect();
         merged.extend(delegations_to_insert.iter().cloned());
         crate::delegate::save_delegations(runtime_delegations_path, &merged)?;
+    }
+
+    // 6. Write runtime-agent-overrides.json from manifest scope.
+    //    Manifest scope (bash_patterns.extra_allow + paths) becomes
+    //    ephemeral per-mission agent overrides that the firewall loads
+    //    after trust-firewall.yaml (human > manifest precedence).
+    if let Some(m) = manifest {
+        let mut agent_overrides_map: std::collections::HashMap<String, Vec<crate::config::Rule>> =
+            std::collections::HashMap::new();
+        let mut has_rules = false;
+
+        for agent in &m.agents {
+            let agent_scope = agent.scope.clone().unwrap_or_else(|| m.scope.clone());
+            let mut rules: Vec<crate::config::Rule> = Vec::new();
+
+            // Bash extra_allow patterns → auto-approve rules
+            for pattern in &agent_scope.bash_patterns.extra_allow {
+                rules.push(crate::config::Rule {
+                    tools: vec!["Bash".to_string()],
+                    conditions: Some(crate::config::Conditions {
+                        bash_pattern: Some(pattern.clone()),
+                        path_within: None,
+                        path_not_match: None,
+                    }),
+                    action: Action::AutoApprove,
+                    reason: Some(format!(
+                        "Manifest {} — agent {} scoped allow",
+                        m.mission_id, agent.role
+                    )),
+                });
+                has_rules = true;
+            }
+
+            // Path rules from scope.paths → auto-approve Bash + Write + Edit
+            if !agent_scope.paths.is_empty() {
+                let path_not_match = if agent_scope.path_not_match.is_empty() {
+                    None
+                } else {
+                    Some(agent_scope.path_not_match.clone())
+                };
+                rules.push(crate::config::Rule {
+                    tools: vec!["Bash".to_string(), "Write".to_string(), "Edit".to_string()],
+                    conditions: Some(crate::config::Conditions {
+                        bash_pattern: None,
+                        path_within: Some(agent_scope.paths.clone()),
+                        path_not_match,
+                    }),
+                    action: Action::AutoApprove,
+                    reason: Some(format!(
+                        "Manifest {} — agent {} path scope",
+                        m.mission_id, agent.role
+                    )),
+                });
+                has_rules = true;
+            }
+
+            if !rules.is_empty() {
+                agent_overrides_map.insert(agent.role.clone(), rules);
+            }
+        }
+
+        if has_rules && !dry_run {
+            use crate::config::{
+                runtime_overrides_path, MissionRuntimeOverrides, RuntimeAgentOverrides,
+            };
+
+            let manifest_yaml = serde_yml::to_string(&m).unwrap_or_default();
+            let manifest_sha256 = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                manifest_yaml.hash(&mut h);
+                format!("{:016x}", h.finish())
+            };
+
+            let config_dir = config_dir
+                .ok_or_else(|| anyhow::anyhow!("config_dir required for manifest spawn"))?;
+            let runtime_path = runtime_overrides_path(config_dir);
+            let mut runtime = RuntimeAgentOverrides::load(&runtime_path).unwrap_or_default();
+            runtime.missions.insert(
+                m.mission_id.clone(),
+                MissionRuntimeOverrides {
+                    applied_at: Utc::now().to_rfc3339(),
+                    manifest_sha256,
+                    mission_ttl_hours: m.mission_ttl_hours,
+                    overrides: agent_overrides_map,
+                },
+            );
+            runtime
+                .save(&runtime_path)
+                .context("Failed to save runtime-agent-overrides.json")?;
+        }
     }
 
     // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
@@ -3670,6 +3766,199 @@ mod tests {
         assert!(
             !runtime_delegations_path.exists(),
             "dry_run must NOT write to disk"
+        );
+    }
+
+    // ── 23a. spawn_mission with manifest — writes runtime-agent-overrides.json
+
+    #[test]
+    fn test_spawn_with_manifest_extra_allow_writes_runtime_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let manifest = crate::mission_manifest::MissionManifest::from_yaml(
+            r#"version: 1
+mission_id: test-runtime-overrides
+description: "Test runtime overrides generation"
+author: test
+agents:
+  - role: developer
+    scope:
+      paths: [/tmp/test-scope]
+      bash_patterns:
+        extra_allow:
+          - '^cargo test\b'
+  - role: auditor
+"#,
+        )
+        .unwrap();
+
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
+        let result = spawn_mission(
+            "Test manifest override",
+            Some(&manifest),
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,             // session_id
+            &[],              // elo_ratings
+            Some(tmp.path()), // config_dir — required for runtime overrides path
+            false,            // extend_existing
+            false,            // dry_run
+            false,            // overwrite_subagents
+        );
+
+        assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
+
+        // Verify runtime-agent-overrides.json was written
+        let overrides_path = crate::config::runtime_overrides_path(tmp.path());
+        assert!(
+            overrides_path.exists(),
+            "runtime-agent-overrides.json not found at {:?}",
+            overrides_path
+        );
+
+        let loaded = crate::config::RuntimeAgentOverrides::load(&overrides_path).unwrap();
+        assert!(
+            loaded.missions.contains_key("test-runtime-overrides"),
+            "mission 'test-runtime-overrides' not found in runtime overrides"
+        );
+
+        let mission_ov = loaded.missions.get("test-runtime-overrides").unwrap();
+        assert!(
+            mission_ov.overrides.contains_key("developer"),
+            "developer role not found in overrides"
+        );
+
+        let rules = &mission_ov.overrides["developer"];
+        assert!(
+            !rules.is_empty(),
+            "Expected at least one rule for developer"
+        );
+
+        // Should have a bash_pattern rule for cargo test
+        let bash_rule = rules.iter().find(|r| {
+            r.conditions
+                .as_ref()
+                .and_then(|c| c.bash_pattern.as_ref())
+                .map(|p| p.contains("cargo test"))
+                .unwrap_or(false)
+        });
+        assert!(
+            bash_rule.is_some(),
+            "No bash_pattern rule found for cargo test"
+        );
+
+        // Should have a path rule for /tmp/test-scope
+        let path_rule = rules.iter().find(|r| {
+            r.conditions
+                .as_ref()
+                .and_then(|c| c.path_within.as_ref())
+                .map(|paths| paths.iter().any(|p| p.contains("test-scope")))
+                .unwrap_or(false)
+        });
+        assert!(
+            path_rule.is_some(),
+            "No path_within rule found for /tmp/test-scope"
+        );
+    }
+
+    // ── 23b. spawn_mission — dry_run skips runtime-overrides.json write
+
+    #[test]
+    fn test_spawn_dry_run_does_not_write_runtime_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let library_dir = tmp.path().join("library");
+        let missions_dir = tmp.path().join("missions");
+        std::fs::create_dir_all(library_dir.join("prompts")).unwrap();
+        std::fs::create_dir_all(library_dir.join("patterns")).unwrap();
+        std::fs::create_dir_all(&missions_dir).unwrap();
+
+        std::fs::write(library_dir.join("prompts/developer.md"), "# Dev\nCode.").unwrap();
+        std::fs::write(library_dir.join("prompts/auditor.md"), "# Auditor\nReview.").unwrap();
+
+        let roles = vec![
+            make_role("developer", "Developer", vec!["code_writing"]),
+            make_role("auditor", "Auditor", vec!["audit"]),
+        ];
+        let patterns = vec![make_pattern(
+            "code-review-cycle",
+            "Code Review Cycle",
+            vec!["Feature implementation with quality review"],
+            vec![],
+            vec![("agent", "developer"), ("critic", "auditor")],
+        )];
+
+        let manifest = crate::mission_manifest::MissionManifest::from_yaml(
+            r#"version: 1
+mission_id: test-dry-run-overrides
+description: "Dry run should not write overrides"
+author: test
+agents:
+  - role: developer
+    scope:
+      bash_patterns:
+        extra_allow:
+          - '^cargo build\b'
+  - role: auditor
+"#,
+        )
+        .unwrap();
+
+        let runtime_delegations_path = tmp.path().join("runtime-delegations.json");
+        let agents_dir = tmp.path().join("agents");
+        let result = spawn_mission(
+            "Test dry run override",
+            Some(&manifest),
+            &roles,
+            &patterns,
+            &library_dir,
+            &missions_dir,
+            &runtime_delegations_path,
+            &agents_dir,
+            None,
+            &[],
+            Some(tmp.path()),
+            false, // extend_existing
+            true,  // dry_run
+            false, // overwrite_subagents
+        );
+
+        assert!(
+            result.is_ok(),
+            "spawn_mission dry_run failed: {:?}",
+            result.err()
+        );
+
+        // Runtime overrides should NOT be written in dry-run mode
+        let overrides_path = crate::config::runtime_overrides_path(tmp.path());
+        let loaded = crate::config::RuntimeAgentOverrides::load(&overrides_path).unwrap();
+        assert!(
+            !loaded.missions.contains_key("test-dry-run-overrides"),
+            "dry_run must NOT write runtime-agent-overrides.json for mission"
         );
     }
 
