@@ -1,439 +1,405 @@
 # Use Cases
 
-Full tutorials for the four primary Colmena personas — **pentester**, **developer**, **devops**, **SRE** — plus a handful of cross-cutting examples. Each vignette is a working walkthrough: the setup, the spawn, the expected Colmena behavior, and what to look for when it runs.
-
-Each tutorial is sized to ~10–15 minutes of hands-on time after `colmena setup`.
+Four full tutorials, one per persona. Each walks through a real scenario from problem to outcome. Every manifest is valid against the current library — copy, edit, and run.
 
 ---
 
-## 1. Pentest engagement (Caido-native web + API)
+## 1. Pentest BBP (Coinbase follow-up)
 
-**Persona.** Pentester running an authorized engagement against a web application and its API surface. Caido is already installed and a project is loaded.
+**Persona.** Bug bounty hunter with a scoped target. You found a wallet popup vulnerability and generated 12 attack chains, but the triager needs reproducible evidence per chain. The mission has to fit within a BBP scope.
 
-**Pattern.** `caido-pentest` — hierarchical topology with a security architect coordinating a web pentester and an API pentester.
+**Pattern.** `bbp-impact-chain` — fan-out-merge topology with two pentesters, a weaponizer, and an auditor.
 
-### 1.1 Prerequisites
+### The problem
 
-- Caido MCP server registered in `~/.mcp.json` (the Caido project you are allowed to test is open).
-- Scope documented and signed off (rules of engagement).
-- `colmena setup` done, `colmena doctor` green.
+A single attack chain against a web3 wallet involves postMessage origin checks, JSON-RPC parsing, and event handler sequencing. You cannot trace all 12 chains in one Claude session — the context window fills up, you lose track of which chain has PoC code and which is still speculative. You need separate agents, each owning a subset of the surface, with a centralized review that produces a single structured submission.
 
-### 1.2 Decide whether to use Colmena
+### The manifest
 
-```bash
-colmena suggest "bug bounty on the payments API and its admin dashboard, looking for BOLA, XSS, and auth bypasses"
-```
-
-Expected output: `complexity=medium-high`, `recommended_agents=3`, verdict: **use Colmena**. The mix of web + API surfaces plus a coordinating role is exactly what the `caido-pentest` pattern is for.
-
-### 1.3 Pick the pattern explicitly
-
-```bash
-colmena library show caido-pentest
-```
-
-You will see:
-
-- `topology: hierarchical`
-- `communication: hub-and-spoke`
-- `roles_suggested: { lead: security_architect, attacker_1: web_pentester, attacker_2: api_pentester }`
-
-### 1.4 Spawn the mission
-
-From inside a Claude Code session:
-
-```
-mcp__colmena__mission_spawn(
-  mission="bug bounty on the payments API and its admin dashboard",
-  pattern_id="caido-pentest"
-)
-```
-
-Colmena produces:
-
-- Three agent prompts with mission marker `<!-- colmena:mission_id=... -->`
-- Scoped delegations (default 8h TTL) for `mcp__caido__*`, `Bash` limited to `nmap|nikto|nuclei|curl|python`, findings tools, `review_submit`
-- Security architect assigned as reviewer lead
-- Pre-filled `review_submit` call in each worker prompt
-
-### 1.5 Launch the agents
-
-Paste each generated prompt into a separate `Agent` tool call. Run them in parallel — the hierarchical topology allows web and API pentesters to work independently; the security architect synthesizes.
-
-### 1.6 What Colmena enforces during the run
-
-- **Bash is `restricted` by default for pentester roles.** Every `nmap` or `nuclei` run logs to `audit.log` with the rule ID.
-- **No `rm -rf` or `git push --force` even with delegation.** Those rules live in `blocked` — delegations cannot override.
-- **Findings go to the findings store.** `mcp__colmena__findings_list` returns them grouped by severity.
-- **Workers cannot stop without `review_submit`.** The `SubagentStop` hook enforces this.
-- **Stale review auto-invalidation.** If you re-run a worker after tweaking prompts, the prior pending review is auto-invalidated so the new one can pair with a reviewer.
-
-### 1.7 Wrap up
-
-When all workers have submitted, the security architect evaluates with `review_evaluate`:
-
-```
-mcp__colmena__review_evaluate(
-  review_id="r_...",
-  quality=8, precision=9, comprehensiveness=7,
-  findings=[ ... ]
-)
-```
-
-QPC scores feed the ELO log. If either pentester scored below the alert threshold, `mcp__colmena__alerts_list` will show a high-severity alert.
-
-### 1.8 Audit-ready artifacts
-
-Before you hand over the engagement report:
-
-```bash
-colmena stats --session $SESSION_ID       # prompts saved + tokens saved
-colmena elo show                           # role standings
-cat config/audit.log | wc -l               # every HTTP call, every nmap run
-```
-
-The `audit.log` plus the findings store are the engagement artifacts any auditor can replay.
-
----
-
-## 2. Dev team code review cycle
-
-**Persona.** Developer on a team. A feature branch is up, and you want systematic review before you merge — not a drive-by.
-
-**Pattern.** `code-review-cycle` — sequential topology with developer → code_reviewer → auditor.
-
-### 2.1 Why this pattern
-
-- The code reviewer is **genuinely read-only**: `tools_allowed` excludes `Write` and `Edit`. It cannot "helpfully" fix things and muddy the diff.
-- The auditor scores the work and the review via QPC (Quality + Precision + Comprehensiveness, 1–10 each).
-- Both the developer and the code reviewer earn ELO from the auditor's scores. Over time, good reviewers climb to `Elevated` and get auto-approve on their role tools; rubber-stampers drop to `Probation`.
-
-### 2.2 Decide whether to use Colmena
-
-```bash
-colmena suggest "review and harden error handling in the config loader, add tests"
-```
-
-Expected: `complexity=medium`, `recommended_agents=3`, verdict: **use Colmena**.
-
-### 2.3 Spawn
-
-```
-mcp__colmena__mission_spawn(
-  mission="review and harden error handling in the config loader, add tests"
-)
-```
-
-Colmena defaults to `code-review-cycle` when the mission keywords match "review" and "harden" and "tests". If you want to force the pattern:
-
-```
-mcp__colmena__mission_spawn(
-  mission="...",
-  pattern_id="code-review-cycle"
-)
-```
-
-### 2.4 Extend the developer's pre-approved Bash patterns
-
-The developer role has `cargo (build|test|check|clippy)` and `git (status|diff|log)` pre-approved by default. If your project needs additional commands like `pytest` or `npm test`, the CLI does NOT let you delegate `Bash` directly — unscoped Bash auto-approve would bypass the firewall. Two supported paths:
-
-**Option A — edit `config/trust-firewall.yaml`:** add an `agent_overrides` rule scoped by `bash_pattern`:
+Create `bbp-followup.mission.yaml`:
 
 ```yaml
-agent_overrides:
-  - agent: developer
-    tool: Bash
-    action: auto-approve
-    bash_pattern: '^(pytest|npm test|yarn test)\b'
-    reason: 'Developer test runners'
+version: 1
+mission_id: bbp-followup
+description: "Practical exploitation chain hunt for a Coinbase BBP target"
+author: operator
+pattern: bbp-impact-chain
+mission_ttl_hours: 8
+agents:
+  - role: bbp_pentester_web
+    count: 2
+    instances: [squad-a, squad-b]
+    task: "Verify and exploit postMessage origin bugs on target"
+    model: claude-opus-4-7
+  - role: weaponizer
+    task: "Validate impact chain, draft H1 report"
+  - role: auditor
+scope:
+  paths:
+    - /home/user/bugbounty/target
+  path_not_match:
+    - "*.env"
+    - "cdp_keys*"
+  bash_patterns:
+    extra_allow:
+      - '^curl -[a-zA-Z]+ https://[A-Za-z0-9.-]+\.target\.com\b[^&;|`$()]*$'
+    extra_deny:
+      - '^rm -rf'
+mission_gate: enforce
+auditor_pool: ["auditor"]
+acceptance_criteria:
+  - "PoC chain reproducible from clean browser"
+  - "All findings have severity tier with CVSS"
+tags: [bbp, web, coinbase]
 ```
 
-Reload takes effect on the next hook call — no CLI command needed. Run `colmena config check` to validate the YAML.
-
-**Option B — let a mission generate it:** `mcp__colmena__mission_spawn` auto-generates role-scoped Bash delegations from each role's YAML patterns. If your mission includes the developer role, it gets these patterns applied for the mission's TTL without any manual YAML editing.
-
-Why no CLI flag? Bash auto-approve without a regex scope is a firewall bypass — the CLI bails with a clear error if you try `colmena delegate add --tool Bash`. Scoped Bash lives in YAML (durable) or mission-generated delegations (ephemeral), never in ad-hoc CLI invocations.
-
-### 2.5 Run the cycle
-
-Paste prompts in order (developer, code_reviewer, auditor). The developer implements, submits for review. The code reviewer reads the diff, files findings. The auditor evaluates both.
-
-### 2.6 What to watch
-
-- `colmena review list --state pending` — current reviews waiting on an evaluator
-- `colmena review show <review-id>` — the artifact hash, the reviewer, the state
-- `colmena elo show` — the leaderboard per role
-- `colmena calibrate show` — current trust tier per agent
-
-### 2.7 Iterate
-
-The cycle can repeat. Each iteration is a new artifact hash, a new review. The ELO log is append-only JSONL — nothing is ever mutated, every evaluation is replayable.
+### Validate and spawn
 
 ```bash
-colmena calibrate run                 # apply ELO-based trust adjustments
+colmena mission validate bbp-followup.mission.yaml
+colmena mission spawn --from bbp-followup.mission.yaml
 ```
 
-If a reviewer is consistently finding real bugs, `calibrate run` will raise their tier to `Elevated` and the `PermissionRequest` hook will start auto-approving their role tools in CC sessions.
+The validation checks that `bbp_pentester_web`, `bbp_pentester_api`, `weaponizer`, and `auditor` exist in the library. The spawn creates four agent prompts with mission markers.
+
+### What happens during the run
+
+- **squad-a** and **squad-b** each own a subdomain. They probe with `curl`, inspect JavaScript handlers, and chain exploits.
+- **Chain-aware firewall** evaluates bash chains piece by piece — a long `curl | jq | tee` pipeline is checked per sub-command, not as one opaque blob.
+- **The weaponizer** takes validated findings and builds a submission chain: entry point, exploit primitive, impact demonstration, fix recommendation.
+- **The auditor** reviews each artifact. Scores feed ELO: `bbp_pentester_web` and `weaponizer` earn ratings based on reproducible evidence.
+
+### How the agents interact
+
+The `bbp-impact-chain` pattern uses fan-out-merge topology. squad-a and squad-b work in parallel — each gets a copy of the target scope but owns different subdomains. Each agent writes findings to the store as they go:
+
+```
+mcp__colmena__findings_list()
+# → squad-a: 3 findings (2x postMessage origin bypass, 1x JSON-RPC parsing)
+# → squad-b: 4 findings (1x CORS misconfig, 2x event handler race, 1x chain impact)
+```
+
+When both finish, the weaponizer reads their findings, validates the impact chain (entry -> exploit -> impact), and drafts the H1 submission. The auditor reviews each artifact with QPC scores.
+
+The chain-aware firewall matters here. A bash chain like `curl -s https://target.com/api/v1/user | jq .id | tee -a findings.txt` is evaluated as three pieces: `curl` is allowed by the `extra_allow` pattern, `jq` is a read-only pipe and falls through to auto-approve, `tee -a findings.txt` writes to the scoped mission directory — allowed. Without chain-aware evaluation, that whole command would be one opaque blob matched against bash patterns, and the safe `jq` and `tee` pieces would trigger an ASK.
+
+### Outcome
+
+8 ELO events generated. Reproducible artifacts in the findings store. The triager accepts the submission because every chain has its own artifact with hash-verified evidence.
 
 ---
 
-## 3. DevOps kubectl ops
+## 2. Dev refactor (Colmena self-dev)
 
-**Persona.** DevOps engineer running a rollout, troubleshooting a pod, or iterating on helm charts. Claude Code will touch `kubectl`, `helm`, `terraform`, `aws`, `docker`.
+**Persona.** Developer or tech lead. A Rust workspace with 4 crates needs a refactor that touches all crates — trust-firewall rules, ELO algorithm, CLI subcommands. One human with one Claude cannot track cross-crate side effects.
 
-**Role.** `devops_engineer` ships with exactly those bash patterns pre-approved and secrets paths blocked.
+**Pattern.** `colmena-self-dev` — iterative topology with multiple developers, a code reviewer, and an architect.
 
-### 3.1 What's pre-approved
+### The problem
 
-From `config/library/roles/devops_engineer.yaml`:
+A refactor touches `colmena-core`, `colmena-cli`, `colmena-mcp`, and `colmena-filter` at the same time. If one agent owns the whole workspace, the context window is too small. If you split manually, you miss dependencies. You need agents scoped per crate, a coordinator to catch regressions, and a reviewer who reads the full diff.
+
+### The manifest
+
+Create `colmena-refactor.mission.yaml`:
 
 ```yaml
-bash_patterns:
-  - '^docker\b'
-  - '^docker-compose\b'
-  - '^kubectl\b'
-  - '^helm\b'
-  - '^terraform\b'
-  - '^ansible(-playbook)?\b'
-  - '^aws\b'
-  - '^gcloud\b'
-  - '^az\b'
-  - '^make\b'
-  - '^gh\b'
-  - '^git\b'
-path_not_match:
-  - '*.env'
-  - '*credentials*'
-  - '*.key'
-  - '*.pem'
+version: 1
+mission_id: colmena-refactor
+description: "Refactor Colmena's review subsystem to reduce coupling"
+author: operator
+pattern: colmena-self-dev
+mission_ttl_hours: 16
+agents:
+  - role: colmena_developer
+    count: 2
+    instances: [core, cli]
+    task: "Implement review subsystem refactor per ARCHITECT_PLAN"
+  - role: colmena_code_reviewer
+    task: "Review diffs with QPC framework"
+  - role: auditor
+scope:
+  paths:
+    - /home/user/colmena
+  bash_patterns:
+    extra_allow:
+      - '^cargo (build|test|clippy|fmt)\b'
+      - '^git (diff|log|status|add|commit)\b'
+mission_gate: enforce
+budget:
+  max_hours: 16
+  max_agents: 12
+acceptance_criteria:
+  - "All existing tests pass"
+  - "No regression in review cycle"
+  - "ELO events recorded for all agents"
+tags: [dev, rust, colmena-self]
 ```
 
-- Any read or non-destructive call on those tools is auto-approved at role tier.
-- Any `Read`, `Write`, or `Edit` against paths matching the `path_not_match` globs is blocked — secrets stay out of the agent's context.
-
-### 3.2 Spawn a rollout mission
-
-```
-mcp__colmena__library_select(mission="roll out the new helm chart to staging, watch kube events, rollback on error")
-```
-
-Pattern suggestion: `plan-then-execute` (plan → execute → audit). Spawn:
-
-```
-mcp__colmena__mission_spawn(
-  mission="roll out the new helm chart to staging, watch kube events, rollback on error",
-  pattern_id="plan-then-execute"
-)
-```
-
-Once the mission is spawned, the `devops_engineer`'s full pattern set (kubectl, helm, terraform, docker, aws, gcloud, ansible, etc.) is auto-approved for the mission TTL. No further CLI setup is needed — `mission_spawn` emits the scoped Bash delegations from the role YAML automatically.
-
-If you want a pattern NOT in the role YAML (e.g. a custom `^my-internal-tool\b`) either (a) add it to `config/library/roles/devops_engineer.yaml` → `bash_patterns` so the next mission spawn picks it up, or (b) add an `agent_overrides` rule in `trust-firewall.yaml` as shown in §2.4 above. The CLI does not accept `Bash` as a `delegate add` target — it bails to prevent unscoped Bash bypass.
-
-### 3.3 What the firewall does during the run
-
-- `kubectl get pods -n staging` → **allow** (role auto-approve)
-- `helm upgrade --install myapp ./chart` → **allow**
-- `kubectl delete namespace staging` → **ask** (destructive verb matches a `restricted` pattern)
-- `terraform destroy -auto-approve` → **ask** (destructive verb)
-- `git push --force` → **block** (always)
-- Any read of `~/.kube/config.env` or `*.pem` → **block** (path rule)
-
-Every decision lands in `config/audit.log`. If the rollout goes sideways, that log is your post-mortem.
-
-### 3.4 Revoke mid-session
-
-If something looks off and you want the agent to stop touching kubernetes right now:
+### Validate and spawn
 
 ```bash
-colmena mission deactivate --id <mission-id>
+colmena mission validate colmena-refactor.mission.yaml
+colmena mission spawn --from colmena-refactor.mission.yaml
 ```
 
-This revokes every delegation for every agent in the mission. Even if CC has "learned" to allow `kubectl` via session rules, the `PreToolUse` mission revocation check fires first and denies.
+### What happens during the run
 
-### 3.5 Audit trail
+- **`workspace_scope: repo-wide`** — the pattern overrides the default mission-dir scope. Agents can read and write any file in the Colmena repo. Sensitive paths (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`) are excluded automatically.
+- **core agent** owns `colmena-core/`. **cli agent** owns `colmena-cli/` and `colmena-mcp/`. Each has `path_within` scoped to their crate.
+- **Architect** reviews the diff after each iteration. If tests fail, the work goes back.
+- **Auditor** scores with QPC. Low scores trigger alerts — the architect sees them via `mcp__colmena__alerts_list`.
 
-```bash
-grep kubectl config/audit.log | tail -n 50
-colmena stats --session $CC_SESSION_ID
-```
+### How the agents interact
 
-Every API call made against the cluster is attributable to a role, a session, and a rule ID.
+The `colmena-self-dev` pattern uses iterative topology. Each iteration flows: developer works -> code reviewer reads -> architect evaluates -> loop until clean.
+
+- **Iteration 1.** core agent refactors the review subsystem. CLI agent updates the command-line interface. Both write changes and submit for review.
+- **Review gate.** colmena_code_reviewer reads both diffs, checks for cross-crate dependency leaks, files findings. If the reviewer finds that core and cli disagree on the data format, the iteration fails.
+- **Architect decision.** If both pass review, the architect approves and the iteration closes. If either fails, the agents get the findings and start iteration 2.
+- **Auditor.** After the final iteration, the auditor scores the full cycle with QPC. Low scores trigger alerts visible via `mcp__colmena__alerts_list`.
+
+The `workspace_scope: repo-wide` flag is critical here. Without it, agents would be scoped to a mission directory and could not touch the project source tree. Sensitive paths (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`) are excluded automatically — no agent reads credential files during the refactor.
+
+### Outcome
+
+Refactor lands in 2 hours. 12 reviews. Zero regressions on `cargo test --workspace`. ELO moves for both colmena_developer and colmena_code_reviewer roles.
 
 ---
 
-## 4. SRE runbook execution
+## 3. Incident response (SRE latency spike)
 
-**Persona.** SRE responding to an alert. You want an agent to follow a runbook — inspect pods, logs, metrics, health endpoints — without ever writing to production state.
+**Persona.** On-call SRE at 3 AM. Production latency spiked. You need an agent to investigate — check pods, scrape metrics, tail logs — without exposing credentials or allowing any destructive operation.
 
-**Role.** `sre` pre-approves the read-side of ops (`kubectl get`, `prometheus`, `promtool`, `dig`, `journalctl`, `systemctl status/show/list-units`). Anything that writes routes through `ask`.
+**Pattern.** `plan-then-execute` — hierarchical topology with a coordinator and two workers.
 
-### 4.1 What's pre-approved
+### The problem
 
-From `config/library/roles/sre.yaml`:
+At 3 AM you want answers, not permission prompts. Every `kubectl get`, `curl` to the metrics endpoint, and `journalctl` query should be auto-approved because the role is scoped to read-only ops. But a hallucinated `kubectl delete` should be blocked — not asked, blocked. The agent must never see `~/.kube/config` or `.env` files.
+
+### The manifest
+
+Create `incident-latency.mission.yaml`:
 
 ```yaml
-bash_patterns:
-  - '^kubectl\b'
-  - '^helm\b'
-  - '^curl\b'
-  - '^prometheus\b'
-  - '^promtool\b'
-  - '^amtool\b'
-  - '^journalctl\b'
-  - '^systemctl (status|show|list-units)\b'
-  - '^dig\b'
-  - '^nslookup\b'
-  - '^traceroute\b'
+version: 1
+mission_id: inc-prod-latency
+description: "Investigate p99 latency spike on API gateway production"
+author: sre-oncall
+pattern: plan-then-execute
+mission_ttl_hours: 4
+agents:
+  - role: platform_engineer
+    task: "Investigate k8s cluster, check pod health and resource usage"
+  - role: sre
+    task: "Check metrics, logs, and recent deploys for regressions"
+  - role: auditor
+scope:
+  paths:
+    - /home/sre/incident-2026-0501
+  bash_patterns:
+    extra_allow:
+      - '^kubectl (get|describe|logs|top|events)\b'
+      - '^curl https://(grafana|prometheus)\.internal\b[^&;|`$()]*$'
+    extra_deny:
+      - '^kubectl (delete|apply|edit|patch|scale|exec)\b'
+      - '^rm -rf'
+      - '^sudo\b'
+mission_gate: enforce
+budget:
+  max_hours: 4
+  max_agents: 6
+acceptance_criteria:
+  - "Root cause identified with evidence from logs/metrics"
+  - "Mitigation proposed or rollback confirmed"
+  - "Incident report started"
+metadata:
+  ticket: INC-12345
+tags: [incident, prod, sre]
 ```
 
-Note that `systemctl` is restricted to read-only subcommands. `systemctl restart` or `systemctl stop` falls through to the default `ask`. Same for destructive verbs on `kubectl` (`delete`, `apply -f`).
-
-### 4.2 Spawn an investigation
-
-```
-mcp__colmena__mission_spawn(
-  mission="investigate the 5xx spike on checkout-api, draft an incident note with timeline and suspected cause"
-)
-```
-
-The role has `mcp__colmena__alerts_list` in `tools_allowed`, so the agent can pull current alerts into context. Findings the agent files during the investigation land in the findings store — queryable later by mission ID.
-
-### 4.3 Enforcement during the run
-
-- `kubectl get pods -n prod` → **allow**
-- `kubectl logs checkout-api-xyz -n prod --tail=200` → **allow**
-- `journalctl -u kubelet --since "1 hour ago"` → **allow**
-- `curl -s https://checkout-api.prod/healthz` → **allow** (read-only curl matches the default `^curl\b` bash pattern in the sre role; a `-X POST` or `-X DELETE` would route to `ask`)
-- `kubectl rollout restart deployment/checkout-api` → **ask**
-- Any write to `*.env`, `*credentials*`, `*.key`, `*.pem` → **block**
-
-### 4.4 Findings and alerts
-
-Alerts are append-only. The SRE agent can read them but cannot acknowledge them — acknowledgements require a human via `mcp__colmena__alerts_ack` (in the `restricted` tier).
-
-Findings filed by the agent during the investigation:
-
-```
-mcp__colmena__findings_query(mission_id="<mission-id>", severity="high")
-```
-
-Your post-incident report writes itself from the findings store and the `audit.log`.
-
-### 4.5 Stop the investigation instantly
+### Validate and spawn
 
 ```bash
-colmena mission deactivate --id <mission-id>
+colmena mission validate incident-latency.mission.yaml
+colmena mission spawn --from incident-latency.mission.yaml
 ```
 
-Every delegation for every agent in that mission is revoked. The investigation stops, the audit trail remains.
+### What the firewall enforces
+
+- `kubectl get pods -n prod` — auto-approved (matches the `extra_allow` pattern)
+- `kubectl logs checkout-api-xyz --tail=200` — auto-approved
+- `journalctl -u kubelet --since "1 hour ago"` — auto-approved (sre role includes this)
+- `curl -s https://grafana.internal/api/v1/query` — auto-approved
+- `kubectl delete deployment checkout-api` — blocked (matches `extra_deny`)
+- Any read of `*.env`, `*credentials*`, `*.key` — blocked by default path rules
+
+The `extra_deny` list is important. It overrides what would otherwise be auto-approved by role bash patterns. You can expand the agent's capabilities with `extra_allow` and restrict them with `extra_deny` in the same manifest.
+
+### Outcome
+
+Root cause identified in 15 minutes: a canary deployment with a misconfigured connection pool. Incident report drafted with timeline and evidence from logs and metrics. Agent deactivated with `colmena mission deactivate --id inc-prod-latency`. Audit trail intact for the post-mortem.
 
 ---
 
-## 5. Large refactoring with safety rails
+## 4. Compliance audit (log replay)
 
-**Persona.** Developer or tech lead. You need to refactor a core module — rename types, restructure files, update all call sites — and you want confidence nothing breaks.
+**Persona.** Security engineer. A SOC 2 auditor asks: "Show me every decision the trust firewall made during last month's penetration test."
 
-**Pattern.** `refactor-safe` — sequential: developer → code_reviewer (read-only) → auditor.
+**Pattern.** `pipeline` — sequential topology. Three agents review the audit log in stages.
 
-```
-mcp__colmena__mission_spawn(
-  mission="refactor the config module to split parsing from validation, preserve all public APIs"
-)
-```
+### The problem
 
-**What Colmena enforces:**
+The auditor wants evidence, not claims. You need to demonstrate that:
+- Every tool call was evaluated against a rule
+- Every decision has an audit trail with a matching rule ID
+- No decisions were made outside the policy
+- The audit log is append-only and tamper-evident
 
-- Developer has `Bash` patterns for `cargo (build|test|check|clippy)` and `git (status|diff|log)` — enough to validate refactors, not enough to push.
-- Code reviewer is **read-only** — `tools_allowed` excludes `Write` and `Edit`. Reviewer reads the diff, writes findings only.
-- Auditor validates that tests pass and the refactor is complete.
-
-If the cycle finds regressions, the auditor's review fails and no elevated trust is earned. The work has to go back to the developer.
-
----
-
-## 6. Documentation sprint (dogfooding note)
-
-**Real context.** The earlier version of these docs was produced by Colmena using the `docs-from-code` pattern — architect reads the codebase, developer writes docs, auditor validates against source. This rewrite you're reading right now is the M7.3 dogfood mission (`2026-04-21-m73-docs-overhaul`) using the same pattern.
+Your `config/audit.log` has entries like:
 
 ```
-mcp__colmena__mission_spawn(
-  mission="rewrite README and user-facing docs for first-time users",
-  pattern_id="docs-from-code"
-)
+[2026-04-15T10:30:00Z] ALLOW session=sess_abc agent=* tool=Read key="src/main.rs" rule=trust_circle
+[2026-04-15T10:30:05Z] ASK   session=sess_abc agent=pentester tool=Bash key="nmap -sV target" rule=restricted
+[2026-04-15T10:30:10Z] BLOCK session=sess_abc agent=* tool=Bash key="git push --force origin main" rule=blocked
 ```
 
-The sequential topology enforces order — writers can't start until the architect's notes exist. The auditor catches hallucinated APIs or wrong file paths before they reach users.
+The compliance audit manifest structures the review of this trail.
+
+### The manifest
+
+Create `compliance-audit.mission.yaml`:
+
+```yaml
+version: 1
+mission_id: compliance-audit-log-replay
+description: "Replay trust firewall audit log from last pentest and validate policy adherence"
+author: security-eng
+pattern: pipeline
+mission_ttl_hours: 8
+agents:
+  - role: security_hardener
+    task: "Review audit.log for policy violations — decisions that should have been blocked but were allowed"
+  - role: researcher
+    task: "Verify every rule_id in audit.log maps to a real firewall rule, check for gaps in coverage"
+  - role: auditor
+scope:
+  paths:
+    - /home/user/colmena/config
+  bash_patterns:
+    extra_allow:
+      - '^grep\b'
+      - '^wc\b'
+      - '^sort\b'
+      - '^head\b'
+      - '^tail\b'
+      - '^cut\b'
+      - '^awk\b'
+except_paths:
+  - "runtime-delegations.json"
+  - "runtime-agent-overrides.json"
+mission_gate: enforce
+auditor_pool: ["auditor"]
+budget:
+  max_hours: 8
+  max_agents: 6
+acceptance_criteria:
+  - "Every audit.log entry maps to a valid rule_id"
+  - "No allowance without matching rule"
+  - "All blocked decisions confirmed as correctly blocked"
+  - "Coverage report: percentage of tool calls matched by rule"
+metadata:
+  audit_period: "2026-04-01..2026-04-30"
+  standard: "SOC 2"
+tags: [compliance, audit, soc2]
+```
+
+### Validate and spawn
+
+```bash
+colmena mission validate compliance-audit.mission.yaml
+colmena mission spawn --from compliance-audit.mission.yaml
+```
+
+### What the run looks like
+
+- **security_hardener** reads `audit.log`, groups by rule_id, checks that every ALLOW decision had a valid rule. Flags any entry where the tool used exceeds the rule's scope (e.g., `Bash` with `rm -rf` auto-approved).
+- **researcher** cross-references rule_ids against `trust-firewall.yaml`. Validates regex patterns compiled correctly. Checks coverage: what percentage of tool calls matched a rule vs. fell through to the default action.
+- **auditor** evaluates both reports. Scores Quality (did they check everything?), Precision (were the findings accurate?), Comprehensiveness (did they cover all edge cases?).
+
+### Outcome
+
+The auditor accepts the audit log as evidence. No manual report needed. The findings store contains the coverage analysis — every decision attributable to a rule, every rule exercised during the pentest. The compliance requirement is met with version-controlled YAML and append-only JSONL, not a hand-written document.
 
 ---
 
 ## Common operations across all use cases
 
-### Mission lifecycle
+### Manifest lifecycle
 
 ```bash
-colmena mission list                                  # active missions with delegation counts
-colmena mission deactivate --id 2026-04-21-<slug>     # revoke all delegations for a mission
+colmena mission init <slug> --for "description"      # Create a manifest
+colmena mission init --from-history                   # Generate from audit log
+colmena mission init --from-history --session <id>    # From a specific session
+colmena mission validate <file>.mission.yaml          # Check schema + library refs
+colmena mission spawn --from <file>.mission.yaml      # Create agents + delegations
+colmena mission spawn --from <file>.mission.yaml --dry-run  # Preview first
+colmena mission list                                  # Active missions
+colmena mission status --id <id>                      # Detailed mission state
+colmena mission deactivate --id <id>                  # Revoke all delegations
+colmena mission abort --id <id>                       # Emergency stop
 ```
+
+The `--from-history` flag reads your `config/audit.log`, finds Agent spawn calls, and generates a manifest that reproduces the mission. This is useful for standardizing workflows you ran ad-hoc — instead of documenting what you did, tell Colmena to derive the manifest from the log. The `--session` filter limits history to a specific CC session.
+
+`mission status` shows the current state of each agent in a running mission: which agents have delegations active, which have submitted reviews, and which have pending evaluations. `mission abort` is the emergency stop — it kills all delegations immediately without waiting for review completion. Use `mission deactivate` for a clean shutdown that waits for in-flight reviews to complete.
 
 ### Trust and ELO
 
 ```bash
-colmena elo show                                      # leaderboard with ratings
-colmena calibrate show                                # trust tiers per agent
-colmena calibrate run                                 # apply ELO → firewall adjustments
-colmena calibrate reset                               # clear all ELO-based overrides (emergency)
+colmena elo show                          # Leaderboard with ratings
+colmena calibrate show                    # Trust tiers per agent
+colmena calibrate run                     # Apply ELO to firewall overrides
+colmena calibrate reset                   # Clear all ELO-based overrides
 ```
 
-### Findings and alerts (via MCP from inside CC)
+### Findings and alerts (via MCP from inside Claude Code)
 
 ```
 mcp__colmena__findings_query(severity="critical")
-mcp__colmena__findings_query(mission_id="2026-04-15-refactor-config-module")
+mcp__colmena__findings_query(mission_id="<mission-id>")
 mcp__colmena__findings_list()
 
 mcp__colmena__alerts_list(severity="high")
-mcp__colmena__alerts_ack(alert_id="all")              # human-only, after reviewing
+mcp__colmena__alerts_ack(alert_id="all")
 ```
 
 ### Session summary
 
 ```bash
-colmena stats                                         # total savings
-colmena stats --session <session-id>                  # per-session savings
+colmena stats                               # Total savings
+colmena stats --session <session-id>        # Per-session detail
 ```
 
-Before ending a CC session, ask your CC to call `mcp__colmena__session_stats` to print prompts saved and tokens saved.
-
----
+Before ending a Claude Code session, ask for `mcp__colmena__session_stats` to print the value summary.
 
 ## When to use Colmena vs vanilla Claude Code
 
-Use `colmena suggest` for a data-driven recommendation:
-
 ```bash
 colmena suggest "fix a typo in the README"
-# → complexity=low, recommended_agents=1, verdict: use CC directly
+# complexity=low, recommended_agents=1, verdict: use CC directly
 
 colmena suggest "add rate limiting to the API with tests and review"
-# → complexity=medium, recommended_agents=3+, verdict: use Colmena
+# complexity=medium, recommended_agents=3+, verdict: use Colmena
 
 colmena suggest "refactor auth module, migrate database schema, update all consumers"
-# → complexity=high, recommended_agents=5+, verdict: use Colmena
+# complexity=high, recommended_agents=5+, verdict: use Colmena
 ```
 
-The threshold is 3+ recommended agents. Below that, Colmena's orchestration overhead is not worth it. At 3+, the trust firewall, scoped permissions, auditor review enforcement, and ELO calibration start paying off.
-
----
+The threshold is 3+ recommended agents. Below that, the orchestration overhead is not worth it. At 3+, the trust firewall, scoped permissions, auditor review, and ELO calibration start paying off.
 
 ## Where to go next
 
-- [Getting Started](getting-started.md) — install and first run in 5 minutes
-- [Install Mode B](../install-mode-b.md) — let your CC bootstrap Colmena
-- [User Guide](../guide.md) — detailed walkthrough with a payments API audit example
-- [Architecture](../dev/architecture.md) — how the four crates fit together
-- [Contributing](../dev/contributing.md) — dev setup and PR workflow
-
----
-
-built with ❤️‍🔥 by AppSec
+- `docs/user/getting-started.md` — install and first mission in 5 minutes
+- `docs/guide.md` — deep dives into each subsystem
+- `docs/install-mode-b.md` — let your Claude Code bootstrap Colmena
