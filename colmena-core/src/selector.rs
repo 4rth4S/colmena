@@ -1777,10 +1777,8 @@ pub fn spawn_mission(
     //    ephemeral per-mission agent overrides that the firewall loads
     //    after trust-firewall.yaml (human > manifest precedence).
     if let Some(m) = manifest {
-        let mut agent_overrides_map: std::collections::HashMap<
-            String,
-            Vec<crate::config::Rule>,
-        > = std::collections::HashMap::new();
+        let mut agent_overrides_map: std::collections::HashMap<String, Vec<crate::config::Rule>> =
+            std::collections::HashMap::new();
         let mut has_rules = false;
 
         for agent in &m.agents {
@@ -1813,11 +1811,7 @@ pub fn spawn_mission(
                     Some(agent_scope.path_not_match.clone())
                 };
                 rules.push(crate::config::Rule {
-                    tools: vec![
-                        "Bash".to_string(),
-                        "Write".to_string(),
-                        "Edit".to_string(),
-                    ],
+                    tools: vec!["Bash".to_string(), "Write".to_string(), "Edit".to_string()],
                     conditions: Some(crate::config::Conditions {
                         bash_pattern: None,
                         path_within: Some(agent_scope.paths.clone()),
@@ -1838,7 +1832,9 @@ pub fn spawn_mission(
         }
 
         if has_rules && !dry_run {
-            use crate::config::{runtime_overrides_path, RuntimeAgentOverrides, MissionRuntimeOverrides};
+            use crate::config::{
+                runtime_overrides_path, MissionRuntimeOverrides, RuntimeAgentOverrides,
+            };
 
             let manifest_yaml = serde_yml::to_string(&m).unwrap_or_default();
             let manifest_sha256 = {
