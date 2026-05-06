@@ -1772,6 +1772,101 @@ pub fn spawn_mission(
         crate::delegate::save_delegations(runtime_delegations_path, &merged)?;
     }
 
+    // 6. Write runtime-agent-overrides.json from manifest scope.
+    //    Manifest scope (bash_patterns.extra_allow + paths) becomes
+    //    ephemeral per-mission agent overrides that the firewall loads
+    //    after trust-firewall.yaml (human > manifest precedence).
+    if let Some(m) = manifest {
+        let mut agent_overrides_map: std::collections::HashMap<
+            String,
+            Vec<crate::config::Rule>,
+        > = std::collections::HashMap::new();
+        let mut has_rules = false;
+
+        for agent in &m.agents {
+            let agent_scope = agent.scope.clone().unwrap_or_else(|| m.scope.clone());
+            let mut rules: Vec<crate::config::Rule> = Vec::new();
+
+            // Bash extra_allow patterns → auto-approve rules
+            for pattern in &agent_scope.bash_patterns.extra_allow {
+                rules.push(crate::config::Rule {
+                    tools: vec!["Bash".to_string()],
+                    conditions: Some(crate::config::Conditions {
+                        bash_pattern: Some(pattern.clone()),
+                        path_within: None,
+                        path_not_match: None,
+                    }),
+                    action: Action::AutoApprove,
+                    reason: Some(format!(
+                        "Manifest {} — agent {} scoped allow",
+                        m.mission_id, agent.role
+                    )),
+                });
+                has_rules = true;
+            }
+
+            // Path rules from scope.paths → auto-approve Bash + Write + Edit
+            if !agent_scope.paths.is_empty() {
+                let path_not_match = if agent_scope.path_not_match.is_empty() {
+                    None
+                } else {
+                    Some(agent_scope.path_not_match.clone())
+                };
+                rules.push(crate::config::Rule {
+                    tools: vec![
+                        "Bash".to_string(),
+                        "Write".to_string(),
+                        "Edit".to_string(),
+                    ],
+                    conditions: Some(crate::config::Conditions {
+                        bash_pattern: None,
+                        path_within: Some(agent_scope.paths.clone()),
+                        path_not_match,
+                    }),
+                    action: Action::AutoApprove,
+                    reason: Some(format!(
+                        "Manifest {} — agent {} path scope",
+                        m.mission_id, agent.role
+                    )),
+                });
+                has_rules = true;
+            }
+
+            if !rules.is_empty() {
+                agent_overrides_map.insert(agent.role.clone(), rules);
+            }
+        }
+
+        if has_rules && !dry_run {
+            use crate::config::{runtime_overrides_path, RuntimeAgentOverrides, MissionRuntimeOverrides};
+
+            let manifest_yaml = serde_yml::to_string(&m).unwrap_or_default();
+            let manifest_sha256 = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                manifest_yaml.hash(&mut h);
+                format!("{:016x}", h.finish())
+            };
+
+            let config_dir = config_dir
+                .ok_or_else(|| anyhow::anyhow!("config_dir required for manifest spawn"))?;
+            let runtime_path = runtime_overrides_path(config_dir);
+            let mut runtime = RuntimeAgentOverrides::load(&runtime_path).unwrap_or_default();
+            runtime.missions.insert(
+                m.mission_id.clone(),
+                MissionRuntimeOverrides {
+                    applied_at: Utc::now().to_rfc3339(),
+                    manifest_sha256,
+                    mission_ttl_hours: m.mission_ttl_hours,
+                    overrides: agent_overrides_map,
+                },
+            );
+            runtime
+                .save(&runtime_path)
+                .context("Failed to save runtime-agent-overrides.json")?;
+        }
+    }
+
     // Clean up auto-created pattern from patterns list if needed (it was persisted by scaffold_pattern)
     let _ = &auto_created_pattern; // suppress unused warning
 
