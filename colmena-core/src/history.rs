@@ -84,7 +84,7 @@ impl SpawnHistory {
         }
 
         let mut cmd_vec: Vec<(String, usize)> = commands.into_iter().collect();
-        cmd_vec.sort_by(|a, b| b.1.cmp(&a.1));
+        cmd_vec.sort_by_key(|b| std::cmp::Reverse(b.1));
         let frequent_commands: Vec<String> = cmd_vec
             .into_iter()
             .take(10)
@@ -123,20 +123,17 @@ fn parse_jsonl_line(
     commands: &mut HashMap<String, usize>,
     total_spawns: &mut usize,
 ) {
-    let tool = parsed
-        .get("tool")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let tool = parsed.get("tool").and_then(|v| v.as_str()).unwrap_or("");
     if tool != "Agent" {
         return;
     }
 
-    if let Some(ref sid) = session_id {
+    if let Some(sid) = session_id {
         let event_session = parsed
             .get("session_id")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if event_session != *sid {
+        if event_session != sid {
             return;
         }
     }
@@ -260,7 +257,9 @@ fn parse_kv_line(
     let (event_type, rest_kv) = {
         let rest_trimmed = rest.trim_start();
         let skip = rest.len() - rest_trimmed.len();
-        let first_space = rest_trimmed.find(char::is_whitespace).unwrap_or(rest_trimmed.len());
+        let first_space = rest_trimmed
+            .find(char::is_whitespace)
+            .unwrap_or(rest_trimmed.len());
         let event = &rest_trimmed[..first_space];
         // Rest of line after event type
         let kv_raw = &rest[skip + first_space..];
@@ -277,11 +276,18 @@ fn parse_kv_line(
         map.entry(k).or_default().push(v);
     }
 
-    let tool = map.get("tool").and_then(|v| v.first()).copied().unwrap_or("");
+    let tool = map
+        .get("tool")
+        .and_then(|v| v.first())
+        .copied()
+        .unwrap_or("");
 
     // Check for Agent tool events in DECISION events or DELEGATE_EXPIRE
     let is_agent_event = tool == "Agent"
-        && (event_type == "ALLOW" || event_type == "ASK" || event_type == "DENY" || event_type == "DELEGATE_EXPIRE");
+        && (event_type == "ALLOW"
+            || event_type == "ASK"
+            || event_type == "DENY"
+            || event_type == "DELEGATE_EXPIRE");
 
     if !is_agent_event {
         return;
@@ -293,8 +299,8 @@ fn parse_kv_line(
         .copied()
         .unwrap_or("");
 
-    if let Some(ref sid) = session_id {
-        if event_session != *sid {
+    if let Some(sid) = session_id {
+        if event_session != sid {
             return;
         }
     }
