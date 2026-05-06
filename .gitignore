@@ -12,6 +12,8 @@ config/missions/
 
 # Runtime state (ephemeral)
 config/runtime-delegations.json
+config/runtime-agent-overrides.json
+config/auto-elevate-state.json
 config/revoked-missions.json
 config/elo/
 config/findings/
@@ -20,6 +22,7 @@ config/alerts.json
 config/filter-stats.jsonl
 config/.runtime-delegations.lock
 config/session-gate.json
+config/audit.log.*
 
 # RRA / threat model exports
 RRA_*.csv
