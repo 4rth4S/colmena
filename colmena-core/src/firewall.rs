@@ -110,6 +110,32 @@ pub fn evaluate_with_elo(
     // This lets users author `agent_overrides` keyed by the stable agent name
     // (e.g. `cron-worker`) and have it match regardless of whether CC passes
     // that name as `agent_id` or only as `agent_type`.
+
+    // Load runtime manifest overrides (best-effort, safe fallback: None).
+    // GC is lazy — expired missions are cleaned on each hook invocation.
+    let runtime_agent_overrides: Option<HashMap<String, Vec<Rule>>> =
+        if let Some(dir) = config_dir {
+            let path = crate::config::runtime_overrides_path(dir);
+            match crate::config::RuntimeAgentOverrides::load(&path) {
+                Ok(mut runtime) => {
+                    let removed = runtime.gc_expired();
+                    if removed > 0 {
+                        let _ = runtime.save(&path);
+                    }
+                    let merged = runtime.merged_overrides();
+                    // Compile patterns for runtime overrides
+                    for (agent_id, rules) in &merged {
+                        let tier = format!("manifest_override:{agent_id}");
+                        let _ = crate::config::compile_rules(rules, &tier, &mut all_patterns);
+                    }
+                    Some(merged)
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
     for key in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
         .into_iter()
         .flatten()
@@ -119,6 +145,15 @@ pub fn evaluate_with_elo(
             let tier = format!("agent_override:{key}");
             if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
                 return decision;
+            }
+        }
+        // 3a2. Runtime manifest overrides (YAML > manifest > ELO precedence)
+        if let Some(runtime_overrides) = &runtime_agent_overrides {
+            if let Some(rules) = runtime_overrides.get(key) {
+                let tier = format!("manifest_override:{key}");
+                if let Some(decision) = check_rules(rules, payload, &tier, &all_patterns) {
+                    return decision;
+                }
             }
         }
         // 3b. ELO-calibrated overrides
