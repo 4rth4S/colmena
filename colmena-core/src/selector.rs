@@ -468,7 +468,12 @@ pub fn generate_mission(
         let scope_section = manifest_agent
             .map(|a| {
                 let s = a.scope.clone().unwrap_or_default();
-                crate::emitters::claude_code::scope_block(&s.paths, &s.path_not_match)
+                crate::emitters::claude_code::scope_block(
+                    &s.paths,
+                    &s.path_not_match,
+                    &s.bash_patterns.extra_allow,
+                    &s.bash_patterns.extra_deny,
+                )
             })
             .unwrap_or_default();
         let task_section = manifest_agent
