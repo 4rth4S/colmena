@@ -2456,7 +2456,11 @@ fn run_mission_spawn(
     session_gate: bool,
     no_gate_confirmed: bool,
 ) -> Result<()> {
-    use colmena_core::mission_manifest::{ManifestRole, ManifestScope, MissionManifest};
+    use colmena_core::mission_manifest::{
+        InterAgentProtocol, ManifestAgent, ManifestBashPatterns, ManifestScope, MissionBudget,
+        MissionGate, MissionManifest,
+    };
+    use std::collections::HashMap;
 
     let manifest: MissionManifest = if let Some(path) = from {
         match MissionManifest::from_path(&path) {
@@ -2476,13 +2480,15 @@ fn run_mission_spawn(
         if roles_arg.is_empty() {
             anyhow::bail!("at least one --role required when --from not provided");
         }
-        let roles: Vec<ManifestRole> = roles_arg
+        let agents: Vec<ManifestAgent> = roles_arg
             .iter()
             .enumerate()
-            .map(|(i, name)| ManifestRole {
-                name: name.clone(),
-                scope: ManifestScope {
-                    owns: scopes_arg
+            .map(|(i, name)| ManifestAgent {
+                role: name.clone(),
+                count: 1,
+                instances: Vec::new(),
+                scope: {
+                    let paths: Vec<String> = scopes_arg
                         .get(i)
                         .map(|csv| {
                             csv.split(',')
@@ -2490,17 +2496,37 @@ fn run_mission_spawn(
                                 .filter(|s| !s.is_empty())
                                 .collect()
                         })
-                        .unwrap_or_default(),
-                    forbidden: Vec::new(),
+                        .unwrap_or_default();
+                    if paths.is_empty() {
+                        None
+                    } else {
+                        Some(ManifestScope {
+                            paths,
+                            path_not_match: Vec::new(),
+                            bash_patterns: ManifestBashPatterns::default(),
+                        })
+                    }
                 },
                 task: tasks_arg.get(i).cloned().unwrap_or_default(),
+                model: None,
             })
             .collect();
         let m = MissionManifest {
-            id: mission_text.clone(),
-            pattern: pattern_id,
+            version: 1,
+            mission_id: mission_text.clone(),
+            description: mission_text.clone(),
+            author: "cli".to_string(),
+            pattern: Some(pattern_id),
             mission_ttl_hours: mission_ttl,
-            roles,
+            agents,
+            scope: ManifestScope::default(),
+            mission_gate: MissionGate::default(),
+            auditor_pool: vec!["auditor".to_string()],
+            inter_agent_protocol: InterAgentProtocol::default(),
+            budget: MissionBudget::default(),
+            acceptance_criteria: Vec::new(),
+            metadata: HashMap::new(),
+            tags: Vec::new(),
         };
         if let Err(e) = m.validate() {
             eprintln!("ERROR: {e}");
@@ -2516,12 +2542,12 @@ fn run_mission_spawn(
         colmena_core::library::load_patterns(&library_dir).context("failed to load patterns")?;
 
     // Validate all roles referenced by the manifest exist in the library.
-    for r in &manifest.roles {
-        if !all_roles.iter().any(|lr| lr.id == r.name) {
+    for r in &manifest.agents {
+        if !all_roles.iter().any(|lr| lr.id == r.role) {
             eprintln!(
                 "ERROR: Role '{}' referenced in manifest but not found in library. \
                  Create it first with: colmena library create-role --id {} --description \"...\"",
-                r.name, r.name
+                r.role, r.role
             );
             std::process::exit(1);
         }
@@ -2540,7 +2566,7 @@ fn run_mission_spawn(
     let cfg = colmena_core::config::load_config(&firewall_yaml, &cwd_str)?;
 
     if matches!(cfg.enforce_missions, Some(false))
-        && manifest.roles.len() >= 3
+        && manifest.agents.len() >= 3
         && !session_gate
         && !no_gate_confirmed
     {
@@ -2555,7 +2581,7 @@ fn run_mission_spawn(
              [2] Edit trust-firewall.yaml and set enforce_missions: true\n  \
              [3] Re-run with --no-gate-confirmed (observation mode, no audit-of-closure)\n\n\
              Aborting by default.",
-            manifest.roles.len()
+            manifest.agents.len()
         );
         std::process::exit(1);
     }
@@ -2570,7 +2596,7 @@ fn run_mission_spawn(
     let agents_dir = colmena_core::paths::default_agents_dir()?;
 
     let result = colmena_core::selector::spawn_mission(
-        &manifest.id,
+        &manifest.mission_id,
         Some(&manifest),
         &all_roles,
         &all_patterns,

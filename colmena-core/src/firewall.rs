@@ -113,28 +113,28 @@ pub fn evaluate_with_elo(
 
     // Load runtime manifest overrides (best-effort, safe fallback: None).
     // GC is lazy — expired missions are cleaned on each hook invocation.
-    let runtime_agent_overrides: Option<HashMap<String, Vec<Rule>>> =
-        if let Some(dir) = config_dir {
-            let path = crate::config::runtime_overrides_path(dir);
-            match crate::config::RuntimeAgentOverrides::load(&path) {
-                Ok(mut runtime) => {
-                    let removed = runtime.gc_expired();
-                    if removed > 0 {
-                        let _ = runtime.save(&path);
-                    }
-                    let merged = runtime.merged_overrides();
-                    // Compile patterns for runtime overrides
-                    for (agent_id, rules) in &merged {
-                        let tier = format!("manifest_override:{agent_id}");
-                        let _ = crate::config::compile_rules(rules, &tier, &mut all_patterns);
-                    }
-                    Some(merged)
+    let runtime_agent_overrides: Option<HashMap<String, Vec<Rule>>> = if let Some(dir) = config_dir
+    {
+        let path = crate::config::runtime_overrides_path(dir);
+        match crate::config::RuntimeAgentOverrides::load(&path) {
+            Ok(mut runtime) => {
+                let removed = runtime.gc_expired();
+                if removed > 0 {
+                    let _ = runtime.save(&path);
                 }
-                Err(_) => None,
+                let merged = runtime.merged_overrides();
+                // Compile patterns for runtime overrides
+                for (agent_id, rules) in &merged {
+                    let tier = format!("manifest_override:{agent_id}");
+                    let _ = crate::config::compile_rules(rules, &tier, &mut all_patterns);
+                }
+                Some(merged)
             }
-        } else {
-            None
-        };
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
 
     for key in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
         .into_iter()

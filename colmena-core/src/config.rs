@@ -516,10 +516,12 @@ impl RuntimeAgentOverrides {
             .missions
             .iter()
             .filter_map(|(id, m)| {
-                chrono::DateTime::parse_from_rfc3339(&m.applied_at).ok().map(|ts| {
-                    let deadline = ts + chrono::Duration::hours(m.mission_ttl_hours);
-                    (id.clone(), now > deadline)
-                })
+                chrono::DateTime::parse_from_rfc3339(&m.applied_at)
+                    .ok()
+                    .map(|ts| {
+                        let deadline = ts + chrono::Duration::hours(m.mission_ttl_hours);
+                        (id.clone(), now > deadline)
+                    })
             })
             .filter(|(_, is_expired)| *is_expired)
             .map(|(id, _)| id)
