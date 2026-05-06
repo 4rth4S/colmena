@@ -14,6 +14,8 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::mission_manifest::build_agent_id;
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// A pattern recommendation with score and details
@@ -1384,6 +1386,31 @@ pub fn suggest_mission_size(
 // ── Mission Spawn — One-Step Pipeline ────────────────────────────────────────
 
 /// One-step mission creation: select pattern → auto-create if needed → map roles →
+/// Build a role_id → list of instance suffixes map from a manifest.
+///
+/// Returns a map where each key is a role_id and each value is a vector of
+/// `Option<String>` suffixes (one per instance). `None` means no suffix
+/// (count=1, backward-compatible). Returns an empty map if no manifest or
+/// no agents.
+fn build_instance_map(
+    manifest: Option<&crate::mission_manifest::MissionManifest>,
+) -> std::collections::HashMap<String, Vec<Option<String>>> {
+    let mut map: std::collections::HashMap<String, Vec<Option<String>>> =
+        std::collections::HashMap::new();
+    if let Some(m) = manifest {
+        for agent in &m.agents {
+            if agent.count > 1 && !agent.instances.is_empty() {
+                let suffixes: Vec<Option<String>> =
+                    agent.instances.iter().map(|s| Some(s.clone())).collect();
+                map.insert(agent.role.clone(), suffixes);
+            } else {
+                map.insert(agent.role.clone(), vec![None]);
+            }
+        }
+    }
+    map
+}
+
 /// generate mission with markers → persist delegations.
 ///
 /// Pipeline:
@@ -1596,6 +1623,9 @@ pub fn spawn_mission(
     let mission_marker = format!("{}{} -->", MISSION_MARKER_PREFIX, mission_name);
     let mut agent_prompts = Vec::new();
 
+    // Build instance fan-out map: role_id → list of (agent_id, suffix)
+    let instance_map = build_instance_map(manifest);
+
     for agent_cfg in &mission_config.agent_configs {
         // Use the in-memory content so dry_run works — the CLAUDE.md file
         // may not exist on disk when generate_mission was called with dry_run.
@@ -1606,13 +1636,33 @@ pub fn spawn_mission(
             .find(|r| r.id == agent_cfg.role_id)
             .and_then(|r| r.model.clone());
 
-        agent_prompts.push(AgentPrompt {
-            role_id: agent_cfg.role_id.clone(),
-            role_name: agent_cfg.role_name.clone(),
-            prompt,
-            claude_md_path: agent_cfg.claude_md_path.clone(),
-            model,
-        });
+        let instances = instance_map.get(agent_cfg.role_id.as_str());
+        if let Some(suffixes) = instances {
+            for suffix in suffixes {
+                let agent_id = build_agent_id(&mission_name, &agent_cfg.role_id, suffix.as_deref());
+                let display_name = suffix.as_deref().unwrap_or(&agent_cfg.role_id);
+                let instance_prompt = format!(
+                    "<!-- colmena:agent_id={agent_id} -->\n{prompt}",
+                    agent_id = agent_id,
+                    prompt = prompt
+                );
+                agent_prompts.push(AgentPrompt {
+                    role_id: agent_cfg.role_id.clone(),
+                    role_name: format!("{} ({})", agent_cfg.role_name, display_name),
+                    prompt: instance_prompt,
+                    claude_md_path: agent_cfg.claude_md_path.clone(),
+                    model: model.clone(),
+                });
+            }
+        } else {
+            agent_prompts.push(AgentPrompt {
+                role_id: agent_cfg.role_id.clone(),
+                role_name: agent_cfg.role_name.clone(),
+                prompt,
+                claude_md_path: agent_cfg.claude_md_path.clone(),
+                model,
+            });
+        }
     }
 
     // 4b. M7.3 live-surface: write ~/.claude/agents/<role>.md for each mission role.
@@ -1630,69 +1680,97 @@ pub fn spawn_mission(
             .get(assignment.role_id.as_str())
             .ok_or_else(|| anyhow::anyhow!("role not in map: {}", assignment.role_id))?;
 
-        let subagent_path = agents_dir.join(format!("{}.md", assignment.role_id));
+        // Multi-instance: if manifest specifies count>1, create one subagent
+        // file per instance with a namespaced agent_id. Otherwise create one
+        // file with the base role_id (backward compat).
+        let instances = instance_map.get(assignment.role_id.as_str());
+        let suffixes: Vec<Option<String>> = instances.cloned().unwrap_or_else(|| vec![None]);
 
-        // Hybrid roles (auditor) need both worker and reviewer tools.
-        let mut required: Vec<&str> = crate::emitters::claude_code::WORKER_REQUIRED_TOOLS.to_vec();
-        if role.role_type.as_deref() == Some("auditor") {
-            required.extend_from_slice(crate::emitters::claude_code::REVIEWER_REQUIRED_TOOLS);
-        }
+        for suffix in &suffixes {
+            let agent_id = build_agent_id(&mission_name, &assignment.role_id, suffix.as_deref());
+            let subagent_path = agents_dir.join(format!("{}.md", agent_id));
 
-        let check = crate::emitters::claude_code::check_subagent_minimums(
-            &subagent_path,
-            &assignment.role_id,
-            &required,
-        )?;
-
-        match check {
-            crate::emitters::claude_code::MinimumsCheck::Pass => {
-                subagent_files_respected.push(subagent_path.clone());
+            // Hybrid roles (auditor) need both worker and reviewer tools.
+            let mut required: Vec<&str> =
+                crate::emitters::claude_code::WORKER_REQUIRED_TOOLS.to_vec();
+            if role.role_type.as_deref() == Some("auditor") {
+                required.extend_from_slice(crate::emitters::claude_code::REVIEWER_REQUIRED_TOOLS);
             }
-            crate::emitters::claude_code::MinimumsCheck::Fail { reasons } => {
-                if overwrite_subagents {
+
+            // Multi-instance: always write instance-specific files so each
+            // instance gets a unique `name:` field. Single-instance (backward
+            // compat): check the base role file first.
+            let is_multi = suffixes.len() > 1 || suffix.is_some();
+            let check_path: PathBuf = if is_multi {
+                subagent_path.clone()
+            } else {
+                let bp = agents_dir.join(format!("{}.md", assignment.role_id));
+                if bp.exists() {
+                    bp
+                } else {
+                    subagent_path.clone()
+                }
+            };
+            let check = crate::emitters::claude_code::check_subagent_minimums(
+                &check_path,
+                &assignment.role_id,
+                &required,
+            )?;
+
+            match check {
+                crate::emitters::claude_code::MinimumsCheck::Pass => {
+                    subagent_files_respected.push(check_path.clone());
+                }
+                crate::emitters::claude_code::MinimumsCheck::Fail { reasons } => {
+                    if overwrite_subagents {
+                        if !dry_run {
+                            let body = format!(
+                                "# {role_name} ({agent_id})\n\n\
+                                 Auto-generated by Colmena `mission spawn`. See \
+                                 `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
+                                role_name = assignment.role_name,
+                                agent_id = agent_id,
+                                role_id = assignment.role_id,
+                                mission_dir = mission_config.mission_dir.display(),
+                            );
+                            crate::emitters::claude_code::write_subagent_file(
+                                &subagent_path,
+                                &agent_id,
+                                &role.description,
+                                &crate::emitters::claude_code::mission_tool_set(
+                                    &role.tools_allowed,
+                                ),
+                                &body,
+                                true, // overwrite
+                            )?;
+                        }
+                        subagent_files_written.push(subagent_path.clone());
+                    } else {
+                        subagent_fails.push((agent_id.clone(), reasons));
+                    }
+                }
+                crate::emitters::claude_code::MinimumsCheck::Absent => {
                     if !dry_run {
                         let body = format!(
-                            "# {role_name} ({role_id})\n\n\
+                            "# {role_name} ({agent_id})\n\n\
                              Auto-generated by Colmena `mission spawn`. See \
                              `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
                             role_name = assignment.role_name,
+                            agent_id = agent_id,
                             role_id = assignment.role_id,
                             mission_dir = mission_config.mission_dir.display(),
                         );
                         crate::emitters::claude_code::write_subagent_file(
                             &subagent_path,
-                            &assignment.role_id,
+                            &agent_id,
                             &role.description,
                             &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
                             &body,
-                            true, // overwrite
+                            false,
                         )?;
                     }
                     subagent_files_written.push(subagent_path.clone());
-                } else {
-                    subagent_fails.push((assignment.role_id.clone(), reasons));
                 }
-            }
-            crate::emitters::claude_code::MinimumsCheck::Absent => {
-                if !dry_run {
-                    let body = format!(
-                        "# {role_name} ({role_id})\n\n\
-                         Auto-generated by Colmena `mission spawn`. See \
-                         `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
-                        role_name = assignment.role_name,
-                        role_id = assignment.role_id,
-                        mission_dir = mission_config.mission_dir.display(),
-                    );
-                    crate::emitters::claude_code::write_subagent_file(
-                        &subagent_path,
-                        &assignment.role_id,
-                        &role.description,
-                        &crate::emitters::claude_code::mission_tool_set(&role.tools_allowed),
-                        &body,
-                        false,
-                    )?;
-                }
-                subagent_files_written.push(subagent_path.clone());
             }
         }
     }
@@ -1827,7 +1905,17 @@ pub fn spawn_mission(
             }
 
             if !rules.is_empty() {
-                agent_overrides_map.insert(agent.role.clone(), rules);
+                // Multi-instance: insert rules for each instance's agent_id.
+                // The firewall matches on agent_id (or agent_type fallback), so
+                // each instance needs its own entry. All instances of the same
+                // role share the same rules.
+                let instances = instance_map.get(agent.role.as_str());
+                let suffixes: Vec<Option<String>> =
+                    instances.cloned().unwrap_or_else(|| vec![None]);
+                for suffix in &suffixes {
+                    let agent_id = build_agent_id(&mission_name, &agent.role, suffix.as_deref());
+                    agent_overrides_map.insert(agent_id, rules.clone());
+                }
             }
         }
 
