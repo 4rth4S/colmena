@@ -658,7 +658,7 @@
       </div>
     </div>
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Measured impact (payments API audit)</h3>
+      <h3 style="font-size: 1rem; color: var(--text);">Measured impact (multi-agent session)</h3>
       <table class="comparison-table">
         <thead>
           <tr>
@@ -783,7 +783,7 @@
 version: 1
 mission_id: webapp-pentest
 description: "Web app pentest: origin bypass
-  bypass on the widget endpoint"
+  and API authorization audit"
 author: appsec-team
 mission_ttl_hours: 8
 agents:
@@ -791,11 +791,11 @@ agents:
     count: 1
     task: |
       Test origin header bypass on
-      web endpoints. Output: findings/
+      widget endpoint. Output: findings/
   - role: bbp_pentester_api
     count: 1
     task: |
-      Test API endpoints for auth bugs.
+      Test graphql endpoint for IDOR.
       Output: findings/
   - role: auditor
     count: 1
@@ -978,7 +978,7 @@ any finding -->  +5</div>
 
   <div class="grid-2" style="margin-top: 16px;">
     <div class="card" style="padding: 20px;">
-      <h3 style="font-size: 1rem;">Measured: payments API audit</h3>
+      <h3 style="font-size: 1rem;">Measured: multi-agent session</h3>
       <p style="font-size: 0.9rem;">Three agents across a 30-minute audit: ~90 tool calls total, ~76 auto-approved (silent), ~14 real decisions, 1 blocked. From ~100 prompts to ~17. Zero context switches for routine operations.</p>
     </div>
     <div class="card" style="padding: 20px;">
