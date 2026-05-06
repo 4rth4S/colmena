@@ -4,23 +4,23 @@ Four full tutorials, one per persona. Each walks through a real scenario from pr
 
 ---
 
-## 1. Web App Pentest
+## 1. Pentest BBP (web app pentest)
 
-**Persona.** Bug bounty hunter with a scoped target. You found potential vulnerabilities across multiple subdomains and need to verify exploitability, chain primitives, and produce a structured report that a triager can reproduce.
+**Persona.** Bug bounty hunter with a scoped target. You found a wallet popup vulnerability and generated 12 attack chains, but the triager needs reproducible evidence per chain. The mission has to fit within a BBP scope.
 
 **Pattern.** `bbp-impact-chain` — fan-out-merge topology with two pentesters, a weaponizer, and an auditor.
 
 ### The problem
 
-A single attack chain against a modern web application involves CORS misconfigurations, postMessage origin checks, and API authorization bugs. You cannot trace all the attack surfaces in one Claude session — the context window fills up, you lose track of which chain has PoC code and which is still speculative. You need separate agents, each owning a subset of the surface, with a centralized review that produces a single structured submission.
+A single attack chain against a web3 wallet involves postMessage origin checks, JSON-RPC parsing, and event handler sequencing. You cannot trace all 12 chains in one Claude session — the context window fills up, you lose track of which chain has PoC code and which is still speculative. You need separate agents, each owning a subset of the surface, with a centralized review that produces a single structured submission.
 
 ### The manifest
 
-Create `webapp-pentest.mission.yaml`:
+Create `bbp-followup.mission.yaml`:
 
 ```yaml
 version: 1
-mission_id: webapp-pentest
+mission_id: bbp-followup
 description: "Practical exploitation chain hunt for a web app bounty target"
 author: operator
 pattern: bbp-impact-chain
@@ -29,17 +29,17 @@ agents:
   - role: bbp_pentester_web
     count: 2
     instances: [squad-a, squad-b]
-    task: "Verify and exploit web vulnerabilities on target"
+    task: "Verify and exploit postMessage origin bugs on target"
     model: claude-opus-4-7
   - role: weaponizer
-    task: "Validate impact chain, draft bounty report"
+    task: "Validate impact chain, draft H1 report"
   - role: auditor
 scope:
   paths:
     - /home/user/bugbounty/target
   path_not_match:
     - "*.env"
-    - "cdp_keys*"
+    - "credentials*"
   bash_patterns:
     extra_allow:
       - '^curl -[a-zA-Z]+ https://[A-Za-z0-9.-]+\.target\.com\b[^&;|`$()]*$'
@@ -56,8 +56,8 @@ tags: [bbp, web]
 ### Validate and spawn
 
 ```bash
-colmena mission validate webapp-pentest.mission.yaml
-colmena mission spawn --from webapp-pentest.mission.yaml
+colmena mission validate bbp-followup.mission.yaml
+colmena mission spawn --from bbp-followup.mission.yaml
 ```
 
 The validation checks that `bbp_pentester_web`, `bbp_pentester_api`, `weaponizer`, and `auditor` exist in the library. The spawn creates four agent prompts with mission markers.

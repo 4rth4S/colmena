@@ -411,7 +411,7 @@ agents:
   - role: security_architect
     count: 1
     task: |
-      Produce a STRIDE threat model for the payments API.
+      Produce a STRIDE threat model for the target application.
       Output: missions/2026-05-06-payments-audit/threat-model.md
     scope:
       paths:
@@ -635,7 +635,7 @@ colmena library show pentester
 colmena library show plan-then-execute
 
 # Get pattern recommendations for a mission
-colmena library select --mission "PCI-DSS audit of payments API"
+colmena library select --mission "PCI-DSS audit of web application"
 
 # Create a new role (8 categories)
 colmena library create-role --id devsecops --description "Developer security training"

@@ -77,7 +77,7 @@ Onboarding walkthrough. Reader runs every command.
 
 Four cases. Each case = problem + solution + manifest YAML + outcome.
 
-**Case 1: Pentest BBP (Coinbase follow-up).** Problem: A wallet popup vulnerability scan generates 12 attack chains but triagers need reproducible evidence per chain, and the mission has to fit within a BBP scope. Solution: spawn a squad with 2 agents (bbp_pentester_web + bbp_pentester_api) + auditor. Each agent owns a subdomain and artifacts. Manifest includes `chain_aware: true` for Bash chains. Outcome: 8 ELO events generated, reproducible artifacts, triager accepted submission.
+**Case 1: Pentest BBP (web app pentest).** Problem: A wallet popup vulnerability scan generates 12 attack chains but triagers need reproducible evidence per chain, and the mission has to fit within a BBP scope. Solution: spawn a squad with 2 agents (bbp_pentester_web + bbp_pentester_api) + auditor. Each agent owns a subdomain and artifacts. Manifest includes `chain_aware: true` for Bash chains. Outcome: 8 ELO events generated, reproducible artifacts, triager accepted submission.
 
 **Case 2: Dev refactor (Colmena self-dev).** Problem: A Rust workspace with 4 crates needs a refactor that touches all crates — trust-firewall rules, ELO algorithm, CLI subcommands. One human with one Claude cannot track cross-crate side effects. Solution: spawn 3 agents (developer + tester + architect) scoped via `workspace_scope: repo-wide`. Manifest uses `--code-paths` to scope each agent's `path_within`. Auditor reviews each PR artifact. Outcome: refactor lands in 2 hours, 12 reviews, zero regressions.
 
