@@ -172,19 +172,19 @@ pub fn record_approval(
     agent_type: Option<&str>,
     command: &str,
     config: &AutoElevateConfig,
-) {
+) -> String {
     if !config.enabled {
-        return;
+        return String::new();
     }
     // Only record main-session approvals.
     if agent_type.is_some() {
-        return;
+        return String::new();
     }
 
     // Extract skeletons from the full command (split chain first, then skeleton per piece).
     let pieces = match crate::firewall::split_top_level_chain(command) {
         Some(p) => p,
-        None => return,
+        None => return String::new(),
     };
 
     let now = Utc::now();
@@ -223,6 +223,16 @@ pub fn record_approval(
     entries.truncate(MAX_ENTRIES);
 
     let _ = write_state(config_dir, &entries);
+
+    // Check if this command matches any active mission manifest pattern.
+    let mut suggestion = String::new();
+    if let Some(mission_id) = is_manifest_authorized(command, config_dir) {
+        suggestion.push_str(&format!(
+            "\n  Note: command matches manifest '{}' extra_allow pattern.",
+            mission_id
+        ));
+    }
+    suggestion
 }
 
 /// Fully qualified path to the state file (for test inspection).
