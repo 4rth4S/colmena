@@ -1697,16 +1697,22 @@ pub fn spawn_mission(
                 required.extend_from_slice(crate::emitters::claude_code::REVIEWER_REQUIRED_TOOLS);
             }
 
-            // Check minimums against the base role path first (for existing files
-            // created by previous spawns), then against the instance path.
-            let base_path = agents_dir.join(format!("{}.md", assignment.role_id));
-            let check_path = if base_path.exists() {
-                &base_path
+            // Multi-instance: always write instance-specific files so each
+            // instance gets a unique `name:` field. Single-instance (backward
+            // compat): check the base role file first.
+            let is_multi = suffixes.len() > 1 || suffix.is_some();
+            let check_path: PathBuf = if is_multi {
+                subagent_path.clone()
             } else {
-                &subagent_path
+                let bp = agents_dir.join(format!("{}.md", assignment.role_id));
+                if bp.exists() {
+                    bp
+                } else {
+                    subagent_path.clone()
+                }
             };
             let check = crate::emitters::claude_code::check_subagent_minimums(
-                check_path,
+                &check_path,
                 &assignment.role_id,
                 &required,
             )?;
