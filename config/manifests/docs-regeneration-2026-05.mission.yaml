@@ -28,7 +28,7 @@ agents:
 
 scope:
   paths:
-    - /home/fr33m4n/colmena
+    - /home/user/colmena
   bash_patterns:
     extra_allow:
       - '^cargo (build|test|clippy|fmt)\b'
