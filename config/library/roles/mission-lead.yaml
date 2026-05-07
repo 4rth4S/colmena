@@ -5,7 +5,7 @@ description: >-
   Mission coordinator — reads spawn manifest and spawns worker agents
   sequentially. Thin executor that follows the manifest deterministically;
   does NOT reinterpret scope, add/remove agents, or make tactical decisions.
-system_prompt_ref: mission-lead
+system_prompt_ref: prompts/mission-lead.md
 default_trust_level: ask
 role_type: lead
 model: claude-sonnet-4-7
