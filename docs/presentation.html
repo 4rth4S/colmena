@@ -1,10 +1,9 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Colmena — Gobernanza Deterministica Multi-Agente para Claude Code</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<title>Colmena — Deterministic Governance for Multi-Agent Claude Code</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -52,9 +51,6 @@
 
   .slide-dense h2 { margin-bottom: 20px; }
   .slide-dense p { font-size: 1.05rem; }
-  .slide-dense .card { padding: 20px; }
-  .slide-dense .card p { font-size: 0.9rem; }
-  .slide-dense .card h3 { font-size: 0.95rem; margin-bottom: 8px; }
 
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(10px); }
@@ -309,53 +305,50 @@
     text-align: center;
   }
 
-  .banner-img {
-    width: 200px;
-    border-radius: 20px;
-    margin-bottom: 32px;
-    opacity: 0.9;
-  }
-
-  .timeline {
+  .decay-bar {
     display: flex;
-    gap: 0;
-    margin-top: 32px;
-    position: relative;
+    align-items: center;
+    margin-bottom: 8px;
   }
 
-  .timeline::before {
-    content: '';
-    position: absolute;
-    top: 40px;
-    left: 0;
-    right: 0;
-    height: 2px;
-    background: var(--border);
+  .decay-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    width: 120px;
+    color: var(--text-dim);
   }
 
-  .timeline-item {
-    flex: 1;
-    text-align: center;
-    position: relative;
-    padding-top: 60px;
-  }
-
-  .timeline-dot {
-    position: absolute;
-    top: 28px;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 24px;
+  .decay-fill {
     height: 24px;
-    border-radius: 50%;
-    border: 3px solid;
-    background: var(--bg);
-    z-index: 1;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    font-weight: 600;
   }
 
-  .timeline-item.done .timeline-dot { border-color: var(--green); background: var(--green); }
-  .timeline-item.current .timeline-dot { border-color: var(--amber); background: var(--amber); }
-  .timeline-item.future .timeline-dot { border-color: var(--text-dim); }
+  .invariant-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .invariant-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--amber);
+    min-width: 24px;
+  }
+
+  .invariant-text {
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
 
   .flow-horizontal {
     display: flex;
@@ -392,262 +385,318 @@
     color: var(--text-dim);
   }
 
-  .decay-bar {
-    display: flex;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-
-  .decay-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.85rem;
-    width: 120px;
-    color: var(--text-dim);
-  }
-
-  .decay-fill {
-    height: 24px;
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    padding-left: 8px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8rem;
-    font-weight: 600;
-  }
-
-  .small-grid {
+  .arch-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 16px;
     margin-top: 16px;
   }
 
-  .invariant-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--border);
+  .arch-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
   }
 
-  .invariant-num {
-    font-family: 'JetBrains Mono', monospace;
+  .arch-card h4 {
+    font-size: 1rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .arch-card p {
     font-size: 0.85rem;
-    font-weight: 700;
-    color: var(--amber);
-    min-width: 24px;
+    color: var(--text-dim);
   }
 
-  .invariant-text {
-    font-size: 0.95rem;
-    line-height: 1.5;
+  .hook-layout {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 24px;
+    flex-wrap: wrap;
   }
+
+  .hook-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 140px;
+  }
+
+  .hook-item h4 {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--amber);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .hook-item p {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  .hook-item.active { border-color: var(--green); }
+  .hook-item.active h4 { color: var(--green); }
+  .hook-item.reactive { border-color: var(--blue); }
+  .hook-item.reactive h4 { color: var(--blue); }
+  .hook-item.proactive { border-color: var(--purple); }
+  .hook-item.proactive h4 { color: var(--purple); }
 </style>
 </head>
 <body>
 
-<!-- Slide 1: Titulo -->
+<!-- Slide 1: Title -->
 <div class="slide active center-content" id="s1">
-  <img src="colmena-banner.png" alt="Colmena" class="banner-img" onerror="this.style.display='none'">
   <h1>Colmena</h1>
-  <p class="subtitle">Gobernanza deterministica multi-agente para Claude Code</p>
+  <p class="subtitle">Deterministic Governance for Multi-Agent Claude Code</p>
   <div class="grid-4" style="margin-top: 32px; max-width: 1100px;">
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Gobernanza Deterministica</p>
-      <p style="font-size: 0.8rem; color: var(--text-dim);">Reglas YAML, audit.log, cero LLM calls</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Deterministic Firewall</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">YAML rules, audit.log, zero LLM calls</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Revisión por Auditor Multi-Agente</p>
-      <p style="font-size: 0.8rem; color: var(--text-dim);">QPC scoring y accountability por rol</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">Centralized Auditor</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">QPC framework, SubagentStop enforcement</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
-      <p style="font-size: 1.1rem; font-weight: 600;">Trust ELO-Calibrada</p>
-      <p style="font-size: 0.8rem; color: var(--text-dim);">Trust ganada por historial, no declarada</p>
+      <p style="font-size: 1.1rem; font-weight: 600;">ELO-Calibrated Trust</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Trust earned by history, not declared</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
     <div style="text-align: center;">
       <p style="font-size: 1.1rem; font-weight: 600;">Local-First Auditable</p>
-      <p style="font-size: 0.8rem; color: var(--text-dim);">Sin nube, cada decision explicable</p>
+      <p style="font-size: 0.8rem; color: var(--text-dim);">No cloud, every decision explainable</p>
       <span class="tag green" style="margin-top: 8px;">DONE</span>
     </div>
   </div>
   <p class="dim" style="margin-top: 40px; font-size: 0.9rem;">
-    v0.3.0  |  4 crates Rust  |  20 MCP tools  |  Hooks + MCP + YAML
+    v0.14.0  |  4 Rust crates  |  31 MCP tools  |  Hooks + MCP + YAML
   </p>
 </div>
 
-<!-- Slide 2: El Problema -->
+<!-- Slide 2: Problem -->
 <div class="slide" id="s2">
-  <span class="tag red">El Problema</span>
-  <h2 style="margin-top: 20px;">Tres gaps que Claude Code <span class="red">no cubre nativamente</span></h2>
+  <span class="tag red">The Problem</span>
+  <h2 style="margin-top: 20px;">Three gaps Claude Code <span class="red">does not close natively</span></h2>
   <div class="grid-3" style="margin-top: 32px;">
     <div class="card">
       <div class="stat-number red">~100</div>
-      <div class="stat-label" style="margin-bottom: 16px;">prompts de permisos por sesion</div>
-      <p style="font-size: 0.95rem;">Cada <code>Read</code>, <code>Grep</code>, <code>git status</code> pide aprobacion. Aceptas 70 sin pensar. Despues te perdes el que importa.</p>
-      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Sin control granular: o confias en todo, o aprobas todo manualmente. No hay termino medio.</p>
+      <div class="stat-label" style="margin-bottom: 16px;">permission prompts per session</div>
+      <p style="font-size: 0.95rem;">Every Read, Grep, and git status asks for approval. You approve 70 without thinking. Then you miss the one that matters.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Binary trust does not scale: trust everything or approve everything. No middle ground.</p>
     </div>
     <div class="card">
       <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">?</div>
-      <h3 style="color: var(--text);">Sin visibilidad de calidad</h3>
-      <p style="font-size: 0.95rem;">Un agente produce codigo, otro produce mas codigo. Nadie revisa nada. Confias en el output porque estas cansado, no porque fue validado.</p>
-      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">No hay revisión por auditor sobre los agentes. No hay metricas. No hay senial de calidad.</p>
+      <h3 style="color: var(--text);">No quality signal</h3>
+      <p style="font-size: 0.95rem;">One agent produces code, another produces more code. Nobody reviews anything. You trust the output because you are tired, not because it was validated.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">No cross-agent review. No metrics. No quality signal.</p>
     </div>
     <div class="card">
       <div class="card-icon" style="font-size: 2rem; color: var(--text-dim);">/dev/null</div>
-      <h3 style="color: var(--text);">Sin memoria institucional</h3>
-      <p style="font-size: 0.95rem;">Los findings de una sesion desaparecen. La siguiente auditoria arranca de cero. No se acumula conocimiento entre misiones.</p>
-      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Cada sesion es una isla. Sin playbook, sin workflow repetible, sin historia.</p>
+      <h3 style="color: var(--text);">No institutional memory</h3>
+      <p style="font-size: 0.95rem;">Findings from one session disappear. The next audit starts from zero. Knowledge does not accumulate between missions.</p>
+      <p style="font-size: 0.9rem; margin-top: 12px; color: var(--text-dim);">Every session is an island. No playbook, no repeatable workflow, no history.</p>
     </div>
   </div>
   <div class="card" style="margin-top: 24px; padding: 20px; border-color: var(--amber-dim); text-align: center;">
-    <p style="font-size: 1rem;">Estimacion: <span class="highlight">~70% de los prompts</span> en una sesion CC multi-agente son ruido de permisos. El resto es trabajo real.</p>
+    <p style="font-size: 1rem;">Estimated: <span class="highlight">~70% of prompts</span> in a multi-agent CC session are permission noise. The rest is real work.</p>
   </div>
+  <p style="margin-top: 16px; font-size: 0.95rem; color: var(--text-dim); text-align: center;">
+    Colmena solves these three gaps with a deterministic firewall, a centralized auditor review protocol,
+    and an ELO-calibrated trust system &mdash; all local, all auditable, all filesystem-based.
+  </p>
 </div>
 
-<!-- Slide 3: Casos de Uso Reales -->
-<div class="slide slide-dense" id="s3">
-  <span class="tag purple">POR QUE COLMENA</span>
-  <h2 style="margin-top: 20px;">Dos escenarios donde CC solo <span class="purple">no alcanza</span></h2>
-  <div class="grid-2" style="align-items: start;">
+<!-- Slide 3: Approach -->
+<div class="slide" id="s3">
+  <span class="tag purple">The Approach</span>
+  <h2 style="margin-top: 20px;">Deterministic governance + ELO-calibrated trust + multi-agent accountability</h2>
+  <div class="grid-3" style="margin-top: 32px;">
+    <div class="card amber-border">
+      <h3 style="font-size: 1.1rem;">Domain-Bounded Agents</h3>
+      <p style="font-size: 0.95rem;">Each agent gets tool access scoped to its role. The pentester runs nmap but cannot push code. The developer edits files but cannot access secrets. Boundaries are enforced by YAML rules, not agent goodwill.</p>
+      <div style="margin-top: 16px;">
+        <span class="tag green">trust_circle</span>
+        <span class="tag amber">restricted</span>
+        <span class="tag red">blocked</span>
+      </div>
+    </div>
     <div class="card blue-border">
-      <h3 style="color: var(--blue);">Incident Response Coordinado</h3>
-      <p style="font-size: 0.9rem; margin-bottom: 12px;"><strong>Situacion:</strong> Incidente de seguridad activo. 4 agentes en paralelo: analisis de logs, revision de codigo afectado, busqueda de IOCs, redaccion de postmortem.</p>
-      <p style="font-size: 0.9rem; margin-bottom: 12px;"><span class="red"><strong>Sin Colmena:</strong></span> ~120 prompts manuales mientras el clock del incidente corre. El humano es relay entre agentes.</p>
-      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Trust rules por rol (el de logs corre queries en Splunk, el de codigo solo lee). El humano aprueba solo acciones criticas. Revisión por auditor del postmortem asegura calidad. Findings quedan para futuras investigaciones.</p>
+      <h3 style="font-size: 1.1rem;">Deterministic Firewall</h3>
+      <p style="font-size: 0.95rem;">Every tool call is evaluated against compiled regex rules. Same input always produces the same decision. No LLM calls, no heuristics, no surprise approvals. Under 15ms per decision.</p>
+      <div style="margin-top: 16px;">
+        <span class="tag blue">&lt;15ms</span>
+        <span class="tag cyan">zero LLM</span>
+      </div>
     </div>
     <div class="card purple-border">
-      <h3>Compliance Audit Multi-Framework</h3>
-      <p style="font-size: 0.9rem; margin-bottom: 12px;"><strong>Situacion:</strong> Auditoria SOC2 + PCI-DSS + ISO 27001 simultanea. Un agente por framework con rubrica especifica.</p>
-      <p style="font-size: 0.9rem; margin-bottom: 12px;"><span class="red"><strong>Sin Colmena:</strong></span> Findings duplicados entre frameworks. El humano copia manualmente "este gap de access control tambien impacta PCI req 7". Sin visibilidad de calidad.</p>
-      <p style="font-size: 0.9rem;"><span class="green"><strong>Con Colmena:</strong></span> Findings se persisten en el store — cualquier agente los consulta cross-framework. ELO muestra que auditor es mas confiable para que dominio. Patron oracle-workers coordina.</p>
-    </div>
-  </div>
-  <p class="dim" style="margin-top: 24px; font-size: 0.9rem; text-align: center;">Colmena no reemplaza herramientas especializadas de security testing. Orquesta agentes de CC para que trabajen juntos con trust, calidad y memoria.</p>
-</div>
-
-<!-- Slide 4: Que es Colmena -->
-<div class="slide" id="s4">
-  <span class="tag green">La Solucion</span>
-  <h2 style="margin-top: 20px;">Colmena: una <span class="highlight">capa delgada</span> sobre Claude Code</h2>
-  <p style="margin-bottom: 24px; font-size: 1.1rem;">Construida sobre CC, no alrededor. Usa mecanismos oficiales: hooks, MCP, Agent tool, CLAUDE.md.</p>
-  <div class="grid-2" style="align-items: start;">
-    <div>
-      <div class="code-block" style="font-size: 0.8rem; line-height: 1.6;">
-<span class="comment">         +---------------------------------+</span>
-<span class="comment">         |     HUMANO (decisiones reales)  |</span>
-<span class="comment">         +---------------+-----------------+</span>
-<span class="comment">                         |</span>
-<span class="comment">         +---------------+-----------------+</span>
-<span class="comment">         |     CLAUDE CODE (orquestador)   |</span>
-<span class="comment">         |     Agent tool para sub-agentes |</span>
-<span class="comment">         +--+--------------+---------------+</span>
-<span class="comment">            |              |</span>
-<span class="comment">  PreToolUse  PermissionReq  SubagentStop  MCP stdio</span>
-<span class="comment">   (hook)       (hook)        (hook)      (25 tools)</span>
-<span class="comment">            |              |</span>
-<span class="comment">         +--+--------------+---------------+</span>
-<span class="comment">         |          COLMENA                |</span>
-<span class="comment">         |  firewall, library, review,     |</span>
-<span class="comment">         |  elo, findings, queue           |</span>
-<span class="comment">         +---------------------------------+</span></div>
-    </div>
-    <div>
-      <div class="card amber-border" style="margin-bottom: 12px;">
-        <h3 style="font-size: 1rem;">PreToolUse (reactivo)</h3>
-        <p style="font-size: 0.9rem;">Evalua cada tool call contra reglas YAML. Decide <code>allow</code>, <code>deny</code> o <code>ask</code> en &lt;15ms. Sin llamadas de red.</p>
-      </div>
-      <div class="card purple-border" style="margin-bottom: 12px;">
-        <h3 style="font-size: 1rem;">PostToolUse (filtrado)</h3>
-        <p style="font-size: 0.9rem;">Filtra outputs de Bash: strip ANSI, dedup lineas repetidas, truncado inteligente. Ahorra tokens automaticamente.</p>
-      </div>
-      <div class="card" style="margin-bottom: 12px; border-left: 3px solid var(--cyan);">
-        <h3 style="font-size: 1rem; color: var(--cyan);">PermissionRequest (auto-approve)</h3>
-        <p style="font-size: 0.9rem;">Intercepta prompts de CC para agentes en mision. Si el rol permite el tool, auto-aprueba y ensena reglas de sesion a CC. Calls posteriores: sin hooks.</p>
-      </div>
-      <div class="card" style="margin-bottom: 12px; border-left: 3px solid var(--red);">
-        <h3 style="font-size: 1rem; color: var(--red);">SubagentStop (review enforcement)</h3>
-        <p style="font-size: 0.9rem;">Bloquea workers de mision que intentan parar sin review. Auditor centralizado exento. Error = approve (nunca atrapa agentes).</p>
-      </div>
-      <div class="card green-border" style="margin-bottom: 12px;">
-        <h3 style="font-size: 1rem; color: var(--green);">MCP (proactivo)</h3>
-        <p style="font-size: 0.9rem;">CC llama 25 herramientas nativamente: patterns, misiones, reviews, ELO, findings, alerts, stats, calibracion.</p>
-      </div>
-      <div class="card" style="padding: 16px;">
-        <h3 style="font-size: 1rem;">Principio de diseno</h3>
-        <p style="font-size: 0.9rem;">Todo filesystem. Sin DB, sin Docker, sin servicios. 4 crates Rust: core, cli, filter, mcp.</p>
+      <h3 style="font-size: 1.1rem;">ELO Trust Calibration</h3>
+      <p style="font-size: 0.95rem;">Trust is earned through audit history, not declared in config. Agents with consistently high review scores earn Elevated status. Agents with poor scores get Restricted or Probation. Human YAML overrides always win.</p>
+      <div style="margin-top: 16px;">
+        <span class="tag purple">5 trust tiers</span>
+        <span class="tag amber">temporal decay</span>
       </div>
     </div>
   </div>
+  <div class="grid-3" style="margin-top: 20px;">
+    <div class="card" style="padding: 20px; border-left: 3px solid var(--green);">
+      <h3 style="font-size: 0.95rem; color: var(--green);">Manifest-driven</h3>
+      <p style="font-size: 0.85rem;">Declarative YAML describes squad composition, scope boundaries, budget, and acceptance criteria. Reproducible across sessions.</p>
+    </div>
+    <div class="card" style="padding: 20px; border-left: 3px solid var(--cyan);">
+      <h3 style="font-size: 0.95rem; color: var(--cyan);">Centralized Auditor</h3>
+      <p style="font-size: 0.85rem;">One auditor per mission evaluates all artifacts. QPC framework (Quality + Precision + Comprehensiveness). SubagentStop enforces review before exit.</p>
+    </div>
+    <div class="card" style="padding: 20px; border-left: 3px solid var(--red);">
+      <h3 style="font-size: 0.95rem; color: var(--red);">Tamper-Evident Audit</h3>
+      <p style="font-size: 0.85rem;">Every decision written to audit.log with matching rule ID. Append-only JSONL. Any auditor can replay and explain why a call was allowed, asked, or blocked.</p>
+    </div>
+  </div>
+  <div style="margin-top: 20px; text-align: center;">
+    <p style="font-size: 0.9rem; color: var(--text-dim);">
+      Read more: <a href="guide.md" style="color: var(--cyan);">Guide</a> (subsystem reference) |
+      <a href="user/getting-started.md" style="color: var(--cyan);">Getting Started</a> (5-minute setup) |
+      <a href="user/use-cases.md" style="color: var(--cyan);">Use Cases</a> (real scenarios)
+    </p>
+  </div>
 </div>
 
-<!-- Slide 5: Trust Firewall -->
-<div class="slide" id="s5">
+<!-- Slide 4: Architecture -->
+<div class="slide slide-dense" id="s4">
+  <span class="tag cyan">Architecture</span>
+  <h2 style="margin-top: 20px;">4 Rust crates, 5 CC hook points, <span class="highlight">31 MCP tools</span></h2>
+  <p style="margin-bottom: 20px; font-size: 1.05rem;">Colmena is a thin layer over Claude Code. It uses official mechanisms: hooks, MCP, Agent tool, CLAUDE.md. No forks, no patches.</p>
+
+  <div class="arch-grid">
+    <div class="arch-card" style="border-left: 3px solid var(--green);">
+      <h4 style="color: var(--green);">colmena-core</h4>
+      <p>Shared library: config loading, firewall evaluation, delegate management, ELO engine, review protocol, calibration, queue, models, paths.</p>
+    </div>
+    <div class="arch-card" style="border-left: 3px solid var(--blue);">
+      <h4 style="color: var(--blue);">colmena-cli</h4>
+      <p>CLI binary: PreToolUse, PostToolUse, PermissionRequest, and SubagentStop hooks. Clap subcommands. Binary: <code>colmena</code>.</p>
+    </div>
+    <div class="arch-card" style="border-left: 3px solid var(--purple);">
+      <h4 style="color: var(--purple);">colmena-filter</h4>
+      <p>Output filtering pipeline: ANSI strip, stderr-only, dedup, truncate, prompt injection detection. Filters catch_unwind wrapped.</p>
+    </div>
+    <div class="arch-card" style="border-left: 3px solid var(--amber);">
+      <h4 style="color: var(--amber);">colmena-mcp</h4>
+      <p>MCP server: rmcp over stdio transport. 31 tools exposing firewall, library, review, ELO, findings, alerts, calibration, operations.</p>
+    </div>
+  </div>
+
+  <div style="margin-top: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+    <div class="card" style="padding: 16px;">
+      <h3 style="font-size: 0.95rem;">5 CC integration points</h3>
+      <p style="font-size: 0.85rem;">
+        <span class="tag amber" style="font-size: 0.7rem;">REACTIVE</span> PreToolUse — eval every tool call<br>
+        <span class="tag amber" style="font-size: 0.7rem;">REACTIVE</span> PostToolUse — filter Bash outputs<br>
+        <span class="tag green" style="font-size: 0.7rem;">ACTIVE</span> PermissionRequest — auto-approve role tools<br>
+        <span class="tag green" style="font-size: 0.7rem;">ACTIVE</span> SubagentStop — enforce review before stop<br>
+        <span class="tag purple" style="font-size: 0.7rem;">PROACTIVE</span> MCP — 31 tools for agent-native control
+      </p>
+    </div>
+    <div class="card" style="padding: 16px;">
+      <h3 style="font-size: 0.95rem;">31 MCP tools by category</h3>
+      <p style="font-size: 0.75rem; line-height: 1.8;">
+        <span class="tag amber" style="font-size: 0.65rem;">7 Firewall</span> config_check, evaluate, queue_list, delegate, delegate_list, delegate_revoke, calibrate<br>
+        <span class="tag green" style="font-size: 0.65rem;">6 Library</span> library_list, library_show, library_select, library_generate, library_create_role, library_create_pattern<br>
+        <span class="tag blue" style="font-size: 0.65rem;">3 Review</span> review_submit, review_list, review_evaluate<br>
+        <span class="tag purple" style="font-size: 0.65rem;">4 ELO</span> elo_ratings, findings_query, findings_list, session_stats<br>
+        <span class="tag red" style="font-size: 0.65rem;">4 Alerts</span> alerts_list, alerts_ack, calibrate_auditor, calibrate_auditor_feedback<br>
+        <span class="tag cyan" style="font-size: 0.65rem;">7 Operations</span> mission_spawn, mission_suggest, mission_deactivate, mission_validate, mission_status, mission_abort, mission_manifest_show
+      </p>
+    </div>
+  </div>
+
+  <div style="text-align: center; margin-top: 10px;">
+    <p style="font-size: 0.85rem; color: var(--text-dim);">Rust 2021 edition | serde + clap + rmcp + regex | No external services | All filesystem-based</p>
+  </div>
+</div>
+
+<!-- Slide 5: Firewall -->
+<div class="slide slide-dense" id="s5">
   <span class="tag amber">Trust Firewall</span>
-  <h2 style="margin-top: 20px;">Reglas declarativas, evaluacion en <span class="highlight">&lt;15ms</span></h2>
+  <h2 style="margin-top: 20px;">YAML rules, compiled regex, chain-aware Bash, under <span class="highlight">15ms</span></h2>
   <div class="grid-2" style="align-items: start;">
     <div>
-      <p style="margin-bottom: 20px; font-size: 1.05rem;">Cada tool call pasa por el firewall antes de ejecutarse. Reglas evaluadas en orden de precedencia estricto.</p>
+      <p style="margin-bottom: 16px; font-size: 1.05rem;">Every tool call passes through the firewall before execution. Rules evaluated in strict precedence order.</p>
       <div class="code-block" style="font-size: 0.8rem; line-height: 1.6;">
-<span class="comment"># Flujo de evaluacion:</span>
-<span class="keyword">CC tool call</span> --> PreToolUse hook --> colmena binary
-                                          |
-                            <span class="keyword">blocked?</span>    --> deny  (no overridable)
-                            <span class="keyword">delegated?</span>  --> allow (TTL-scoped)
-                            <span class="keyword">restricted?</span> --> ask   (humano decide)
-                            <span class="keyword">trusted?</span>    --> allow (auto-approve)
-                            <span class="keyword">default</span>     --> ask   (fallback seguro)
+<span class="comment"># Precedence (first match wins):</span>
+<span class="string">blocked > delegations > agent_overrides ></span>
+<span class="string">runtime_agent_overrides > ELO > restricted ></span>
+<span class="string">chain_aware > chain_guard > mission_revoked ></span>
+<span class="string">trust_circle > defaults</span>
 
-<span class="comment"># Precedencia:</span>
-<span class="string">blocked > delegations > agent_overrides > ELO > restricted > chain_guard > mission_revoked > trust_circle > defaults</span></div>
+<span class="comment"># Chain-aware Bash eval (M7.10)</span>
+<span class="keyword">mkdir dir && cd dir && git clone ...</span>
+<span class="comment">  -> split by &&/||/;/| (quote-aware)</span>
+<span class="comment">  -> each piece re-evaluated</span>
+<span class="comment">  -> any block -> whole command blocked</span>
+<span class="comment">  -> any ask -> whole command asks</span>
+<span class="comment">  -> subshells $(...) -> chain_guard (ask)</span>
+<span class="comment">  -> bare KEY=value -> auto-approve</span></div>
       <div class="card" style="margin-top: 16px; padding: 16px;">
-        <h3 style="font-size: 0.95rem;">Garantia de seguridad</h3>
-        <p style="font-size: 0.9rem;">Cualquier falla del hook retorna <code>"ask"</code>, nunca <code>"deny"</code>. El humano siempre tiene la ultima palabra en casos borde.</p>
+        <h3 style="font-size: 0.95rem;">Safety guarantee</h3>
+        <p style="font-size: 0.9rem;">Any hook error returns "ask", never "deny". The human always holds the keys on edge cases.</p>
+      </div>
+      <div class="card" style="margin-top: 16px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">Auto-elevate (M7.15)</h3>
+        <p style="font-size: 0.9rem;">Say Y twice to the same command skeleton within the window. The third call is auto-approved with a session-scoped delegation. No config change needed.</p>
+      </div>
+      <div class="card" style="margin-top: 16px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">Runtime-agent-overrides</h3>
+        <p style="font-size: 0.9rem;">When a manifest spawns a mission, per-agent scope and bash patterns are written to runtime-agent-overrides.json. Cleared on deactivate or abort.</p>
       </div>
     </div>
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Impacto medido (caso payments API)</h3>
+      <h3 style="font-size: 1rem; color: var(--text);">Measured impact (multi-agent session)</h3>
       <table class="comparison-table">
         <thead>
           <tr>
             <th></th>
-            <th><span class="red">Sin Colmena</span></th>
-            <th><span class="green">Con Colmena</span></th>
+            <th><span class="red">Without Colmena</span></th>
+            <th><span class="green">With Colmena</span></th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>Prompts de permisos</td>
+            <td>Permission prompts</td>
             <td>~100</td>
             <td class="green">~30</td>
           </tr>
           <tr>
-            <td>Proteccion force push</td>
-            <td>Ninguna</td>
-            <td class="green">Regla blocked</td>
+            <td>Force push protection</td>
+            <td>None</td>
+            <td class="green">Blocked rule</td>
           </tr>
           <tr>
-            <td>Operaciones de lectura</td>
-            <td>Piden permiso</td>
-            <td class="green">Auto-aprobadas</td>
+            <td>Read operations</td>
+            <td>Ask each time</td>
+            <td class="green">Auto-approved</td>
           </tr>
           <tr>
-            <td>Granularidad de confianza</td>
-            <td>Binaria: todo o nada</td>
-            <td class="green">6 niveles</td>
+            <td>Trust granularity</td>
+            <td>Binary: all or nothing</td>
+            <td class="green">6 evaluation levels</td>
           </tr>
           <tr>
-            <td>Delegacion en runtime</td>
-            <td>No existe</td>
+            <td>Runtime delegation</td>
+            <td>Does not exist</td>
             <td class="green">TTL-scoped, max 24h</td>
           </tr>
           <tr>
             <td>Audit trail</td>
-            <td>Ninguno</td>
-            <td class="green">Cada decision logueada</td>
+            <td>None</td>
+            <td class="green">Every decision logged</td>
           </tr>
         </tbody>
       </table>
@@ -655,457 +704,375 @@
   </div>
 </div>
 
-<!-- Slide 6: Resultados Reales -->
-<div class="slide" id="s6">
-  <span class="tag green">Resultados Reales</span>
-  <h2 style="margin-top: 20px;">Datos de una sesion real: <span class="highlight">security hardening sprint</span></h2>
-  <p style="margin-bottom: 24px; font-size: 1.05rem;">Sesion de ~3 horas. Threat model STRIDE/DREAD, 4 squads paralelos, 8 fixes de seguridad.</p>
-  <div class="grid-4">
-    <div class="card" style="text-align: center;">
-      <div class="stat-number green" style="font-size: 3rem;">80%</div>
-      <div class="stat-label">Auto-aprobado</div>
-      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">1,335 de 1,675 tool calls sin preguntarle al humano</p>
-    </div>
-    <div class="card" style="text-align: center;">
-      <div class="stat-number red" style="font-size: 3rem;">53</div>
-      <div class="stat-label">Bloqueados</div>
-      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Comandos destructivos frenados automaticamente</p>
-    </div>
-    <div class="card" style="text-align: center;">
-      <div class="stat-number cyan" style="font-size: 3rem;">29</div>
-      <div class="stat-label">Agentes</div>
-      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Agentes unicos gestionados en la sesion</p>
-    </div>
-    <div class="card" style="text-align: center;">
-      <div class="stat-number purple" style="font-size: 3rem;">0</div>
-      <div class="stat-label">Merge conflicts</div>
-      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">4 squads en worktrees aislados, zero colisiones</p>
-    </div>
-  </div>
-  <div class="grid-2" style="margin-top: 24px;">
-    <div class="card" style="padding: 20px;">
-      <h3 style="font-size: 1rem;">El caso: security hardening</h3>
-      <p style="font-size: 0.9rem;">Un agente AppSec corrio STRIDE+DREAD (25 amenazas). Un Security Architect hizo validacion independiente. Se armaron 4 dev squads priorizados por ownership de archivos. Los 4 corrieron en paralelo. Merge limpio.</p>
-    </div>
-    <div class="card" style="padding: 20px;">
-      <h3 style="font-size: 1rem;">Resultado medible</h3>
-      <p style="font-size: 0.9rem;">DREAD maximo: <span class="red">9.4</span> → <span class="green">6.2</span> post-fix. 0 findings Critical. 0 findings High. 184 tests, clippy limpio. Todo en una sesion con un humano.</p>
-    </div>
-  </div>
-</div>
-
-<!-- Slide 7: Wisdom Library -->
-<div class="slide" id="s6">
-  <span class="tag green">Wisdom Library</span>
-  <h2 style="margin-top: 20px;">Roles + Patterns: <span class="highlight">quien</span> y <span class="highlight">como</span></h2>
-  <p style="margin-bottom: 16px; font-size: 1.05rem;">Los roles definen que hace cada agente. Los patterns definen como se coordinan. El mission generator conecta ambos.</p>
+<!-- Slide 6: Missions -->
+<div class="slide slide-dense" id="s6">
+  <span class="tag green">Missions</span>
+  <h2 style="margin-top: 20px;">Spawn squad, agents work, review_submit, auditor evaluates, <span class="highlight">ELO updates</span></h2>
   <div class="grid-2" style="align-items: start;">
     <div>
-      <div class="card" style="margin-bottom: 16px;">
-        <h3 style="font-size: 1rem;">4 Role Templates</h3>
-        <div class="code-block" style="font-size: 0.8rem; padding: 16px; line-height: 1.6;">
-<span class="keyword">security-architect</span>  Threat modeling, design review
-<span class="keyword">pentester</span>           Testing ofensivo, PoC de exploits
-<span class="keyword">auditor</span>             Compliance, code review
-<span class="keyword">researcher</span>          Analisis profundo, documentacion</div>
+      <div class="card" style="margin-bottom: 12px;">
+        <h3 style="font-size: 1rem;">Mission lifecycle</h3>
+        <div class="flow-horizontal" style="flex-direction: column; align-items: stretch; margin-top: 12px;">
+          <div class="flow-step" style="width: 100%;"><h4>1. Write manifest</h4><p><code>mission init</code> scaffolds a .mission.yaml</p></div>
+          <div class="flow-connector" style="text-align: center;">v</div>
+          <div class="flow-step" style="width: 100%;"><h4>2. Validate</h4><p><code>mission validate</code> checks schema + invariants</p></div>
+          <div class="flow-connector" style="text-align: center;">v</div>
+          <div class="flow-step" style="width: 100%;"><h4>3. Spawn</h4><p><code>mission spawn --from</code> creates agents + delegations</p></div>
+          <div class="flow-connector" style="text-align: center;">v</div>
+          <div class="flow-step" style="width: 100%;"><h4>4. Work + Review</h4><p>Agents work, submit artifacts, auditor evaluates</p></div>
+          <div class="flow-connector" style="text-align: center;">v</div>
+          <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">5. Deactivate / Abort</h4><p>Revokes delegations, cleans up files, removes overrides</p></div>
+        </div>
       </div>
-      <div class="card">
-        <h3 style="font-size: 1rem;">6 Orchestration Patterns</h3>
-        <div class="code-block" style="font-size: 0.8rem; padding: 16px; line-height: 1.6;">
-<span class="keyword">oracle-workers</span>      Lead dirige, workers ejecutan
-<span class="keyword">pipeline</span>            Handoff secuencial (A -> B -> C)
-<span class="keyword">debate</span>              Review adversarial, consenso
-<span class="keyword">swarm-consensus</span>     Trabajo paralelo, voto mayoria
-<span class="keyword">plan-then-execute</span>   Fase plan, despues ejecucion paralela
-<span class="keyword">mentored-execution</span>  Senior guia a agentes junior</div>
+      <div class="card" style="margin-top: 12px; padding: 16px; border-color: var(--green);">
+        <h3 style="font-size: 0.95rem;">Auto-elevate (M7.15)</h3>
+        <p style="font-size: 0.85rem;">Operator says Y twice to the same <code>curl</code> or <code>kubectl</code> within the window. Third call auto-approved. Session-scoped delegation created on the fly.</p>
       </div>
     </div>
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Flujo del mission generator</h3>
-      <div class="flow-horizontal" style="flex-direction: column; align-items: stretch;">
-        <div class="flow-step" style="width: 100%;"><h4>1. Describir mision</h4><p>"Auditar PCI-DSS compliance de la payments API"</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>2. library_select</h4><p>Evalua 6 patterns, retorna los mejores matches con asignacion de roles</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>3. library_generate</h4><p>Crea CLAUDE.md por agente + asigna reviewer lead por ELO + instrucciones de review</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>4. Confirmar delegaciones</h4><p>Humano ejecuta CLI commands para activar permisos scoped (read-only MCP)</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">5. Agent tool</h4><p>CC lanza sub-agentes → trabajan → review_submit → reviewer evalua → ELO actualizado</p></div>
+      <h3 style="font-size: 1rem; color: var(--text);">Review cycle in detail</h3>
+      <div class="code-block" style="font-size: 0.72rem; padding: 14px; line-height: 1.5;">
+<span class="comment"># 6-step cycle enforced by SubagentStop:</span>
+
+<span class="keyword">Step 1: Agent works</span>
+  Scoped reads, writes, bash within role limits.
+  All tool calls pass through firewall.
+  Auditor not needed here -- trust rules handle it.
+
+<span class="keyword">Step 2: review_submit</span>
+  Agent calls MCP with artifact + SHA256 hash.
+  Available_roles filters eligible reviewers.
+  -> Reviewer assigned (random, non-author, non-reciprocal)
+
+<span class="keyword">Step 3: SubagentStop check</span>
+  Worker tries to stop:
+    review_submit done? yes -> approve
+  If reviewer: pending evaluations? -> BLOCK until evaluate
+
+<span class="keyword">Step 4: review_evaluate</span>
+  Reviewer calls MCP with QPC scores + findings.
+  Trust gate: avg >= 7.0 && no critical -> auto-complete
+  Otherwise -> alerts.json (human review)
+
+<span class="keyword">Step 5: ELO update</span>
+  Author rating adjusts by score delta.
+  Reviewer earns +5 per finding.
+  Append-only JSONL, never mutated.
+
+<span class="keyword">Step 6: Findings stored</span>
+  Each finding written to findings store.
+  Queryable by role, category, severity, mission.</div>
+      <div class="card" style="margin-top: 12px; padding: 16px;">
+        <h3 style="font-size: 0.95rem;">Mission Gate</h3>
+        <p style="font-size: 0.85rem;">Auto-activates when role-scoped delegations exist. Agent tool calls without mission marker ask. Opt-out with <code>enforce_missions: false</code> in YAML.</p>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Slide 7: Auditor Review Protocol -->
-<div class="slide" id="s7">
-  <span class="tag blue">Auditor Review Protocol</span>
-  <h2 style="margin-top: 20px;">Sin revisión por auditor, no hay <span class="blue">senial de calidad</span></h2>
-  <p style="margin-bottom: 16px; font-size: 1.05rem;">Evaluacion cruzada estructurada entre agentes. Reviews producen findings, scores, y decisiones de trust gate.</p>
+<!-- Slide 7: Manifests -->
+<div class="slide slide-dense" id="s7">
+  <span class="tag blue">Manifests (v1)</span>
+  <h2 style="margin-top: 20px;">Declarative squad + scope. One file per mission. <span class="highlight">Reproducible</span>.</h2>
   <div class="grid-2" style="align-items: start;">
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Ciclo de vida del review</h3>
-      <div class="flow-horizontal" style="flex-direction: column; align-items: stretch;">
-        <div class="flow-step" style="width: 100%;"><h4>Submit</h4><p>El autor envia artefacto + hash SHA256 para revision</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>Assign</h4><p>Se selecciona reviewer elegible (invariantes enforced)</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%;"><h4>Evaluate</h4><p>Reviewer puntua en N dimensiones + lista findings</p></div>
-        <div class="flow-connector" style="text-align: center;">|</div>
-        <div class="flow-step" style="width: 100%; border-color: var(--green);"><h4 style="color: var(--green);">Trust Gate</h4><p>avg >= 7.0 y sin findings criticos --> auto-complete | sino --> revision humana</p></div>
-      </div>
+      <div class="code-block" style="font-size: 0.75rem; padding: 16px; line-height: 1.6;">
+<span class="comment"># mission init --slug webapp-pentest</span>
+<span class="comment"># colmena mission validate webapp-pentest.mission.yaml</span>
+
+version: 1
+mission_id: webapp-pentest
+description: "Web app pentest: origin bypass
+  and API authorization audit"
+author: appsec-team
+mission_ttl_hours: 8
+agents:
+  - role: bbp_pentester_web
+    count: 1
+    task: |
+      Test origin header bypass on
+      widget endpoint. Output: findings/
+  - role: bbp_pentester_api
+    count: 1
+    task: |
+      Test graphql endpoint for IDOR.
+      Output: findings/
+  - role: auditor
+    count: 1
+    task: |
+      QPC evaluation of both
+      pentester artifacts.
+scope:
+  paths:
+    - /home/user/bugbounty/target
+auditor_pool:
+  - auditor
+budget:
+  max_hours: 8
+  max_agents: 5
+acceptance_criteria:
+  - All findings documentable</div>
     </div>
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">6 Invariantes de seguridad</h3>
+      <h3 style="font-size: 1rem; color: var(--text);">CLI workflow</h3>
+      <div class="card" style="margin-bottom: 12px; padding: 16px;">
+        <p style="font-size: 0.9rem;"><span class="green">init</span> — scaffolds a .mission.yaml from template</p>
+        <p style="font-size: 0.9rem; margin-top: 8px;"><span class="green">init --from-history</span> — generates manifest from audit log Agent spawns</p>
+        <p style="font-size: 0.9rem; margin-top: 8px;"><span class="green">validate</span> — checks schema, blocklists, sentinels, limits</p>
+        <p style="font-size: 0.9rem; margin-top: 8px;"><span class="green">spawn --from</span> — validates + generates agents + delegations</p>
+        <p style="font-size: 0.9rem; margin-top: 8px;"><span class="green">status</span> — dashboard: overrides, delegations, files, alerts</p>
+        <p style="font-size: 0.9rem; margin-top: 8px;"><span class="green">abort / deactivate</span> — stops the mission, revokes everything</p>
+      </div>
+      <h3 style="font-size: 1rem; color: var(--text); margin-top: 16px;">Manifest fields</h3>
+      <div class="card" style="padding: 12px;">
+        <p style="font-size: 0.75rem; line-height: 1.8;">
+<span class="keyword">version</span>           Must be 1<br>
+<span class="keyword">mission_id</span>        ASCII alphanumeric + hyphens<br>
+<span class="keyword">description</span>        Max 512 chars<br>
+<span class="keyword">pattern</span>            Optional pattern override<br>
+<span class="keyword">mission_ttl_hours</span>  Max 24, default 8<br>
+<span class="keyword">agents[]</span>           Role + count + task + scope<br>
+<span class="keyword">scope</span>              Global paths + bash_patterns<br>
+<span class="keyword">mission_gate</span>       enforce / observe / off<br>
+<span class="keyword">auditor_pool</span>       Default: ["auditor"]<br>
+<span class="keyword">budget</span>             max_hours, max_agents<br>
+<span class="keyword">tags</span>               Arbitrary strings<br>
+        </p>
+      </div>
+      <h3 style="font-size: 1rem; color: var(--text); margin-top: 16px;">Security invariants</h3>
       <div class="invariant-item">
         <span class="invariant-num">1</span>
-        <span class="invariant-text">El autor no puede revisar su propio trabajo</span>
+        <span class="invariant-text">All paths must be absolute, no ".."</span>
       </div>
       <div class="invariant-item">
         <span class="invariant-num">2</span>
-        <span class="invariant-text">Anti-reciproco: si A reviso a B, B no puede revisar a A en la misma mision</span>
+        <span class="invariant-text">Hard-blocked prefixes: /etc, /root, /proc, /sys, /boot, /dev</span>
       </div>
       <div class="invariant-item">
         <span class="invariant-num">3</span>
-        <span class="invariant-text">Integridad de artefacto verificada via hash SHA256</span>
+        <span class="invariant-text">Hard-blocked suffixes: .ssh, .aws, .kube, .gnupg</span>
       </div>
       <div class="invariant-item">
         <span class="invariant-num">4</span>
-        <span class="invariant-text">Minimo 2 dimensiones de score por evaluacion</span>
-      </div>
-      <div class="invariant-item">
-        <span class="invariant-num">5</span>
-        <span class="invariant-text">Findings critical/high siempre escalan a revision humana</span>
+        <span class="invariant-text">Bash sentinels blocked in extra_allow (rm -rf /, dd, mkfs, chmod 777)</span>
       </div>
       <div class="invariant-item" style="border-bottom: none;">
-        <span class="invariant-num">6</span>
-        <span class="invariant-text">Score floor en 5.0 -- debajo siempre requiere decision humana</span>
+        <span class="invariant-num">5</span>
+        <span class="invariant-text">Forbidden fields (role_type, etc.) rejected at parse time</span>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Slide 8: ELO Engine + Findings Store -->
+<!-- Slide 8: ELO -->
 <div class="slide slide-dense" id="s8">
-  <span class="tag purple">ELO Engine + Findings Store</span>
-  <h2 style="margin-top: 20px;">Sin ELO, la revisión por auditor es solo <span class="purple">opinion</span></h2>
+  <span class="tag purple">ELO Calibration</span>
+  <h2 style="margin-top: 20px;">Append-only log, temporal decay, 4 trust tiers, <span class="highlight">earned not declared</span></h2>
+  <p style="margin-bottom: 16px; font-size: 1rem;">ELO turns review scores into a trust signal. The cycle is closed: agents produce work, auditor reviews, ELO updates, trust recalibrates. No manual override needed.</p>
   <div class="grid-2" style="align-items: start;">
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">ELO: rating append-only con decay temporal</h3>
+      <h3 style="font-size: 1rem; color: var(--text);">ELO engine</h3>
       <div class="code-block" style="font-size: 0.78rem; padding: 16px; line-height: 1.6;">
-<span class="comment"># Delta del autor (segun score promedio):</span>
-<span class="keyword">score >= 8</span>  -->  <span class="string">+(score - 7) * 3</span>  (reward)
-<span class="keyword">score 5-7</span>  -->  <span class="string">  0</span>              (neutral)
-<span class="keyword">score < 5</span>  -->  <span class="string">-(6 - score) * 4</span>  (penalty)
+<span class="comment"># Author delta (by average score):</span>
+<span class="keyword">score >= 8</span>  -->  +(score - 7) * 3  (reward)
+<span class="keyword">score 5-7</span>  -->   0               (neutral)
+<span class="keyword">score < 5</span>  -->  -(6 - score) * 4  (penalty)
 
-<span class="comment"># Penalidades por findings:</span>
-<span class="keyword">critical</span>  --> <span class="red">-10</span>  |  <span class="keyword">high</span>  --> <span class="red">-5</span>
+<span class="comment"># Finding penalties on author:</span>
+critical --> -10  |  high --> -5
 
-<span class="comment"># Reward para reviewer (por finding):</span>
-<span class="keyword">any finding</span> -->  <span class="string">+5</span></div>
+<span class="comment"># Reviewer reward per finding:</span>
+any finding -->  +5</div>
+
       <div style="margin-top: 12px;">
+        <h3 style="font-size: 0.9rem; color: var(--text); margin-bottom: 8px;">Temporal decay</h3>
         <div class="decay-bar">
-          <span class="decay-label">0-7 dias</span>
+          <span class="decay-label">0-7 days</span>
           <div class="decay-fill" style="width: 100%; background: var(--green);">1.0x</div>
         </div>
         <div class="decay-bar">
-          <span class="decay-label">7-30 dias</span>
+          <span class="decay-label">7-30 days</span>
           <div class="decay-fill" style="width: 70%; background: var(--amber);">0.7x</div>
         </div>
         <div class="decay-bar">
-          <span class="decay-label">30-90 dias</span>
+          <span class="decay-label">30-90 days</span>
           <div class="decay-fill" style="width: 40%; background: var(--purple);">0.4x</div>
         </div>
         <div class="decay-bar">
-          <span class="decay-label">90+ dias</span>
+          <span class="decay-label">90+ days</span>
           <div class="decay-fill" style="width: 10%; background: var(--text-dim);">0.1x</div>
         </div>
       </div>
     </div>
     <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Findings Store: memoria que crece</h3>
-      <div class="card" style="margin-bottom: 12px;">
-        <p style="font-size: 0.9rem;">Cada review produce findings estructurados que se acumulan entre misiones. La tercera auditoria de payments API se beneficia de las dos anteriores.</p>
-      </div>
-      <div class="code-block" style="font-size: 0.75rem; padding: 14px; line-height: 1.6;">
-<span class="comment"># Registro de finding (JSON)</span>
-{
-  <span class="keyword">"mission"</span>:    <span class="string">"audit payments API"</span>,
-  <span class="keyword">"author"</span>:     <span class="string">"pentester"</span>,
-  <span class="keyword">"reviewer"</span>:   <span class="string">"auditor"</span>,
-  <span class="keyword">"severity"</span>:   <span class="string">"high"</span>,
-  <span class="keyword">"category"</span>:   <span class="string">"auth"</span>,
-  <span class="keyword">"description"</span>: <span class="string">"Admin endpoint sin RBAC"</span>
-}</div>
-      <div class="card" style="margin-top: 12px;">
-        <h3 style="font-size: 0.95rem;">Leaderboard</h3>
-        <div class="code-block" style="font-size: 0.75rem; padding: 12px; line-height: 1.6;">
-<span class="keyword"> #  Agent               ELO   7d   Reviews</span>
-<span class="string"> 1  security-architect  1024  +15  8</span>
-<span class="string"> 2  auditor             1012   +8  6</span>
-<span class="string"> 3  pentester            998   -3  7</span>
-<span class="string"> 4  researcher           985   +5  4</span></div>
-      </div>
-      <div class="card" style="margin-top: 12px; padding: 14px; border-color: var(--amber-dim);">
-        <p style="font-size: 0.85rem;"><span class="highlight">Log JSONL append-only:</span> no mutacion, no eliminacion. Cada cambio de rating es trazable a un review y mision especificos.</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Slide 9: Workflow Completo -->
-<div class="slide slide-dense" id="s9">
-  <span class="tag amber">Workflow Completo</span>
-  <h2 style="margin-top: 16px;">Una sola sesion CC: select --> spawn --> review --> <span class="highlight">learn</span></h2>
-  <div class="grid-2" style="align-items: start; gap: 30px;">
-    <div class="code-block code-block-compact">
-<span class="comment"># 1. Humano describe la mision</span>
-<span class="string">"Auditar payments API para PCI-DSS"</span>
-
-<span class="comment"># 2. CC selecciona pattern via MCP</span>
-<span class="tool">mcp__colmena__library_select</span>(
-  mission: "PCI-DSS audit payments API"
-)
-<span class="keyword">--> oracle-workers (score: 0.92)</span>
-<span class="keyword">    lead: security-architect</span>
-<span class="keyword">    workers: pentester, auditor</span>
-
-<span class="comment"># 3. CC genera instrucciones por agente</span>
-<span class="tool">mcp__colmena__library_generate</span>(
-  pattern: "oracle-workers",
-  mission: "PCI-DSS audit payments API"
-)
-
-<span class="comment"># 4. CC lanza agentes con Agent tool</span>
-<span class="tool">Agent</span>(prompt: "Sos el pentester.
-  [CLAUDE.md generado]
-  Testeá los endpoints de payments...")
-
-<span class="comment"># 5. Agente envia trabajo para review</span>
-<span class="tool">mcp__colmena__review_submit</span>(
-  artifact: "pentester-findings.md",
-  author_role: "pentester"
-)
-
-<span class="comment"># 6. Reviewer evalua</span>
-<span class="tool">mcp__colmena__review_evaluate</span>(
-  scores: {thoroughness: 8, accuracy: 9},
-  findings: [{severity: "high", ...}]
-)
-<span class="keyword">--> score: 8.5 | outcome: auto_complete</span>
-<span class="keyword">--> ELO events: 3 logueados</span></div>
-    <div>
-      <div class="card" style="margin-bottom: 12px;">
-        <h3><span style="color: var(--text-dim);">Paso 1</span> Select</h3>
-        <p style="font-size: 0.9rem;">El humano describe la mision. Colmena recomienda un pattern de orquestacion con roles asignados.</p>
-      </div>
-      <div class="card" style="margin-bottom: 12px;">
-        <h3><span style="color: var(--text-dim);">Paso 2</span> Generate</h3>
-        <p style="font-size: 0.9rem;">El mission generator crea CLAUDE.md por agente con contexto, restricciones y reglas de coordinacion.</p>
-      </div>
-      <div class="card" style="margin-bottom: 12px;">
-        <h3><span style="color: var(--text-dim);">Paso 3</span> Spawn</h3>
-        <p style="font-size: 0.9rem;">CC usa Agent tool para lanzar sub-agentes en la misma sesion. Cada agente recibe sus instrucciones generadas.</p>
-      </div>
-      <div class="card" style="margin-bottom: 12px;">
-        <h3><span style="color: var(--text-dim);">Paso 4</span> Work + Review</h3>
-        <p style="font-size: 0.9rem;">Los agentes producen artefactos. El protocolo de revisión por auditor valida calidad. Trust gate decide si se necesita aprobacion humana.</p>
-      </div>
-      <div class="card">
-        <h3><span style="color: var(--text-dim);">Paso 5</span> Learn</h3>
-        <p style="font-size: 0.9rem;">ELO actualizado. Findings almacenados. La proxima mision arranca con conocimiento acumulado y ratings calibrados.</p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Slide 10: Seguridad -->
-<div class="slide" id="s10">
-  <span class="tag red">Seguridad</span>
-  <h2 style="margin-top: 20px;">Asi protegemos el sistema</h2>
-  <p style="margin-bottom: 16px; font-size: 1.05rem;">Hardening via analisis STRIDE+DREAD. Cada componente construido con least-privilege y auditabilidad.</p>
-  <div class="grid-3">
-    <div class="card">
-      <h3 style="color: var(--red);">Validacion hardened</h3>
-      <ul style="font-size: 0.9rem;">
-        <li>Path traversal bloqueado (normalizacion por componentes)</li>
-        <li>Config files protegidos via path_not_match</li>
-        <li>Bash delegations requieren scope obligatorio</li>
-        <li>Severity validada contra enum cerrado</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--amber);">Trust Boundaries</h3>
-      <ul style="font-size: 0.9rem;">
-        <li>Todos los MCP tools son read-only (retornan CLI commands)</li>
-        <li>TTL de delegacion max 24h, delegaciones sin TTL ignoradas</li>
-        <li>Reglas blocked son no-overridables</li>
-        <li>Falla del hook retorna "ask" (fallback seguro)</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3 style="color: var(--green);">STRIDE+DREAD validado</h3>
-      <ul style="font-size: 0.9rem;">
-        <li>25 amenazas identificadas, 8 fixes aplicados</li>
-        <li>DREAD maximo: 9.4 → 6.2 post-hardening</li>
-        <li>0 findings Critical, 0 findings High</li>
-        <li>Review independiente del Security Architect</li>
-      </ul>
-    </div>
-  </div>
-  <div class="grid-2" style="margin-top: 20px;">
-    <div class="card" style="padding: 20px;">
-      <h3 style="font-size: 1rem;">6 Invariantes del Review</h3>
-      <p style="font-size: 0.9rem;">Self-review bloqueado. Pairing anti-reciproco. Hashing de artefactos. Minimo de dimensiones de score. Findings criticos escalan. Score floor en 5.0.</p>
-    </div>
-    <div class="card" style="padding: 20px;">
-      <h3 style="font-size: 1rem;">Cero dependencias externas</h3>
-      <p style="font-size: 0.9rem;">Sin llamadas de red en el hook path. Sin bases de datos. Sin Docker. Todo filesystem-based y git-versionable. Superficie de ataque minima.</p>
-    </div>
-  </div>
-</div>
-
-<!-- Slide 11: Arquitectura + Roadmap -->
-<div class="slide slide-dense" id="s11">
-  <span class="tag cyan">Arquitectura + Roadmap</span>
-  <h2 style="margin-top: 16px;">Rust workspace, 4 crates, <span class="highlight">25 MCP tools</span></h2>
-  <div class="grid-2" style="align-items: start;">
-    <div>
-      <div class="grid-2" style="gap: 12px; margin-top: 0;">
-        <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number cyan" style="font-size: 3rem;">&lt;15ms</div>
-          <div class="stat-label">Hook latency</div>
+      <h3 style="font-size: 1rem; color: var(--text);">Trust tiers (min 3 reviews)</h3>
+      <div style="margin-bottom: 16px;">
+        <div class="card" style="margin-bottom: 8px; padding: 16px; border-left: 3px solid var(--green);">
+          <p style="font-size: 0.9rem;"><span class="green">Elevated (ELO >= 1600)</span> — Auto-approve role tools_allowed</p>
         </div>
-        <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number green" style="font-size: 3rem;">303</div>
-          <div class="stat-label">Tests passing</div>
+        <div class="card" style="margin-bottom: 8px; padding: 16px; border-left: 3px solid var(--blue);">
+          <p style="font-size: 0.9rem;"><span class="blue">Standard (ELO 1300-1599)</span> — Default rules</p>
         </div>
-        <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number purple" style="font-size: 3rem;">25</div>
-          <div class="stat-label">MCP tools</div>
+        <div class="card" style="margin-bottom: 8px; padding: 16px; border-left: 3px solid var(--amber);">
+          <p style="font-size: 0.9rem;"><span class="amber">Restricted (ELO 1100-1299)</span> — Everything asks</p>
         </div>
-        <div class="card" style="text-align: center; padding: 20px;">
-          <div class="stat-number amber" style="font-size: 3rem;">4</div>
-          <div class="stat-label">Rust crates</div>
+        <div class="card" style="margin-bottom: 8px; padding: 16px; border-left: 3px solid var(--red);">
+          <p style="font-size: 0.9rem;"><span class="red">Probation (ELO < 1100)</span> — Bash + WebFetch blocked</p>
+        </div>
+        <div class="card" style="padding: 16px;">
+          <p style="font-size: 0.9rem;"><span class="dim">Uncalibrated (reviews < 3)</span> — Default rules, warming up</p>
         </div>
       </div>
-      <div class="card" style="margin-top: 12px; padding: 16px;">
-        <h3 style="font-size: 0.95rem;">MCP tools por area</h3>
-        <p style="font-size: 0.8rem;">
-          <span class="tag amber" style="font-size: 0.7rem;">Firewall</span> config_check, evaluate, delegate, delegate_list, delegate_revoke, queue_list<br>
-          <span class="tag green" style="font-size: 0.7rem;">Library</span> library_list, library_show, library_select, library_generate, library_create_role, library_create_pattern<br>
-          <span class="tag blue" style="font-size: 0.7rem;">Review</span> review_submit, review_list, review_evaluate<br>
-          <span class="tag purple" style="font-size: 0.7rem;">ELO</span> elo_ratings, findings_query, findings_list<br>
-          <span class="tag" style="font-size: 0.7rem; border-color: var(--red); color: var(--red);">Alerts</span> alerts_list, alerts_ack, calibrate_auditor, calibrate_auditor_feedback<br>
-          <span class="tag cyan" style="font-size: 0.7rem;">Ops</span> mission_deactivate, calibrate, session_stats<br>
-          <span class="tag" style="font-size: 0.7rem; border-color: var(--cyan); color: var(--cyan);">Hook</span> PermissionRequest + SubagentStop &rarr; auto-approve + review enforcement
+
+      <div class="card" style="padding: 16px; border-color: var(--amber-dim);">
+        <h3 style="font-size: 0.95rem;">Safety properties</h3>
+        <p style="font-size: 0.85rem;">Blocked always wins. YAML beats ELO. Elevated Bash guard (needs explicit patterns). Calibrate reset kills all overrides. Trust gate floor at 5.0.</p>
+      </div>
+      <div class="card" style="padding: 12px; margin-top: 8px;">
+        <p style="font-size: 0.85rem;">
+          <span class="highlight">CLI:</span> <code>colmena elo show</code> | <code>colmena calibrate run</code> | <code>colmena calibrate show</code> | <code>colmena calibrate reset</code><br>
+          <span class="highlight">MCP:</span> <code>elo_ratings</code> | <code>calibrate_auditor</code> | <code>calibrate_auditor_feedback</code>
         </p>
       </div>
-      <div class="card" style="margin-top: 12px; padding: 16px;">
-        <h3 style="font-size: 0.95rem;">Tech stack</h3>
-        <p style="font-size: 0.85rem;">Rust 2021, rmcp (MCP stdio), serde, clap, tokio, regex pre-compilado. 4 crates: core, cli, filter, mcp</p>
-      </div>
-    </div>
-    <div>
-      <h3 style="font-size: 1rem; color: var(--text);">Roadmap</h3>
-      <div class="timeline" style="flex-direction: column; gap: 0; margin-top: 8px;">
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M0</span> Trust Firewall</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Reglas YAML, auto-approve ~70%, audit trail, hook + queue</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M0.5 + M1</span> MCP + Wisdom Library</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Workspace refactor, MCP server, 4 roles, 6 patterns, mission generator</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M2</span> Auditor Review + ELO + Findings</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Cross-review, trust gate, ELO con temporal decay, findings store</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M3</span> Dynamic Trust + Security Hardening</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO calibration, STRIDE/DREAD hardening (8 fixes), output filtering, session stats</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M3.5</span> Mission Bridge</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">ELO reviewer lead, review instructions en CLAUDE.md, pipeline spawn → review → learn</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M4-M5</span> Prompt Refinement + Caido + Setup</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Debate para mejora de prompts, roles Caido-native, colmena setup plug-and-play</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6-M6.3</span> Roles Inteligentes + Firewall Auto-Approve</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">8 categorias de roles, PermissionRequest hook, session rules, mission revocation kill switch</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);">
-          <span class="tag green" style="font-size: 0.7rem; min-width: 50px; text-align: center;">DONE</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="green">M6.4</span> Enforced Auditor Review</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">SubagentStop hook, auditor centralizado, alertas, calibracion de auditor (25 MCP tools)</p>
-          </div>
-        </div>
-        <div style="display: flex; align-items: center; gap: 16px; padding: 12px 0;">
-          <span class="tag amber" style="font-size: 0.7rem; min-width: 50px; text-align: center;">NEXT</span>
-          <div>
-            <p style="font-size: 1rem; font-weight: 600;"><span class="highlight">M7</span> Library Guardian</p>
-            <p style="font-size: 0.85rem; color: var(--text-dim);">Validacion de prompts, integridad de archivos, trust elevation para Wisdom Library</p>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 </div>
 
-<!-- Slide 12: Cierre -->
-<div class="slide center-content" id="s12">
-  <img src="colmena-banner.png" alt="Colmena" class="banner-img" style="width: 150px;" onerror="this.style.display='none'">
-  <h1 style="font-size: 3rem;">Del ruido de permisos<br>a la <span class="highlight">orquestacion con criterio.</span></h1>
-  <div style="margin-top: 40px; display: flex; gap: 24px;">
-    <div class="card" style="padding: 16px 28px; text-align: center;">
-      <p style="font-size: 0.85rem; color: var(--text-dim);">Repositorio</p>
-      <p class="mono" style="font-size: 0.9rem;">github.com/4rth4S/colmena</p>
+<!-- Slide 9: Metrics -->
+<div class="slide slide-dense" id="s9">
+  <span class="tag cyan">Metrics</span>
+  <h2 style="margin-top: 20px;">622 tests, v0.14.0, 31 MCP tools, measured results</h2>
+  <div class="grid-4" style="margin-top: 24px;">
+    <div class="card" style="text-align: center;">
+      <div class="stat-number green" style="font-size: 3rem;">622</div>
+      <div class="stat-label">Tests</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Rust unit + integration tests across 4 crates</p>
     </div>
-    <div class="card" style="padding: 16px 28px; text-align: center;">
-      <p style="font-size: 0.85rem; color: var(--text-dim);">Stack</p>
-      <p class="mono" style="font-size: 0.9rem;">Rust + MCP + YAML</p>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number amber" style="font-size: 3rem;">31</div>
+      <div class="stat-label">MCP tools</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Firewall, library, review, ELO, alerts, operations</p>
     </div>
-    <div class="card" style="padding: 16px 28px; text-align: center;">
-      <p style="font-size: 0.85rem; color: var(--text-dim);">v0.8.0</p>
-      <p class="mono" style="font-size: 0.9rem;">4 crates, 303 tests, 25 MCP tools</p>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number cyan" style="font-size: 3rem;">~56</div>
+      <div class="stat-label">Prompts saved / session</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Auto-approve eliminates ~70% of permission prompts</p>
+    </div>
+    <div class="card" style="text-align: center;">
+      <div class="stat-number green" style="font-size: 3rem;">~20%</div>
+      <div class="stat-label">Friction reduction</div>
+      <p style="font-size: 0.85rem; margin-top: 8px; color: var(--text-dim);">Measured April 2026, multi-agent sessions</p>
     </div>
   </div>
-  <p style="margin-top: 40px; font-size: 1rem; color: var(--text-dim);">
+
+  <div class="grid-2" style="margin-top: 20px;">
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Zero LLM calls in the hot path</h3>
+      <p style="font-size: 0.9rem;">Every firewall decision uses YAML rules compiled to regex. No LLM inference per call. Latency under 15ms per hook invocation. Deterministic: same input, same decision, every time.</p>
+    </div>
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Real-world validation</h3>
+      <p style="font-size: 0.9rem;">Designed for pentesters, developers, devops, and SREs. Deterministic governance with append-only audit log. Every tool call evaluated against YAML rules — no LLM in the hot path, zero per-call cost. ELO-calibrated trust per role with temporal decay.</p>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top: 16px;">
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Measured: multi-agent session</h3>
+      <p style="font-size: 0.9rem;">Three agents across a 30-minute audit: ~90 tool calls total, ~76 auto-approved (silent), ~14 real decisions, 1 blocked. From ~100 prompts to ~17. Zero context switches for routine operations.</p>
+    </div>
+    <div class="card" style="padding: 20px;">
+      <h3 style="font-size: 1rem;">Measured: security hardening sprint</h3>
+      <p style="font-size: 0.9rem;">3-hour session, 4 parallel squads. 1,335 of 1,675 tool calls auto-approved (80%). 53 destructive commands blocked. 29 unique agents managed. Zero merge conflicts. DREAD max 9.4 reduced to 6.2.</p>
+    </div>
+  </div>
+
+  <div style="text-align: center; margin-top: 16px;">
+    <p style="font-size: 0.85rem; color: var(--text-dim);">
+      <span class="tag green">4 crates</span>
+      <span class="tag amber">5 hook points</span>
+      <span class="tag blue">6 evaluation levels</span>
+      <span class="tag purple">4 trust tiers</span>
+      <span class="tag cyan">31 MCP tools</span>
+    </p>
+  </div>
+</div>
+
+<!-- Slide 10: Get Started -->
+<div class="slide center-content" id="s10">
+  <h1 style="font-size: 3rem;">From permission noise<br>to <span class="highlight">orchestration with accountability.</span></h1>
+  <div class="code-block" style="margin-top: 40px; font-size: 0.95rem; max-width: 700px;">
+git clone git@github.com:4rth4S/colmena.git
+cd colmena
+cargo build --workspace --release
+./target/release/colmena setup
+colmena doctor                           # verify everything
+colmena mission init --slug first-mission # create manifest
+colmena mission spawn --from first-mission.mission.yaml --dry-run
+  </div>
+  <div style="margin-top: 24px; display: flex; gap: 16px;">
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;"><a href="https://github.com/4rth4S/colmena/blob/main/README.md" style="color: var(--cyan);">README</a> — overview and feature list</p>
+    </div>
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;"><a href="user/getting-started.md" style="color: var(--cyan);">Getting Started</a> — 5-minute onboarding</p>
+    </div>
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;"><a href="guide.md" style="color: var(--cyan);">Guide</a> — subsystem reference</p>
+    </div>
+  </div>
+  <div style="margin-top: 16px; display: flex; gap: 16px;">
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;"><a href="user/use-cases.md" style="color: var(--cyan);">Use Cases</a> — 4 real scenarios with manifests</p>
+    </div>
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;"><a href="install-mode-b.md" style="color: var(--cyan);">Install Mode B</a> — bootstrap from within CC</p>
+    </div>
+    <div class="card" style="padding: 12px 20px;">
+      <p style="font-size: 0.85rem;">GitHub Issues — questions and feedback</p>
+    </div>
+  </div>
+  <div style="margin-top: 12px; display: flex; gap: 12px; max-width: 1000px;">
+    <div class="card" style="padding: 10px 16px; flex: 1;">
+      <p style="font-size: 0.7rem; color: var(--amber); font-weight: 600;">13 BUILT-IN ROLES</p>
+      <p style="font-size: 0.65rem; color: var(--text-dim);">
+        security_architect | pentester | auditor | researcher | web_pentester | api_pentester |
+        developer | code_reviewer | tester | architect | devops_engineer | sre | platform_engineer
+      </p>
+    </div>
+    <div class="card" style="padding: 10px 16px; flex: 1;">
+      <p style="font-size: 0.7rem; color: var(--amber); font-weight: 600;">10 BUILT-IN PATTERNS</p>
+      <p style="font-size: 0.65rem; color: var(--text-dim);">
+        pipeline | oracle-workers | debate | plan-then-execute | mentored-execution |
+        swarm-consensus | caido-pentest | code-review-cycle | docs-from-code | refactor-safe
+      </p>
+    </div>
+  </div>
+  <div style="margin-top: 16px; display: flex; gap: 24px;">
+    <div class="card" style="padding: 12px 20px; text-align: center;">
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Repository</p>
+      <p class="mono" style="font-size: 0.85rem;">github.com/4rth4S/colmena</p>
+    </div>
+    <div class="card" style="padding: 12px 20px; text-align: center;">
+      <p style="font-size: 0.8rem; color: var(--text-dim);">Stack</p>
+      <p class="mono" style="font-size: 0.85rem;">Rust + MCP + YAML</p>
+    </div>
+    <div class="card" style="padding: 12px 20px; text-align: center;">
+      <p style="font-size: 0.8rem; color: var(--text-dim);">v0.14.0</p>
+      <p class="mono" style="font-size: 0.85rem;">4 crates, 622 tests, 31 MCP tools</p>
+    </div>
+  </div>
+  <p style="margin-top: 24px; font-size: 0.9rem; color: var(--text-dim);">
     built with &#10084;&#65039;&#8205;&#128293; by AppSec
   </p>
 </div>
 
 <!-- Navigation -->
 <div class="progress-bar" id="progressBar"></div>
-<div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">13</span></div>
+<div class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">10</span></div>
 <div class="nav">
-  <button id="btnPrev">&#8592;</button>
-  <button id="btnNext">&#8594;</button>
+  <button id="btnPrev">&larr;</button>
+  <button id="btnNext">&rarr;</button>
 </div>
 
 <script>
@@ -1132,7 +1099,6 @@
     function nextSlide() { showSlide(current + 1); }
     function prevSlide() { showSlide(current - 1); }
 
-    // Keyboard nav
     document.addEventListener('keydown', function(e) {
       if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'Enter') { e.preventDefault(); nextSlide(); }
       if (e.key === 'ArrowLeft' || e.key === 'Backspace') { e.preventDefault(); prevSlide(); }
@@ -1140,13 +1106,11 @@
       if (e.key === 'End') { e.preventDefault(); showSlide(total - 1); }
     });
 
-    // Click nav (click right half = next, left half = prev)
     document.addEventListener('click', function(e) {
       if (e.target.tagName === 'BUTTON') return;
       if (e.clientX > window.innerWidth / 2) { nextSlide(); } else { prevSlide(); }
     });
 
-    // Touch support
     var touchStartX = 0;
     document.addEventListener('touchstart', function(e) { touchStartX = e.touches[0].clientX; });
     document.addEventListener('touchend', function(e) {
@@ -1154,11 +1118,9 @@
       if (Math.abs(diff) > 50) { diff > 0 ? nextSlide() : prevSlide(); }
     });
 
-    // Button nav
     document.getElementById('btnPrev').addEventListener('click', function(e) { e.stopPropagation(); prevSlide(); });
     document.getElementById('btnNext').addEventListener('click', function(e) { e.stopPropagation(); nextSlide(); });
 
-    // Init
     showSlide(0);
   });
 </script>
