@@ -78,6 +78,8 @@ pub struct SpawnResult {
     /// Existing subagent `.md` files that already satisfy the minimums check
     /// and were respected (not overwritten).
     pub subagent_files_respected: Vec<PathBuf>,
+    /// Path to spawn-manifest.json (only populated when `auto_spawn` is true).
+    pub spawn_manifest_path: Option<PathBuf>,
 }
 
 /// A ready-to-paste agent prompt with mission marker.
@@ -92,6 +94,32 @@ pub struct AgentPrompt {
     /// right model when pasting into the Agent tool. `None` leaves the choice
     /// to the operator.
     pub model: Option<String>,
+    /// Agent ID used as the subagent file name (e.g. `developer` or
+    /// `mission__developer-core`). Maps to `subagent_type` in CC's Agent tool.
+    /// Populated by `spawn_mission()` during agent prompt assembly.
+    pub agent_id: String,
+}
+
+/// Entry in the spawn manifest consumed by the Mission Lead.
+#[derive(Debug, serde::Serialize)]
+struct SpawnManifestEntry {
+    index: usize,
+    subagent_type: String,
+    description: String,
+    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    depends_on: Vec<usize>,
+}
+
+/// Spawn manifest written to the mission directory for auto-spawn.
+#[derive(Debug, serde::Serialize)]
+struct SpawnManifest {
+    mission_id: String,
+    generated_at: String,
+    mission_dir: String,
+    agents: Vec<SpawnManifestEntry>,
 }
 
 /// Generated mission configuration
@@ -1411,6 +1439,43 @@ fn build_instance_map(
     map
 }
 
+/// Write the spawn manifest that the Mission Lead reads to spawn workers.
+fn write_spawn_manifest(
+    mission_dir: &Path,
+    agent_prompts: &[AgentPrompt],
+    mission_id: &str,
+    dry_run: bool,
+) -> Result<PathBuf> {
+    let manifest_path = mission_dir.join("spawn-manifest.json");
+
+    let entries: Vec<SpawnManifestEntry> = agent_prompts
+        .iter()
+        .enumerate()
+        .map(|(i, ap)| SpawnManifestEntry {
+            index: i,
+            subagent_type: ap.agent_id.clone(),
+            description: format!("{} for mission {}", ap.role_name, mission_id),
+            prompt: ap.prompt.clone(),
+            model: ap.model.clone(),
+            depends_on: Vec::new(),
+        })
+        .collect();
+
+    let manifest = SpawnManifest {
+        mission_id: mission_id.to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+        mission_dir: mission_dir.to_string_lossy().to_string(),
+        agents: entries,
+    };
+
+    if !dry_run {
+        let json = serde_json::to_string_pretty(&manifest)?;
+        std::fs::write(&manifest_path, &json)?;
+    }
+
+    Ok(manifest_path)
+}
+
 /// generate mission with markers → persist delegations.
 ///
 /// Pipeline:
@@ -1438,6 +1503,7 @@ pub fn spawn_mission(
     extend_existing: bool,
     dry_run: bool,
     overwrite_subagents: bool,
+    auto_spawn: bool,
 ) -> Result<SpawnResult> {
     if roles.is_empty() {
         anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
@@ -1652,15 +1718,18 @@ pub fn spawn_mission(
                     prompt: instance_prompt,
                     claude_md_path: agent_cfg.claude_md_path.clone(),
                     model: model.clone(),
+                    agent_id,
                 });
             }
         } else {
+            let agent_id = build_agent_id(&mission_name, &agent_cfg.role_id, None);
             agent_prompts.push(AgentPrompt {
                 role_id: agent_cfg.role_id.clone(),
                 role_name: agent_cfg.role_name.clone(),
                 prompt,
                 claude_md_path: agent_cfg.claude_md_path.clone(),
                 model,
+                agent_id,
             });
         }
     }
@@ -1786,6 +1855,98 @@ pub fn spawn_mission(
              --overwrite to regenerate (a .colmena-backup will be kept).\n{}",
             detail
         );
+    }
+
+    // 4c. Auto-spawn: write spawn-manifest.json and generate Mission Lead prompt.
+    //     The lead is a thin executor that reads the manifest and spawns workers
+    //     sequentially. The operator spawns 1 agent (the lead) instead of N workers.
+    let mut spawn_manifest_path: Option<PathBuf> = None;
+    if auto_spawn {
+        // Find the mission-lead role
+        let lead_role = roles
+            .iter()
+            .find(|r| r.id == "mission-lead")
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Auto-spawn requires the 'mission-lead' role in the library. \
+                     Run 'colmena setup' or add config/library/roles/mission-lead.yaml."
+                )
+            })?;
+
+        // Write spawn manifest with ALL current agent_prompts (workers only, not the lead)
+        spawn_manifest_path = Some(write_spawn_manifest(
+            &mission_config.mission_dir,
+            &agent_prompts,
+            &mission_name,
+            dry_run,
+        )?);
+
+        // Generate lead prompt
+        let lead_system_prompt =
+            crate::library::load_prompt(library_dir, &lead_role.system_prompt_ref)
+                .with_context(|| "Failed to load prompt for role 'mission-lead'")?;
+
+        // Replace template variable with actual path
+        let manifest_path_str = mission_config
+            .mission_dir
+            .join("spawn-manifest.json")
+            .to_string_lossy()
+            .to_string();
+        let lead_prompt_body =
+            lead_system_prompt.replace("{mission_dir}/spawn-manifest.json", &manifest_path_str);
+
+        // Build the lead prompt with mission marker
+        let lead_prompt = format!(
+            "{}{} -->\n{}",
+            MISSION_MARKER_PREFIX, mission_name, lead_prompt_body
+        );
+
+        // Determine lead agent_id
+        let lead_agent_id = build_agent_id(&mission_name, "mission-lead", None);
+
+        // Prepend lead to agent_prompts (so it shows first in output)
+        let lead_ap = AgentPrompt {
+            role_id: lead_role.id.clone(),
+            role_name: lead_role.name.clone(),
+            prompt: lead_prompt,
+            claude_md_path: mission_config.mission_dir.join("LEAD.md"),
+            model: lead_role.model.clone(),
+            agent_id: lead_agent_id.clone(),
+        };
+        agent_prompts.insert(0, lead_ap);
+
+        // Write lead subagent file
+        {
+            let lead_tools =
+                crate::emitters::claude_code::mission_tool_set(&lead_role.tools_allowed);
+            let lead_subagent_path = agents_dir.join(format!("{}.md", lead_agent_id));
+            if !dry_run {
+                crate::emitters::claude_code::write_subagent_file(
+                    &lead_subagent_path,
+                    "mission-lead",
+                    &lead_role.description,
+                    &lead_tools,
+                    &lead_prompt_body,
+                    overwrite_subagents,
+                )?;
+                subagent_files_written.push(lead_subagent_path);
+            }
+        }
+
+        // Generate lead delegations
+        let lead_delegations = generate_role_delegations(
+            lead_role,
+            &mission_name,
+            &mission_config.mission_dir,
+            session_id,
+            now,
+            chrono::Duration::hours(
+                manifest
+                    .map(|m| m.mission_ttl_hours)
+                    .unwrap_or(DEFAULT_MISSION_TTL_HOURS),
+            ),
+        );
+        mission_config.delegations.extend(lead_delegations);
     }
 
     // 5. Persist delegations directly to runtime-delegations.json with idempotency.
@@ -1966,6 +2127,7 @@ pub fn spawn_mission(
         mission_config,
         subagent_files_written,
         subagent_files_respected,
+        spawn_manifest_path,
     })
 }
 
@@ -3206,6 +3368,7 @@ mod tests {
             false, // extend_existing
             false, // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -3263,6 +3426,7 @@ mod tests {
             false, // extend_existing
             false, // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         );
         assert!(
             result.is_ok(),
@@ -3302,6 +3466,7 @@ mod tests {
             false, // extend_existing
             false, // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         );
         assert!(
             result.is_err(),
@@ -3368,6 +3533,7 @@ mod tests {
             false, // extend_existing
             false, // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         )
         .unwrap();
 
@@ -3769,7 +3935,8 @@ mod tests {
             None,
             false,
             false,
-            true, // overwrite_subagents
+            true,  // overwrite_subagents
+            false, // auto_spawn
         )
         .unwrap();
 
@@ -3845,6 +4012,7 @@ mod tests {
             false, // extend_existing
             true,  // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         )
         .unwrap();
 
@@ -3917,6 +4085,7 @@ agents:
             false,            // extend_existing
             false,            // dry_run
             false,            // overwrite_subagents
+            false,            // auto_spawn
         );
 
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
@@ -4033,6 +4202,7 @@ agents:
             false, // extend_existing
             true,  // dry_run
             false, // overwrite_subagents
+            false, // auto_spawn
         );
 
         assert!(

@@ -197,6 +197,10 @@ struct MissionSpawnInput {
     /// to spawn it (read-only -- same pattern as delegate MCP).
     #[serde(default)]
     manifest_path: Option<String>,
+    /// Generate a Mission Lead that spawns all workers — operator spawns
+    /// 1 agent instead of N. Writes spawn-manifest.json to mission dir.
+    #[serde(default)]
+    auto_spawn: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1501,6 +1505,7 @@ impl ColmenaServer {
             false, // extend_existing — safe default; humans can rerun via CLI if needed
             false, // dry_run
             false, // overwrite_subagents — MCP never overwrites; human-only via CLI
+            input.auto_spawn,
         )
         .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
 
@@ -1538,27 +1543,59 @@ impl ColmenaServer {
         }
 
         // Agent prompts (ready to paste into Agent tool)
-        output.push_str("\n## Agent Prompts\n\n");
-        output.push_str("Paste each prompt into the Agent tool's `prompt` parameter:\n\n");
-        for ap in &spawn_result.agent_prompts {
-            let model_suffix = ap
-                .model
-                .as_ref()
-                .map(|m| format!(" [model: {m}]"))
-                .unwrap_or_default();
-            output.push_str(&format!(
-                "### {} ({}){}\n\nCLAUDE.md: {}\n\n<details><summary>Prompt (click to expand)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
-                ap.role_id,
-                ap.role_name,
-                model_suffix,
-                ap.claude_md_path.display(),
-                // Show first 200 chars + indicator
-                if ap.prompt.len() > 200 {
-                    format!("{}...\n[Full prompt at {}]", &ap.prompt[..200], ap.claude_md_path.display())
-                } else {
-                    ap.prompt.clone()
-                },
-            ));
+        if input.auto_spawn {
+            output.push_str("\n## [AUTO-SPAWN] Mission Lead\n\n");
+            output.push_str("Spawn this **ONE** agent. The lead will spawn all workers.\n\n");
+            if let Some(lead) = spawn_result.agent_prompts.first() {
+                let worker_count = spawn_result.agent_prompts.len() - 1;
+                let model_suffix = lead
+                    .model
+                    .as_ref()
+                    .map(|m| format!(" [model: {m}]"))
+                    .unwrap_or_default();
+                output.push_str(&format!(
+                    "subagent_type: `{}`{}\n\n",
+                    lead.agent_id, model_suffix
+                ));
+                output.push_str(&format!(
+                    "The lead will spawn **{} workers** from `spawn-manifest.json`.\n\n",
+                    worker_count
+                ));
+                output.push_str("**Worker agents:** ");
+                let workers: Vec<String> = spawn_result.agent_prompts[1..]
+                    .iter()
+                    .map(|ap| format!("`{}` ({})", ap.agent_id, ap.role_name))
+                    .collect();
+                output.push_str(&workers.join(", "));
+                output.push_str(
+                    "\n\n<details><summary>Lead prompt (click to expand)</summary>\n\n```\n",
+                );
+                output.push_str(&lead.prompt);
+                output.push_str("\n```\n\n</details>\n\n");
+            }
+        } else {
+            output.push_str("\n## Agent Prompts\n\n");
+            output.push_str("Paste each prompt into the Agent tool's `prompt` parameter:\n\n");
+            for ap in &spawn_result.agent_prompts {
+                let model_suffix = ap
+                    .model
+                    .as_ref()
+                    .map(|m| format!(" [model: {m}]"))
+                    .unwrap_or_default();
+                output.push_str(&format!(
+                    "### {} ({}){}\n\nCLAUDE.md: {}\n\n<details><summary>Prompt (click to expand)</summary>\n\n```\n{}\n```\n\n</details>\n\n",
+                    ap.role_id,
+                    ap.role_name,
+                    model_suffix,
+                    ap.claude_md_path.display(),
+                    // Show first 200 chars + indicator
+                    if ap.prompt.len() > 200 {
+                        format!("{}...\n[Full prompt at {}]", &ap.prompt[..200], ap.claude_md_path.display())
+                    } else {
+                        ap.prompt.clone()
+                    },
+                ));
+            }
         }
 
         // Delegations summary (persisted directly to runtime-delegations.json).
