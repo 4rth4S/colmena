@@ -1,4 +1,4 @@
-# Colmena Backlog — fecha: 2026-05-05
+# Colmena Backlog — fecha: 2026-05-07
 # Formato: lista de problemas/features con dependencias, esfuerzo estimado,
 # y agrupación en waves para ejecución paralela (dark factory).
 #
@@ -107,120 +107,124 @@ problems:
     memory_ref: project_m711_session_end_value_banner.md
 
   - id: m7.4-role-ergonomics
-    title: "M7.4 Role ergonomics CLI — clone, inherit, doctor"
+    title: "M7.4 Role ergonomics CLI — DONE (clone, doctor, bundled fixes)"
     what: |
-      1. colmena role clone <existing> --as <new_id> — copiar como template
-      2. colmena role inherit --from <base> --specializations X,Y --name <new> — scaffold
-      3. colmena role doctor <id> — validar YAML + sugerir category/bash_patterns/tools_allowed
+      1. colmena library clone-role <existing> --as <new_id> ✓
+      2. colmena library doctor <id> — validar YAML + sugerir mejoras ✓
+      3. colmena library create-role — creación con intelligent defaults ✓
       4. Bundled fixes:
-         a. colmena suggest agent count inflation (suma auditor extra)
-         b. library select CLI no-op on EOF en vez de tomar default
-         c. delegate add --path / --bash-pattern flags (condiciones desde CLI)
-         d. mission_spawn --code-paths para scope de workers
+         a. colmena suggest agent count inflation fix ✓
+         b. library select CLI manejo de EOF ✓
+         c. delegate add --bash-pattern / --path-within flags ✓
+         d. mission_spawn scope via manifest --scope ✓
+      Nota: 'inherit' se subsume en clone-role (copiar como template + modificar).
     why: "Pedido explícito de los 4 power users. Mayor fricción reportada."
     effort: L
     risk: medium
     blocks: []
     blocked_by: []
     wave: 1
-    status: pending
+    status: done
+    done_in: PR #61
     tags: [feature, ux, cli]
     produces_pr: true
     memory_ref: project_m712_state.md
 
   - id: m7.13-crates-io
-    title: "M7.13 crates.io publication — diseño + ejecución"
+    title: "M7.13 crates.io publication — DONE"
     what: |
-      1. Diseñar: package rename (colmena-cli → colmena), publish order, path-dep versions
-      2. Verificar nombres reservados en crates.io (ya confirmados free 2026-04-23)
-      3. Agregar version = "0.14.0" a path deps en Cargo.toml
-      4. Configurar CARGO_REGISTRY_TOKEN
-      5. Publicar en orden: core → filter → mcp → cli
-      6. Decidir publish=false para algún crate (si aplica)
-      7. Release automation en release.yml (tag-driven)
-    why: "Los 5 nombres están free. Publicar abre distribución fuera de git clone."
+      1. Package rename: colmena-cli → colmena ✓
+      2. Nombres verificados free 2026-04-23 ✓
+      3. Path-dep versions agregadas ✓
+      4. CARGO_REGISTRY_TOKEN configurado ✓
+      5. Publicado: core → filter → mcp → cli (v0.14.0 / v0.14.2) ✓
+      6. Release automation en release.yml ✓
+    why: "Distribución fuera de git clone."
     effort: M
     risk: medium
     blocks: []
     blocked_by: []
     wave: 1
-    status: pending
+    status: done
+    done_in: PR #59 + PR #60
     tags: [feature, release, distribution]
     produces_pr: true
-    memory_ref: project_m713_crates_io_pub.md
 
   # ── Wave 2 — Dependen de Wave 1 o entre sí ──
 
   - id: m7.3.1-anti-reciprocal-fix
-    title: "M7.3.1 Anti-reciprocal invariant scoped per-mission, not global"
+    title: "M7.3.1 Anti-reciprocal invariant — scoped per-mission → FIXED (M7.3.2)"
     what: |
-      submit_review filtra reviewer candidates contra el store completo de reviews
-      (review.rs:141-147). Debería scoped a existing.mission == current.mission.
-      Auditor también: verificar cross-mission leaks en stale-review auto-invalidation.
-    why: "Bloquea reutilización legítima de reviewer entre misiones. M7.15 lo declara hard blocker."
+      El anti-reciprocal filter fue REMOVIDO en M7.3.2.
+      Cross-mission reviewer reuse ahora está explícitamente permitido.
+      review.rs:121-127 documenta el cambio. Test test_submit_cross_mission_reviewer_reuse_allowed lo verifica.
+      Perspective diversification across missions → M7.7 (future).
+    why: "Bloqueaba reutilización legítima de reviewer entre misiones."
     effort: S
     risk: low
-    blocks: [m7.15-mission-manifest]
+    blocks: []
     blocked_by: []
     wave: 2
-    status: pending
+    status: done
+    done_in: M7.3.2 (post dogfood 2026-04-21)
     tags: [bug, review, elo]
     produces_pr: true
     memory_ref: project_review_reciprocal_cross_mission_bug.md
 
   - id: m7.3-description-omission
-    title: "M7.3 mission_spawn omite description en subagent files"
+    title: "M7.3 mission_spawn omite description en subagent files — FIXED"
     what: |
-      Auto-generated subagent files (~/.claude/agents/<role>.md) no incluyen
-      description en frontmatter → CC los omite silenciosamente en el listado.
-      Agregar description derivada del role YAML en la generación.
-    why: "ELO cycle roto end-to-end si CC omite agentes. M7.15 hard blocker."
+      Auto-generated subagent files ya incluyen description en frontmatter.
+      write_subagent_file() recibe description del role YAML.
+      Verificado: mission-lead subagent file tiene description correcta.
+    why: "ELO cycle se rompía si CC omitía agentes sin description."
     effort: S
     risk: low
-    blocks: [m7.15-mission-manifest]
+    blocks: []
     blocked_by: []
     wave: 2
-    status: pending
+    status: done
+    done_in: M7.3 fix (post dogfood 2026-04-21)
     tags: [bug, mission-spawn, elo]
     produces_pr: true
     memory_ref: project_mission_spawn_missing_description.md
 
   - id: m7.3-scope-gap
-    title: "M7.3 mission_spawn scopea workers a mission_dir — no pueden tocar prod"
+    title: "M7.3 mission_spawn scope gap — FIXED (M7.12 workspace_scope)"
     what: |
-      mission_spawn genera delegations con path_within: [mission_dir].
-      Misiones de refactor necesitan acceso al repo root.
-      Fix: --code-paths flag en mission_spawn o inferir de la descripción.
-      M7.4 bundled fix (d) cubre esto parcialmente con delegate add --path.
-    why: "Bloquea cualquier misión de refactor sobre el código de producción."
+      Pattern.workspace_scope: repo-wide resuelve el scope gap para misiones de refactor.
+      spawn_mission() aplica apply_repo_wide_scope() cuando el pattern lo declara.
+      Delegate add --path-within disponible para scope manual.
+      Secret exclusions por default: *.env, *credentials*, *secret*, *.key, *.pem.
+    why: "Misiones de refactor necesitan acceso al repo root."
     effort: S
     risk: low
-    blocks: [m7.15-mission-manifest]
-    blocked_by: [m7.4-role-ergonomics]  # bundled fix (d)
+    blocks: []
+    blocked_by: []
     wave: 2
-    status: pending
+    status: done
+    done_in: M7.12 (PR #39)
     tags: [bug, mission-spawn, scope]
     produces_pr: true
     memory_ref: project_mission_spawn_scope_gap.md
 
   - id: m7.15-mission-manifest
-    title: "M7.15 Mission Manifest — extend MissionManifest + multi-instance + ops surface"
+    title: "M7.15 Mission Manifest — DONE (multi-PR)"
     what: |
-      Basado en docs/architect/M7-15-mission-manifest/:
-      1. Extender MissionManifest struct en colmena-core
-      2. Multi-instance: count > 1 → N squads paralelos mismo rol
-      3. mission_spawn --manifest <file> CLI (no MCP-callable)
-      4. MCP mission_manifest_show como preview read-only
-      5. runtime-agent-overrides.json (separado de trust-firewall.yaml)
-      6. mission init/status/abort CLI
-      7. Acceptance criteria doc-only en v1 (mecanizado en M7.16)
-    why: "Dark factory: lanzar 3 squads en paralelo desde un manifiesto. Diseño listo (4 architect reviews)."
+      PR #62 (m7.15a): MissionManifest struct, validation, CLI validate + init
+      PR #63 (m7.15b): mission_spawn --from <manifest>, MCP manifest_path, mission_abort,
+                       runtime-agent-overrides.json, mission init --from-history
+      PR #64: multi-instance fan-out con namespaced agent_ids
+      PR #66: --auto-spawn con Mission Lead role (último 20% de automatización)
+      Queda pendiente: acceptance criteria mecanizado (M7.16)
+    why: "Dark factory: lanzar squads desde un manifiesto. 4 PRs merged."
     effort: XL
     risk: high
     blocks: [dark-factory-coordination]
-    blocked_by: [m7.3.1-anti-reciprocal-fix, m7.3-description-omission, m7.3-scope-gap]
+    blocked_by: []  # todos los blockers resueltos
     wave: 2
-    status: pending
+    status: done
+    done_in: PRs #62 + #63 + #64 + #66
     tags: [feature, mission-spawn, architecture]
     produces_pr: true
     memory_ref: docs/architect/M7-15-mission-manifest/
@@ -236,11 +240,12 @@ problems:
       4. Entre waves: merge secuencial → cargo test --workspace → next wave
       5. Tooling: script que lance N sesiones CC con prompts independientes
       (Futuro M7.16+: orquestador automático que lee backlog.yaml y dispara waves)
+      M7.15 (mission manifest + auto-spawn) ya destrabó el blocker principal.
     why: "Llevar el dark factory concept a operación real. v1 manual, v2 automatizado."
     effort: M
     risk: low
     blocks: []
-    blocked_by: [merge-autonomy, m7.15-mission-manifest]
+    blocked_by: [merge-autonomy]  # único blocker restante
     wave: 3
     status: pending
     tags: [feature, devops, orchestration]
@@ -264,17 +269,18 @@ problems:
     produces_pr: true
 
   - id: m7.6-install-mode-b
-    title: "M7.6 Install Mode B como first-class en README"
+    title: "M7.6 Install Mode B como first-class — DONE"
     what: |
-      Documentar y pulir el onboarding donde CC del usuario lee el repo y se autoconfigura.
-      No reemplazar Mode A, agregar B al lado.
+      docs/install-mode-b.md documenta el onboarding donde CC del usuario lee el repo y se autoconfigura.
+      README referencia Install Mode B. Validado con 4 power users.
     why: "Validado con 4 power users. Más rápido que leer docs."
     effort: S
     risk: low
     blocks: []
     blocked_by: []
     wave: future
-    status: pending
+    status: done
+    done_in: PR #65 (docs-regeneration)
     tags: [docs, onboarding]
     produces_pr: true
 
@@ -295,23 +301,24 @@ problems:
   # ── Métricas de referencia ──
 
 metrics:
-  total_problems: 15
-  wave_0_small: 3     # followups + merge autonomy + auto-elevate
-  wave_1_parallel: 3  # M7.11, M7.4, M7.13 — independientes
-  wave_2_parallel: 4  # M7.3 fixes + M7.15 — algunos dependen de wave 1
-  wave_3_parallel: 1  # dark-factory coordination
-  future: 3           # M7.7, M7.6, landing
-  total_prs_estimated: 13
+  total_problems: 14
+  done: 7           # m7.13, m7.15, m7.3.1, m7.3-desc, m7.3-scope, m7.4, m7.6
+  pending: 5         # m7.14-followups, merge-autonomy, auto-elevate, m7.11, dark-factory
+  future: 2          # m7.7, landing
+  total_prs_estimated: 5  # solo los pending
 
   effort_summary:
-    S: 4   # m7.14-followups, merge-autonomy, m7.3.1, m7.3-description, m7.3-scope-gap
-    M: 5   # auto-elevate, m7.11, m7.13, dark-factory, colmena.space
-    L: 2   # m7.4, m7.7
-    XL: 1  # m7.15
+    done_S: 3   # m7.3.1, m7.3-description, m7.3-scope-gap
+    done_M: 2   # m7.13, m7.6
+    done_L: 1   # m7.4
+    done_XL: 1  # m7.15
+    pending_S: 2   # m7.14-followups, merge-autonomy
+    pending_M: 3   # auto-elevate, m7.11, dark-factory
+    pending_L: 0
+    pending_XL: 0
 
-  # Waves visual:
-  # Wave 0 (ahora):  [followups] [merge-autonomy] [auto-elevate]  → 3 PRs, paralelo
-  # Wave 1 (indep):  [M7.11] [M7.4] [M7.13]                      → 3 PRs, paralelo
-  # Wave 2 (dep w1): [M7.3.1] [M7.3-desc] [M7.3-scope] [M7.15]   → 4 PRs
-  # Wave 3 (dep w2): [dark-factory]                                → docs + tooling
-  # Future:          [M7.7] [M7.6] [landing]
+  # Waves actualizado post-M7.15:
+  # Wave 0 (ahora):    [m7.14-followups] [merge-autonomy] [auto-elevate]  → 3 PRs, paralelo
+  # Wave 1 (ahora):    [m7.11-session-banner]                             → 1 PR
+  # Wave 2 (dep w0):   [dark-factory-coordination]                        → docs + tooling
+  # Future:             [m7.7] [colmena.space-landing]
