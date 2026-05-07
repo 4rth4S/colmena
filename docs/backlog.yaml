@@ -18,21 +18,21 @@ problems:
   # ── Wave 0 — Cleanup inmediato (< 1 sesión) ──
 
   - id: m7.14-followups
-    title: "M7.14 post-merge followups — 6 low-sev fixes"
+    title: "M7.14 post-merge followups — DONE (4 code + 2 doc)"
     what: |
-      1. queue.rs:304 — resolve_pending old_suffix match gate on session_id
-      2. config.rs:80 — mover eprintln! de hot path a config-load time
-      3. queue.rs:620 — comentar o remover legacy prune_old_entries
-      4. cli/main.rs:1140 — fix negative wrap en older_than_days (u64)
-      5. ARCHITECT_PLAN.md S4 vs S6 drift (doc)
-      6. ARCHITECT_PLAN.md Appendix A notification count (doc)
-    why: "Surfaced by code_reviewer + auditor durante PR #52. ≤10 LOC cada uno."
+      1. queue.rs: gate old_suffix on session_id absence ✓ (7956834)
+      2. config.rs: remove eprintln! hot-path spam ✓ (7956834)
+      3. queue.rs: clarify legacy prune_old_entries ✓ (7956834)
+      4. cli/main.rs: u64 for older_than_days ✓ (7956834)
+      5-6. Doc items resolved during docs-regeneration PR #65
+    why: "Surfaced by code_reviewer + auditor durante PR #52."
     effort: S
     risk: low
     blocks: []
     blocked_by: []
     wave: 0
-    status: pending
+    status: done
+    done_in: 7956834 + PR #65
     tags: [bug, chore, cleanup]
     produces_pr: true
 
@@ -302,23 +302,23 @@ problems:
 
 metrics:
   total_problems: 14
-  done: 7           # m7.13, m7.15, m7.3.1, m7.3-desc, m7.3-scope, m7.4, m7.6
-  pending: 5         # m7.14-followups, merge-autonomy, auto-elevate, m7.11, dark-factory
+  done: 8           # m7.13, m7.15, m7.3.1, m7.3-desc, m7.3-scope, m7.4, m7.6, m7.14-followups
+  pending: 4         # merge-autonomy, auto-elevate, m7.11, dark-factory
   future: 2          # m7.7, landing
-  total_prs_estimated: 5  # solo los pending
+  total_prs_estimated: 4  # solo los pending
 
   effort_summary:
-    done_S: 3   # m7.3.1, m7.3-description, m7.3-scope-gap
+    done_S: 4   # m7.14-followups, m7.3.1, m7.3-description, m7.3-scope-gap
     done_M: 2   # m7.13, m7.6
     done_L: 1   # m7.4
     done_XL: 1  # m7.15
-    pending_S: 2   # m7.14-followups, merge-autonomy
+    pending_S: 1   # merge-autonomy
     pending_M: 3   # auto-elevate, m7.11, dark-factory
     pending_L: 0
     pending_XL: 0
 
-  # Waves actualizado post-M7.15:
-  # Wave 0 (ahora):    [m7.14-followups] [merge-autonomy] [auto-elevate]  → 3 PRs, paralelo
-  # Wave 1 (ahora):    [m7.11-session-banner]                             → 1 PR
-  # Wave 2 (dep w0):   [dark-factory-coordination]                        → docs + tooling
+  # Waves actualizado:
+  # Wave 0 (ahora):    [merge-autonomy] [auto-elevate]                       → 2 PRs, paralelo
+  # Wave 1 (ahora):    [m7.11-session-banner]                                → 1 PR
+  # Wave 2 (dep w0):   [dark-factory-coordination]                           → docs + tooling
   # Future:             [m7.7] [colmena.space-landing]
