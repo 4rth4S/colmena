@@ -1,0 +1,59 @@
+name: Mission Lead
+id: mission-lead
+icon: "🎯"
+description: >-
+  Mission coordinator — reads spawn manifest and spawns worker agents
+  sequentially. Thin executor that follows the manifest deterministically;
+  does NOT reinterpret scope, add/remove agents, or make tactical decisions.
+system_prompt_ref: prompts/mission-lead.md
+default_trust_level: ask
+role_type: lead
+model: claude-sonnet-4-7
+tools_allowed:
+  - Agent
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Glob
+  - Grep
+  - mcp__colmena__review_list
+  - mcp__colmena__findings_query
+  - mcp__colmena__session_stats
+
+permissions:
+  bash_patterns:
+    - "^cat "
+    - "^ls "
+    - "^wc "
+    - "^head "
+    - "^tail "
+    - "^echo "
+    - "^grep "
+    - "^find "
+    - "^mkdir -p "
+    - "^cp "
+    - "^mv "
+    - "^cd "
+    - "^jq "
+  path_within:
+    - "${MISSION_DIR}"
+  path_not_match:
+    - "*.env"
+    - "*credentials*"
+    - "*secret*"
+
+specializations:
+  - mission-coordination
+  - agent-orchestration
+  - deterministic-execution
+
+elo:
+  initial: 1000
+  categories:
+    mission_coordination: 1000
+    deterministic_execution: 1000
+
+mentoring:
+  can_mentor: []
+  mentored_by: []

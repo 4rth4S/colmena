@@ -300,6 +300,10 @@ enum MissionAction {
         /// YAML `enforce_missions: false` is explicit and mission has ≥3 roles.
         #[arg(long)]
         no_gate_confirmed: bool,
+        /// Generate a Mission Lead that spawns all workers — operator spawns
+        /// 1 agent instead of N. Writes spawn-manifest.json to mission dir.
+        #[arg(long)]
+        auto_spawn: bool,
     },
     /// Emit the INTER_AGENT_DIRECTIVE as a standalone block for manual Agent spawns.
     PromptInject {
@@ -428,6 +432,7 @@ fn main() {
                 overwrite,
                 session_gate,
                 no_gate_confirmed,
+                auto_spawn,
             } => run_mission_spawn(
                 from,
                 mission,
@@ -441,6 +446,7 @@ fn main() {
                 overwrite,
                 session_gate,
                 no_gate_confirmed,
+                auto_spawn,
             ),
             MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
             MissionAction::Validate { file } => run_mission_validate(&file),
@@ -1154,8 +1160,12 @@ fn subagent_stop_inner(payload: &hook::SubagentStopPayload) -> Result<hook::Suba
     let library_dir = colmena_core::library::default_library_dir();
     if let Ok(roles) = colmena_core::library::load_roles(&library_dir) {
         if let Some(role) = roles.iter().find(|r| r.id == *agent_id) {
-            if role.role_type.as_deref() == Some("auditor") {
-                // Auditor is exempt from review requirement
+            if role.role_type.as_deref() == Some("auditor")
+                || role.role_type.as_deref() == Some("lead")
+            {
+                // Auditor and Mission Lead are exempt from review requirement.
+                // Lead is a thin executor — it spawns workers from the manifest
+                // deterministically; there is no artifact to review.
                 return Ok(hook::SubagentStopResponse::approve());
             }
         }
@@ -2526,6 +2536,7 @@ fn run_mission_spawn(
     overwrite: bool,
     session_gate: bool,
     no_gate_confirmed: bool,
+    auto_spawn: bool,
 ) -> Result<()> {
     use colmena_core::mission_manifest::{
         InterAgentProtocol, ManifestAgent, ManifestBashPatterns, ManifestScope, MissionBudget,
@@ -2681,6 +2692,7 @@ fn run_mission_spawn(
         extend_existing,
         dry_run,
         overwrite,
+        auto_spawn,
     )?;
 
     // Emit summary
@@ -2754,13 +2766,50 @@ fn run_mission_spawn(
     }
 
     println!();
-    println!("Next steps:");
-    for ap in &result.agent_prompts {
+    if auto_spawn {
+        // Auto-spawn: highlight the lead as the only agent to spawn
+        let lead = &result.agent_prompts[0];
+        let worker_count = result.agent_prompts.len() - 1;
+        println!("[AUTO-SPAWN] Mission Lead ready. Spawn this ONE agent:");
+        println!();
+        println!("  Agent(");
+        println!("    subagent_type: \"{}\",", lead.agent_id);
         println!(
-            "  spawn agent '{}' with prompt at: {}",
-            ap.role_id,
-            ap.claude_md_path.display()
+            "    description: \"{} for {}\",",
+            lead.role_name, result.mission_name
         );
+        println!("    prompt: \"... ({} chars) ...\"", lead.prompt.len());
+        println!("  )");
+        println!();
+        println!(
+            "The lead will spawn {} workers from spawn-manifest.json",
+            worker_count
+        );
+        if dry_run {
+            println!(
+                "  (dry-run) spawn-manifest.json WOULD be written to: {}/spawn-manifest.json",
+                result.mission_config.mission_dir.display()
+            );
+        } else {
+            println!(
+                "  spawn-manifest.json written to: {}/spawn-manifest.json",
+                result.mission_config.mission_dir.display()
+            );
+        }
+        println!();
+        println!("Worker agents (spawned by lead, not you):");
+        for ap in &result.agent_prompts[1..] {
+            println!("  - {} ({})", ap.role_name, ap.agent_id);
+        }
+    } else {
+        println!("Next steps:");
+        for ap in &result.agent_prompts {
+            println!(
+                "  spawn agent '{}' with prompt at: {}",
+                ap.role_id,
+                ap.claude_md_path.display()
+            );
+        }
     }
 
     Ok(())
