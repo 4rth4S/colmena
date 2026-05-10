@@ -582,7 +582,7 @@ fn check_runtime(config_dir: &Path) -> Vec<Check> {
     }
 
     // ELO events
-    let elo_path = config_dir.join("elo-events.jsonl");
+    let elo_path = config_dir.join("elo/elo-log.jsonl");
     if elo_path.exists() {
         match colmena_core::elo::read_elo_log(&elo_path) {
             Ok(events) => checks.push(Check::ok(
