@@ -3287,7 +3287,7 @@ fn run_mission_abort(mission_id: &str, reason: Option<&str>, force: bool) -> Res
 fn run_calibrate() -> Result<()> {
     let config_dir = default_config_dir();
     let library_dir = default_library_dir();
-    let elo_log_path = config_dir.join("elo-events.jsonl");
+    let elo_log_path = config_dir.join("elo/elo-log.jsonl");
     let overrides_path = config_dir.join("elo-overrides.json");
 
     let roles = load_roles(&library_dir)?;
@@ -3336,7 +3336,7 @@ fn run_calibrate() -> Result<()> {
 fn run_calibrate_show() -> Result<()> {
     let config_dir = default_config_dir();
     let library_dir = default_library_dir();
-    let elo_log_path = config_dir.join("elo-events.jsonl");
+    let elo_log_path = config_dir.join("elo/elo-log.jsonl");
 
     let roles = load_roles(&library_dir)?;
     let events = elo::read_elo_log(&elo_log_path)?;
