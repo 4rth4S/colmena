@@ -161,7 +161,36 @@ fn check_environment(config_dir: &Path) -> Vec<Check> {
 
     // MCP binary
     match find_mcp_binary() {
-        Some(p) => checks.push(Check::ok(CAT, "MCP binary", p.display().to_string())),
+        Some(p) => {
+            checks.push(Check::ok(CAT, "MCP binary", p.display().to_string()));
+
+            // Check MCP version matches colmena version
+            if let Some(mcp_ver) = get_mcp_version(&p) {
+                let colmena_ver = env!("CARGO_PKG_VERSION");
+                if mcp_ver == colmena_ver {
+                    checks.push(Check::ok(
+                        CAT,
+                        "MCP version",
+                        format!("matches colmena ({})", mcp_ver),
+                    ));
+                } else {
+                    checks.push(Check::warn(
+                        CAT,
+                        "MCP version",
+                        format!(
+                            "colmena-mcp v{} != colmena v{} — rebuild with cargo build --release",
+                            mcp_ver, colmena_ver
+                        ),
+                    ));
+                }
+            } else {
+                checks.push(Check::warn(
+                    CAT,
+                    "MCP version",
+                    "could not determine (colmena-mcp --version failed)",
+                ));
+            }
+        }
         None => checks.push(Check::warn(
             CAT,
             "MCP binary",
@@ -172,8 +201,28 @@ fn check_environment(config_dir: &Path) -> Vec<Check> {
     checks
 }
 
+/// Run colmena-mcp --version and extract the version number.
+pub(crate) fn get_mcp_version(mcp_path: &std::path::Path) -> Option<String> {
+    std::process::Command::new(mcp_path)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()
+        .and_then(|child| child.wait_with_output().ok())
+        .and_then(|output| {
+            if output.status.success() {
+                let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                // Expected format: "colmena-mcp X.Y.Z"
+                s.split_whitespace().last().map(|v| v.to_string())
+            } else {
+                None
+            }
+        })
+}
+
 /// Walk up from current_exe() looking for a workspace Cargo.toml containing colmena-core.
-fn detect_mode_label() -> String {
+pub(crate) fn detect_mode_label() -> String {
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.as_path().parent();
         while let Some(d) = dir {
@@ -191,7 +240,7 @@ fn detect_mode_label() -> String {
     "standalone".to_string()
 }
 
-fn find_mcp_binary() -> Option<std::path::PathBuf> {
+pub(crate) fn find_mcp_binary() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let mcp = dir.join("colmena-mcp");

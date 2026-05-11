@@ -2336,6 +2336,13 @@ impl ServerHandler for ColmenaServer {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Support --version / -V flag (no clap dependency in colmena-mcp)
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("colmena-mcp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let config_dir = colmena_core::paths::default_config_dir();
     let server = ColmenaServer::new(config_dir);
 
