@@ -20,7 +20,7 @@
 | You are a... | Colmena gives you |
 |---|---|
 | **Pentester** 🛡️ | Scoped Caido-native agents, restricted Bash, findings store, replayable audit trail. [Start here →](https://docs.colmena.space/use-cases/pentest/) |
-| **Developer** 💻 | Auto-approve `cargo test` & `git log`, ask on `git push`, block `--force`. Read-only reviewer. [Start here →](https://docs.colmena.space/quickstart/getting-started/) |
+| **Developer** 💻 | Auto-approve `cargo test` & `git log`, ask on `git push`, block `--force`. Read-only reviewer. [Start here →](https://docs.colmena.space/use-cases/code-review/) |
 | **DevOps / SRE** ⚙️ | Bash patterns for `kubectl`, `terraform`, `helm` pre-wired. Secrets blocked. Per-session delegations. [Start here →](https://docs.colmena.space/use-cases/incident-response/) |
 
 If you run AI agents and care about auditability, Colmena gives you a deterministic trail and per-role accountability over time.
