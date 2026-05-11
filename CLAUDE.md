@@ -15,7 +15,7 @@ Multi-agent orchestration layer for Claude Code. Rust workspace with hook binary
 - **Fmt:** `cargo fmt --all --check` (CI-enforced)
 - **CLI binary:** `target/release/colmena`
 - **MCP binary:** `target/release/colmena-mcp`
-- **Version:** 0.13.0 (semver, single workspace version)
+- **Version:** 0.14.3 (semver, unified workspace version, all crates publish together)
 - **Config:** `config/trust-firewall.yaml`, `config/filter-config.yaml`
 - **MCP registration:** `.mcp.json`
 - **CI:** GitHub Actions — `ci.yml` (fmt + test + clippy `-D warnings` + build + audit + deny on PRs), `release.yml` (tag-triggered releases), dependabot weekly for cargo + github-actions
@@ -63,9 +63,13 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ## Conventions
 
+### CRITICAL: Branch Workflow
+
+- **NEVER commit to main.** Always create a branch: `feature/`, `fix/`, `chore/`, or `docs/`.
+- All work goes through PR + review. `gh pr merge` is blocked in firewall — only the human operator merges.
+
 ### General
 
-- Git: always use branches (feature/, fix/, chore/, docs/). Never commit to main. MR workflow.
 - Signature: "built with ❤️‍🔥 by AppSec" on all public-facing docs and commit trailers
 - Error handling: `anyhow::Result` everywhere. Never panic in the hook path.
 - HOME fallback to /tmp is banned — fail explicitly if HOME is not set
@@ -237,6 +241,7 @@ Every active mission must feed per-agent ELO. Six mechanisms keep the cycle clos
 ## CLI Subcommands
 
 ```
+colmena upgrade [--verbose]            # Check crates.io for newer versions
 colmena hook                          # Hot path: stdin JSON → evaluate → stdout JSON (CC hook)
 colmena queue list                    # List pending approval items
 colmena queue prune --older-than 7    # Prune entries older than N days
@@ -339,16 +344,16 @@ Operations:
 - **M7.3.1** Anti-reciprocal invariant scope fix (discovered during Wave A parallel spawn 2026-04-17) — `submit_review` in `review.rs:141-147` currently filters reviewer candidates against the full reviews store (all missions), blocking legitimate cross-mission reviewer reuse. Scope the filter to `existing.mission == current.mission` so reciprocity is a per-collaboration property, not career-long exclusion. Audit other cross-mission leaks (e.g. stale-review auto-invalidation) for the same assumption. See memory: `project_review_reciprocal_cross_mission_bug.md`. Belongs folded into M7.3 as a required sub-task.
 - **M7.7** Multi-perspective reviewer diversification — near-future need flagged explicitly by Coco. As Colmena grows, many Researcher and Reviewer roles will coexist with distinct viewpoints (software engineering, security architect, project manager, SRE, compliance, etc.). Reviewer selection must reflect that diversity instead of pure random from the pool. Scope: (a) `submit_review` accepts an optional `preferred_categories` hint from callers; (b) when unhinted, reviewer selection scores candidates by complementarity — if author's strongest `EloConfig.categories` is X, prefer a reviewer whose strongest category is *not* X; (c) track "perspective balance" per mission — avoid the same reviewer category evaluating N consecutive artifacts; (d) expose `colmena review perspectives <mission>` showing which viewpoints reviewed what; (e) when a mission spawns many Researchers, pair each with a reviewer from a contrasting category (pentester ↔ software_engineer, developer ↔ security_architect, devops ↔ architect). Goal: every ELO event reflects a genuinely cross-viewpoint judgement, not same-tribe approval.
 - **M7.12** Library extension mechanism — foundation for "colmena codee colmena" missions. Three opt-in additions: (a) private library overlay via `$COLMENA_PRIVATE_LIBRARY` (default `~/.colmena-private/library/`), loaded by `load_roles`/`load_patterns` and merged over public entries by id; `load_*_with_private(dir, Option<&Path>)` pure variants for tests; (b) `Role.model: Option<String>` surfaced in `mission_spawn` output header `### role (Name) [model: X]` so the operator selects the right model when pasting the prompt into the Agent tool; (c) `Pattern.workspace_scope: Option<String>` — when set to `"repo-wide"`, `spawn_mission` rewrites file-tool `path_within` to the Colmena repo root and merges default secret exclusions (`*.env`, `*credentials*`, `*secret*`, `*.key`, `*.pem`), closing the mission_spawn scope gap for refactor missions. Zero behavior change when fields are absent. Docs in CLAUDE.md §Wisdom Library + §Environment Variables. Follow-up `load_prompt` + `validate_library` fall through to the private dir so private-library roles do not emit false-positive missing-prompt warnings. Env var is authoritative — invalid value disables the private merge (explicit opt-out). (done)
-- **M7.13** crates.io publication (design pending) — reserve `colmena` + `colmena-cli` + `colmena-core` + `colmena-mcp` + `colmena-filter` on crates.io (all 5 verified free as of 2026-04-23). Scope and architecture decisions needed before executing: (a) package naming — rename `colmena-cli` package to `colmena` so `cargo install colmena` installs the binary, while keeping workspace crate dir structure; (b) publish order — `colmena-core` → `colmena-filter` → `colmena-mcp` → `colmena`, each waiting for index propagation between publishes; (c) path dep versions — add `version = "0.13.0"` alongside `path = "../..."` on every internal dep so `cargo publish` stops rejecting path-only deps; (d) which crates to make `publish = false` (if any — currently workspace makes all 4 publishable by default); (e) release automation — tag-driven workflow in `release.yml` vs manual per-crate publish; (f) yank/unpublish policy once a real v0.13.x ships. `release_engineer` role already exists but was never activated for actual publish. Open question: publish stub v0.1.0 immediately to reserve name vs wait for design + proper v0.13.0 four-crate publish. All 5 names verified free on crates.io as of 2026-04-23 — no immediate squat risk but not formally reserved either.
+- **M7.13** crates.io publication (done, v0.14.3) — package `colmena-cli` renamed to `colmena` so `cargo install colmena` works. All 4 crates (`colmena-core`, `colmena-filter`, `colmena-mcp`, `colmena`) published with unified workspace version. Release workflow (`release.yml`) publishes in order: core → filter → cli → mcp with 30s index propagation waits. Internal deps carry both `path` and `version` for publish compatibility. `colmena upgrade` command added to check crates.io for updates.
 - **M7.10** Chain-aware FW evaluator — compositional eval of Bash chains (`&&`/`||`/`;`/`|`), per-piece re-eval against `blocked`/`restricted`/`trust_circle`, fold most-restrictive-wins. Subshells `$(...)` and backticks fall back to legacy `chain_guard` (ask). Bare assignments (`KEY=value`) auto-approve as no-op pieces. Default ON via `FirewallConfig.chain_aware` (kill switch). Trust-circle YAML expanded with `cd`, `go build|test|mod tidy|mod download|vet|fmt`, and `git clone|fetch|pull|checkout`. Smoke-validated against the user's real friction case (12-piece `mkdir && cd && git clone && tail && echo && cd && git log && head && echo && du && echo && ls` → all 12 pieces auto-approved). See `firewall.rs:evaluate_chain_aware` + `docs/superpowers/specs/2026-04-29-chain-aware-firewall-design.md`. (done, v0.14.0)
 
 ## Current State (2026-04-29)
 
-**Branch:** `feat/chain-aware-firewall` — M7.10 (chain-aware Bash evaluator) ready for PR.
-**Done:** M0–M7.2 + v0.11.1 (review cycle hardening) + public-release-prep (PR #25) + Wave A 2026-04-17 (PRs #28–#31) + M7.3/M7.3.1/M7.5/M7.6/M7.8/M7.9 + M7.12 library extension (v0.13.0) + M7.10 chain-aware firewall (v0.14.0) — pending merge.
+**Branch:** `main` — version unification + colmena upgrade (Part A/B/C).
+**Done:** M0–M7.2 + v0.11.1 (review cycle hardening) + public-release-prep (PR #25) + Wave A 2026-04-17 (PRs #28–#31) + M7.3/M7.3.1/M7.5/M7.6/M7.8/M7.9 + M7.12 library extension (v0.13.0) + M7.10 chain-aware firewall (v0.14.0) + M7.13 crates.io publication (v0.14.3).
 **Validated users (2026-04-16):** 4 active power users (pentester, developer, devops, SRE).
 **ELO milestone:** First mission where per-agent ELO moved end-to-end (public-release-prep 2026-04-16). M7.3 dogfood (2026-04-21) closed the full ELO cycle with centralized auditor + 14 ELO events.
-**Next:** merge M7.10 → M7.4 (role ergonomics CLI, bundles the 4 M7.4-candidate gaps surfaced 2026-04-22: suggest matcher inflation, library select destructive default, delegate add condition flags, mission_spawn --code-paths) → M7.7 (multi-perspective reviewers). Post-launch: `serde_yml → serde_yaml_ng` migration, RUSTSEC-2026-0097 rand upgrade when patched.
+**Next:** M7.4 (role ergonomics CLI) → M7.7 (multi-perspective reviewers). Post-launch: `serde_yml → serde_yaml_ng` migration, RUSTSEC-2026-0097 rand upgrade when patched.
 
 ## Key Docs
 

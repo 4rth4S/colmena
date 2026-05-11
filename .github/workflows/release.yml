@@ -187,10 +187,10 @@ jobs:
       - name: Wait for crates.io index (colmena-filter)
         run: sleep 30
 
-      - name: Publish colmena-cli
-        run: cargo publish -p colmena-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Publish colmena
+        run: cargo publish -p colmena --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Wait for crates.io index (colmena-cli)
+      - name: Wait for crates.io index (colmena)
         run: sleep 30
 
       - name: Publish colmena-mcp

@@ -4,6 +4,7 @@ mod hook;
 mod install;
 mod notify;
 mod setup;
+mod upgrade;
 
 use std::io::{BufReader, Read as _};
 use std::path::{Path, PathBuf};
@@ -102,6 +103,12 @@ enum Commands {
     Suggest {
         /// Mission description to analyze
         mission: String,
+    },
+    /// Check for and report available updates from crates.io
+    Upgrade {
+        /// Show detailed version information
+        #[arg(long, short)]
+        verbose: bool,
     },
 }
 
@@ -492,6 +499,7 @@ fn main() {
         Commands::Setup { dry_run, force } => setup::run_setup(dry_run, force),
         Commands::Doctor => doctor::run_doctor(),
         Commands::Suggest { mission } => run_suggest(&mission),
+        Commands::Upgrade { verbose } => upgrade::run_upgrade(verbose),
     };
 
     if let Err(e) = result {
