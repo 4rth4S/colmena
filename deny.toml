@@ -38,6 +38,10 @@ multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
 
+[[bans.skip]]
+name = "windows-sys"
+version = "=0.52.0"
+
 [sources]
 unknown-registry = "warn"
 unknown-git = "warn"
