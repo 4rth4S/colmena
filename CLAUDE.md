@@ -63,9 +63,13 @@ PermissionRequest precedence: `role delegation exists + tool in tools_allowed �
 
 ## Conventions
 
+### CRITICAL: Branch Workflow
+
+- **NEVER commit to main.** Always create a branch: `feature/`, `fix/`, `chore/`, or `docs/`.
+- All work goes through PR + review. `gh pr merge` is blocked in firewall — only the human operator merges.
+
 ### General
 
-- Git: always use branches (feature/, fix/, chore/, docs/). Never commit to main. MR workflow.
 - Signature: "built with ❤️‍🔥 by AppSec" on all public-facing docs and commit trailers
 - Error handling: `anyhow::Result` everywhere. Never panic in the hook path.
 - HOME fallback to /tmp is banned — fail explicitly if HOME is not set
@@ -237,6 +241,7 @@ Every active mission must feed per-agent ELO. Six mechanisms keep the cycle clos
 ## CLI Subcommands
 
 ```
+colmena upgrade [--verbose]            # Check crates.io for newer versions
 colmena hook                          # Hot path: stdin JSON → evaluate → stdout JSON (CC hook)
 colmena queue list                    # List pending approval items
 colmena queue prune --older-than 7    # Prune entries older than N days
