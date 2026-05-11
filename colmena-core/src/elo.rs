@@ -180,7 +180,7 @@ const REHABILITATION_ACTIVITY_WINDOW_DAYS: i64 = 30;
 /// - Starts from `baseline` ELO
 /// - Each event's delta is multiplied by its decay factor
 /// - `trend_7d` is the sum of deltas from events in the last 7 days (no decay)
-/// - `review_count` is the number of `Reviewed` events for this agent
+/// - `review_count` is the number of `Reviewed` + `ReviewQuality` events for this agent
 /// - `last_active` is the most recent event timestamp for this agent
 ///
 /// Fix Finding #26 (DREAD 5.2): Temporal decay does not allow an agent's ELO
@@ -215,7 +215,9 @@ pub fn calculate_rating(agent: &str, events: &[StoredEloEvent], baseline: u32) -
             trend_7d += event.delta;
         }
 
-        if event.event_type == EloEventType::Reviewed {
+        if event.event_type == EloEventType::Reviewed
+            || event.event_type == EloEventType::ReviewQuality
+        {
             review_count += 1;
         }
 

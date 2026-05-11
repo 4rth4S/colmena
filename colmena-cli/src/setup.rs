@@ -10,7 +10,7 @@ const RUNTIME_FILES: &[&str] = &[
     "runtime-delegations.json",
     "elo-overrides.json",
     "filter-stats.jsonl",
-    "elo-events.jsonl",
+    "elo/elo-log.jsonl",
     "revoked-missions.json",
     "alerts.json",
     "queue",
@@ -19,6 +19,7 @@ const RUNTIME_FILES: &[&str] = &[
 
 // ── Directories to create under config_dir ───────────────────────────────────
 const ENSURE_DIRS: &[&str] = &[
+    "elo",
     "library/roles",
     "library/patterns",
     "library/prompts",
