@@ -1787,11 +1787,15 @@ impl ColmenaServer {
         let audit_path = self.config_dir.join("audit.log");
         let stats_path = self.config_dir.join("filter-stats.jsonl");
 
-        let audit = colmena_core::audit::session_stats(&audit_path, input.session_id.as_deref());
+        let session_id = input
+            .session_id
+            .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok());
+
+        let audit = colmena_core::audit::session_stats(&audit_path, session_id.as_deref());
 
         let all_events = colmena_filter::stats::read_filter_stats(&stats_path).unwrap_or_default();
 
-        let session_events: Vec<_> = if let Some(ref sid) = input.session_id {
+        let session_events: Vec<_> = if let Some(ref sid) = session_id {
             all_events
                 .into_iter()
                 .filter(|e| e.session_id == *sid)
@@ -1801,8 +1805,8 @@ impl ColmenaServer {
         };
         let filter = colmena_filter::stats::summarize(&session_events);
 
-        let scope = if input.session_id.is_some() {
-            "This Session"
+        let scope = if session_id.is_some() {
+            "Current Session"
         } else {
             "All Sessions"
         };

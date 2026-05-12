@@ -703,4 +703,40 @@ mod tests {
             "no rotation should occur for small log"
         );
     }
+
+    #[test]
+    fn test_session_stats_filters_by_session_id() {
+        let tmp = TempDir::new().unwrap();
+        let log_path = tmp.path().join("audit.log");
+
+        let content = "\
+[2026-05-12T10:00:00Z] ALLOW session=sess_a agent=dev tool=Read key=/a rule=trust_circle[0]
+[2026-05-12T10:01:00Z] ASK   session=sess_b agent=dev tool=Bash key=ls rule=restricted[0]
+[2026-05-12T10:02:00Z] ALLOW session=sess_a agent=dev tool=Write key=/b rule=trust_circle[0]
+[2026-05-12T10:03:00Z] DENY  session=sess_a agent=dev tool=Bash key=rm rule=blocked[0]
+[2026-05-12T10:04:00Z] ALLOW session=sess_c agent=ops tool=Read key=/c rule=trust_circle[0]
+";
+        std::fs::write(&log_path, content).unwrap();
+
+        // Filter for sess_a: 3 decisions (2 ALLOW + 1 DENY)
+        let stats_a = session_stats(&log_path, Some("sess_a"));
+        assert_eq!(stats_a.total_decisions, 3);
+        assert_eq!(stats_a.allow_count, 2);
+        assert_eq!(stats_a.deny_count, 1);
+        assert_eq!(stats_a.ask_count, 0);
+        assert_eq!(stats_a.unique_agents, 1); // only dev
+
+        // Filter for sess_b: 1 decision (1 ASK)
+        let stats_b = session_stats(&log_path, Some("sess_b"));
+        assert_eq!(stats_b.total_decisions, 1);
+        assert_eq!(stats_b.ask_count, 1);
+        assert_eq!(stats_b.allow_count, 0);
+
+        // No filter: all 5 decisions
+        let stats_all = session_stats(&log_path, None);
+        assert_eq!(stats_all.total_decisions, 5);
+        assert_eq!(stats_all.allow_count, 3);
+        assert_eq!(stats_all.ask_count, 1);
+        assert_eq!(stats_all.deny_count, 1);
+    }
 }
