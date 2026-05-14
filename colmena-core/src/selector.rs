@@ -78,8 +78,10 @@ pub struct SpawnResult {
     /// Existing subagent `.md` files that already satisfy the minimums check
     /// and were respected (not overwritten).
     pub subagent_files_respected: Vec<PathBuf>,
-    /// Path to spawn-manifest.json (only populated when `auto_spawn` is true).
-    pub spawn_manifest_path: Option<PathBuf>,
+    /// Path to ORCHESTRATE.md (only populated when `auto_spawn` is true).
+    /// Contains instructions for the operator's Claude Code session to spawn
+    /// all agents as teammates — the same pattern used in the pentest-delpirque session.
+    pub orchestrate_md_path: Option<PathBuf>,
 }
 
 /// A ready-to-paste agent prompt with mission marker.
@@ -98,28 +100,6 @@ pub struct AgentPrompt {
     /// `mission__developer-core`). Maps to `subagent_type` in CC's Agent tool.
     /// Populated by `spawn_mission()` during agent prompt assembly.
     pub agent_id: String,
-}
-
-/// Entry in the spawn manifest consumed by the Mission Lead.
-#[derive(Debug, serde::Serialize)]
-struct SpawnManifestEntry {
-    index: usize,
-    subagent_type: String,
-    description: String,
-    prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    depends_on: Vec<usize>,
-}
-
-/// Spawn manifest written to the mission directory for auto-spawn.
-#[derive(Debug, serde::Serialize)]
-struct SpawnManifest {
-    mission_id: String,
-    generated_at: String,
-    mission_dir: String,
-    agents: Vec<SpawnManifestEntry>,
 }
 
 /// Generated mission configuration
@@ -460,9 +440,69 @@ pub fn generate_mission(
                 recommendation.pattern_id, assignment.role_id, assignment.role_id
             ))?;
 
+        // Merge manifest scope (mission-level + per-agent) into role permissions
+        let mut augmented_role: Role = (*role).clone();
+        if let Some(ref manifest) = manifest {
+            let agent_scope = manifest
+                .role(&assignment.role_id)
+                .and_then(|a| a.scope.clone());
+
+            // Merge mission-level scope as base, then per-agent scope on top
+            let mission_bash: Vec<String> = manifest
+                .scope
+                .bash_patterns
+                .extra_allow
+                .clone();
+            let mission_paths: Vec<String> = manifest.scope.paths.clone();
+
+            let agent_bash: Vec<String> = agent_scope
+                .as_ref()
+                .map(|s| s.bash_patterns.extra_allow.clone())
+                .unwrap_or_default();
+            let agent_paths: Vec<String> = agent_scope
+                .as_ref()
+                .map(|s| s.paths.clone())
+                .unwrap_or_default();
+
+            let merged_bash: Vec<String> = mission_bash
+                .into_iter()
+                .chain(agent_bash)
+                .collect();
+            let merged_paths: Vec<String> = mission_paths
+                .into_iter()
+                .chain(agent_paths)
+                .collect();
+
+            if !merged_bash.is_empty() || !merged_paths.is_empty() {
+                let perms = augmented_role
+                    .permissions
+                    .get_or_insert_with(|| crate::library::RolePermissions {
+                        bash_patterns: vec![],
+                        path_within: vec![],
+                        path_not_match: vec![],
+                    });
+                for p in merged_bash {
+                    if !perms.bash_patterns.contains(&p) {
+                        perms.bash_patterns.push(p);
+                    }
+                }
+                for p in merged_paths {
+                    if !perms.path_within.contains(&p) {
+                        perms.path_within.push(p);
+                    }
+                }
+            }
+        }
+
         // Generate delegations from role's tools_allowed + permissions
-        let role_delegations =
-            generate_role_delegations(role, &mission_name, &mission_dir, session_id, now, ttl);
+        let role_delegations = generate_role_delegations(
+            &augmented_role,
+            &mission_name,
+            &mission_dir,
+            session_id,
+            now,
+            ttl,
+        );
         delegations.extend(role_delegations);
 
         // Load the system prompt
@@ -1439,41 +1479,106 @@ fn build_instance_map(
     map
 }
 
-/// Write the spawn manifest that the Mission Lead reads to spawn workers.
-fn write_spawn_manifest(
+/// Write ORCHESTRATE.md — instructions for the operator's Claude Code session
+/// to spawn all agents as teammates. This is the pattern proven in the
+/// pentest-delpirque session: flat team, team-lead spawns everyone,
+/// ELO cycle works per-agent with independent review_submit calls.
+fn write_orchestrate_md(
     mission_dir: &Path,
     agent_prompts: &[AgentPrompt],
     mission_id: &str,
+    _delegations: &[RuntimeDelegation],
     dry_run: bool,
 ) -> Result<PathBuf> {
-    let manifest_path = mission_dir.join("spawn-manifest.json");
+    let path = mission_dir.join("ORCHESTRATE.md");
 
-    let entries: Vec<SpawnManifestEntry> = agent_prompts
-        .iter()
-        .enumerate()
-        .map(|(i, ap)| SpawnManifestEntry {
-            index: i,
-            subagent_type: ap.agent_id.clone(),
-            description: format!("{} for mission {}", ap.role_name, mission_id),
-            prompt: ap.prompt.clone(),
-            model: ap.model.clone(),
-            depends_on: Vec::new(),
-        })
-        .collect();
-
-    let manifest = SpawnManifest {
-        mission_id: mission_id.to_string(),
-        generated_at: Utc::now().to_rfc3339(),
-        mission_dir: mission_dir.to_string_lossy().to_string(),
-        agents: entries,
+    let team_name = mission_id.replace('_', "-").to_lowercase();
+    // Truncate to reasonable length for a team name
+    let team_name = if team_name.len() > 64 {
+        &team_name[..64]
+    } else {
+        &team_name
     };
 
-    if !dry_run {
-        let json = serde_json::to_string_pretty(&manifest)?;
-        std::fs::write(&manifest_path, &json)?;
+    let mut md = String::new();
+    md.push_str(&format!("# Orchestration Plan — {}\n\n", mission_id));
+    md.push_str("## Team Setup\n\n");
+    md.push_str(&format!(
+        "```\nTeamCreate(team_name: \"{}\", description: \"Mission: {}\")\n```\n\n",
+        team_name, mission_id
+    ));
+
+    md.push_str("## Agents to Spawn (as teammates)\n\n");
+    md.push_str("Spawn each agent with `Agent()` — use `name` to add them as teammates.\n");
+    md.push_str("The `name` parameter is the agent's short role ID (e.g. `web_pentester`).\n");
+    md.push_str("Their full agent ID will be `<name>@<team_name>`.\n\n");
+
+    for (i, ap) in agent_prompts.iter().enumerate() {
+        md.push_str(&format!(
+            "### Agent {}: {}\n\n",
+            i + 1,
+            ap.role_name
+        ));
+        md.push_str(&format!("- **subagent_type:** `{}`\n", ap.agent_id));
+        md.push_str(&format!("- **name:** `{}`\n", ap.role_id));
+        md.push_str(&format!("- **team_name:** `{}`\n", team_name));
+        if let Some(ref model) = ap.model {
+            md.push_str(&format!("- **model:** `{}`\n", model));
+        }
+        md.push_str(&format!(
+            "- **description:** {} for mission {}\n\n",
+            ap.role_name, mission_id
+        ));
+        md.push_str("<details>\n<summary>Prompt</summary>\n\n```\n");
+        md.push_str(&ap.prompt);
+        md.push_str("\n```\n\n</details>\n\n");
     }
 
-    Ok(manifest_path)
+    md.push_str("## Delegations\n\n");
+    md.push_str("Create these delegations for each agent's EXACT agent ID:\n\n");
+    md.push_str("```bash\n");
+    for ap in agent_prompts {
+        let agent_full_id = format!("{}@{}", ap.role_id, team_name);
+        md.push_str(&format!("# Delegations for {}\n", agent_full_id));
+        md.push_str(&format!(
+            "colmena delegate add --tool Bash --bash-pattern '^curl\\b' --ttl 8 --agent \"{}\"\n",
+            agent_full_id
+        ));
+        md.push_str(&format!(
+            "colmena delegate add --tool Bash --path-within {} --ttl 8 --agent \"{}\"\n",
+            mission_dir.display(),
+            agent_full_id
+        ));
+        md.push_str(&format!(
+            "colmena delegate add --tool Read --ttl 8 --agent \"{}\"\n",
+            agent_full_id
+        ));
+        md.push_str(&format!(
+            "colmena delegate add --tool Write --ttl 8 --agent \"{}\"\n",
+            agent_full_id
+        ));
+        md.push_str(&format!(
+            "colmena delegate add --tool WebFetch --ttl 8 --agent \"{}\"\n",
+            agent_full_id
+        ));
+        md.push_str("\n");
+    }
+    md.push_str("```\n\n");
+
+    md.push_str("## Task Flow\n\n");
+    md.push_str("1. Create tasks via `TaskCreate` — one per phase\n");
+    md.push_str("2. Spawn agents in dependency order\n");
+    md.push_str("3. Workers write findings to filesystem\n");
+    md.push_str("4. Lead consolidates into REPORTE.md\n");
+    md.push_str("5. All agents call `review_submit`\n");
+    md.push_str("6. Auditor calls `review_evaluate`\n");
+    md.push_str("7. Shutdown teammates, `TeamDelete`\n");
+
+    if !dry_run {
+        std::fs::write(&path, &md)?;
+    }
+
+    Ok(path)
 }
 
 /// generate mission with markers → persist delegations.
@@ -1788,20 +1893,50 @@ pub fn spawn_mission(
 
             match check {
                 crate::emitters::claude_code::MinimumsCheck::Pass => {
+                    // If overwrite is set, refresh with full CLAUDE.md content
+                    // so stale stubs don't prevent Claude Code agent discovery.
+                    if overwrite_subagents && !dry_run {
+                        let body = mission_config
+                            .agent_configs
+                            .iter()
+                            .find(|ac| ac.role_id == assignment.role_id)
+                            .map(|ac| ac.claude_md_content.clone())
+                            .unwrap_or_default();
+                        if !body.is_empty() {
+                            crate::emitters::claude_code::write_subagent_file(
+                                &subagent_path,
+                                &agent_id,
+                                &role.description,
+                                &crate::emitters::claude_code::mission_tool_set(
+                                    &role.tools_allowed,
+                                ),
+                                &body,
+                                true,
+                            )?;
+                        }
+                    }
                     subagent_files_respected.push(check_path.clone());
                 }
                 crate::emitters::claude_code::MinimumsCheck::Fail { reasons } => {
                     if overwrite_subagents {
                         if !dry_run {
-                            let body = format!(
-                                "# {role_name} ({agent_id})\n\n\
-                                 Auto-generated by Colmena `mission spawn`. See \
-                                 `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
-                                role_name = assignment.role_name,
-                                agent_id = agent_id,
-                                role_id = assignment.role_id,
-                                mission_dir = mission_config.mission_dir.display(),
-                            );
+                            // Use the full CLAUDE.md content from the generated agent config
+                            let body = mission_config
+                                .agent_configs
+                                .iter()
+                                .find(|ac| ac.role_id == assignment.role_id)
+                                .map(|ac| ac.claude_md_content.clone())
+                                .unwrap_or_else(|| {
+                                    format!(
+                                        "# {role_name} ({agent_id})\n\n\
+                                         Auto-generated by Colmena `mission spawn`. See \
+                                         `{mission_dir}/agents/{role_id}/CLAUDE.md` for the full mission prompt.\n",
+                                        role_name = assignment.role_name,
+                                        agent_id = agent_id,
+                                        role_id = assignment.role_id,
+                                        mission_dir = mission_config.mission_dir.display(),
+                                    )
+                                });
                             crate::emitters::claude_code::write_subagent_file(
                                 &subagent_path,
                                 &agent_id,
@@ -1857,96 +1992,19 @@ pub fn spawn_mission(
         );
     }
 
-    // 4c. Auto-spawn: write spawn-manifest.json and generate Mission Lead prompt.
-    //     The lead is a thin executor that reads the manifest and spawns workers
-    //     sequentially. The operator spawns 1 agent (the lead) instead of N workers.
-    let mut spawn_manifest_path: Option<PathBuf> = None;
+    // 4c. Auto-spawn: write ORCHESTRATE.md with instructions for the operator's
+    //     Claude Code session to spawn all agents as teammates directly.
+    //     This is the pattern proven in the pentest-delpirque session:
+    //     flat team, team-lead spawns everyone, ELO cycle works per-agent.
+    let mut orchestrate_md_path: Option<PathBuf> = None;
     if auto_spawn {
-        // Find the mission-lead role
-        let lead_role = roles
-            .iter()
-            .find(|r| r.id == "mission-lead")
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Auto-spawn requires the 'mission-lead' role in the library. \
-                     Run 'colmena setup' or add config/library/roles/mission-lead.yaml."
-                )
-            })?;
-
-        // Write spawn manifest with ALL current agent_prompts (workers only, not the lead)
-        spawn_manifest_path = Some(write_spawn_manifest(
+        orchestrate_md_path = Some(write_orchestrate_md(
             &mission_config.mission_dir,
             &agent_prompts,
             &mission_name,
+            &mission_config.delegations,
             dry_run,
         )?);
-
-        // Generate lead prompt
-        let lead_system_prompt =
-            crate::library::load_prompt(library_dir, &lead_role.system_prompt_ref)
-                .with_context(|| "Failed to load prompt for role 'mission-lead'")?;
-
-        // Replace template variable with actual path
-        let manifest_path_str = mission_config
-            .mission_dir
-            .join("spawn-manifest.json")
-            .to_string_lossy()
-            .to_string();
-        let lead_prompt_body =
-            lead_system_prompt.replace("{mission_dir}/spawn-manifest.json", &manifest_path_str);
-
-        // Build the lead prompt with mission marker
-        let lead_prompt = format!(
-            "{}{} -->\n{}",
-            MISSION_MARKER_PREFIX, mission_name, lead_prompt_body
-        );
-
-        // Determine lead agent_id
-        let lead_agent_id = build_agent_id(&mission_name, "mission-lead", None);
-
-        // Prepend lead to agent_prompts (so it shows first in output)
-        let lead_ap = AgentPrompt {
-            role_id: lead_role.id.clone(),
-            role_name: lead_role.name.clone(),
-            prompt: lead_prompt,
-            claude_md_path: mission_config.mission_dir.join("LEAD.md"),
-            model: lead_role.model.clone(),
-            agent_id: lead_agent_id.clone(),
-        };
-        agent_prompts.insert(0, lead_ap);
-
-        // Write lead subagent file
-        {
-            let lead_tools =
-                crate::emitters::claude_code::mission_tool_set(&lead_role.tools_allowed);
-            let lead_subagent_path = agents_dir.join(format!("{}.md", lead_agent_id));
-            if !dry_run {
-                crate::emitters::claude_code::write_subagent_file(
-                    &lead_subagent_path,
-                    "mission-lead",
-                    &lead_role.description,
-                    &lead_tools,
-                    &lead_prompt_body,
-                    overwrite_subagents,
-                )?;
-                subagent_files_written.push(lead_subagent_path);
-            }
-        }
-
-        // Generate lead delegations
-        let lead_delegations = generate_role_delegations(
-            lead_role,
-            &mission_name,
-            &mission_config.mission_dir,
-            session_id,
-            now,
-            chrono::Duration::hours(
-                manifest
-                    .map(|m| m.mission_ttl_hours)
-                    .unwrap_or(DEFAULT_MISSION_TTL_HOURS),
-            ),
-        );
-        mission_config.delegations.extend(lead_delegations);
     }
 
     // 5. Persist delegations directly to runtime-delegations.json with idempotency.
@@ -2127,7 +2185,7 @@ pub fn spawn_mission(
         mission_config,
         subagent_files_written,
         subagent_files_respected,
-        spawn_manifest_path,
+        orchestrate_md_path,
     })
 }
 
