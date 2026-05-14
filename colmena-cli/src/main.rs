@@ -494,10 +494,13 @@ fn main() {
             CalibrateAction::Show => run_calibrate_show(),
             CalibrateAction::Reset => run_calibrate_reset(),
         },
-        Commands::Stats { session } => match session {
-            Some(sid) => run_session_stats(&sid),
-            None => run_stats(),
-        },
+        Commands::Stats { session } => {
+            let resolved = session.or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok());
+            match resolved {
+                Some(sid) => run_session_stats(&sid),
+                None => run_stats(),
+            }
+        }
         Commands::Setup { dry_run, force } => setup::run_setup(dry_run, force),
         Commands::Doctor => doctor::run_doctor(),
         Commands::Suggest { mission } => run_suggest(&mission),
