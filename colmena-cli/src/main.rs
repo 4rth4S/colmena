@@ -307,8 +307,10 @@ enum MissionAction {
         /// YAML `enforce_missions: false` is explicit and mission has ≥3 roles.
         #[arg(long)]
         no_gate_confirmed: bool,
-        /// Generate a Mission Lead that spawns all workers — operator spawns
-        /// 1 agent instead of N. Writes spawn-manifest.json to mission dir.
+        /// Flat-team orchestration: writes ORCHESTRATE.md so the operator's
+        /// Claude Code session spawns all agents as teammates directly.
+        /// This is the proven pentest-delpirque pattern — no intermediate
+        /// Mission Lead, ELO cycle works per-agent.
         #[arg(long)]
         auto_spawn: bool,
     },
@@ -2778,40 +2780,37 @@ fn run_mission_spawn(
 
     println!();
     if auto_spawn {
-        // Auto-spawn: highlight the lead as the only agent to spawn
-        let lead = &result.agent_prompts[0];
-        let worker_count = result.agent_prompts.len() - 1;
-        println!("[AUTO-SPAWN] Mission Lead ready. Spawn this ONE agent:");
+        // Auto-spawn: flat-team approach (pentest-delpirque pattern).
+        // All agents are spawned directly by the operator's Claude Code session
+        // as teammates. No intermediate Mission Lead — the operator IS the team-lead.
+        println!("[AUTO-SPAWN] Flat-team orchestration ready. In Claude Code, say:");
+        println!("  \"orquestá esta misión\"");
         println!();
-        println!("  Agent(");
-        println!("    subagent_type: \"{}\",", lead.agent_id);
-        println!(
-            "    description: \"{} for {}\",",
-            lead.role_name, result.mission_name
-        );
-        println!("    prompt: \"... ({} chars) ...\"", lead.prompt.len());
-        println!("  )");
-        println!();
-        println!(
-            "The lead will spawn {} workers from spawn-manifest.json",
-            worker_count
-        );
         if dry_run {
             println!(
-                "  (dry-run) spawn-manifest.json WOULD be written to: {}/spawn-manifest.json",
+                "  (dry-run) ORCHESTRATE.md WOULD be written to: {}/ORCHESTRATE.md",
                 result.mission_config.mission_dir.display()
             );
         } else {
             println!(
-                "  spawn-manifest.json written to: {}/spawn-manifest.json",
+                "  ORCHESTRATE.md written to: {}/ORCHESTRATE.md",
                 result.mission_config.mission_dir.display()
             );
         }
         println!();
-        println!("Worker agents (spawned by lead, not you):");
-        for ap in &result.agent_prompts[1..] {
-            println!("  - {} ({})", ap.role_name, ap.agent_id);
+        println!(
+            "Agents to spawn as teammates ({} total):",
+            result.agent_prompts.len()
+        );
+        for ap in &result.agent_prompts {
+            println!(
+                "  - {} | subagent_type: \"{}\" | name: \"{}\"",
+                ap.role_name, ap.agent_id, ap.role_id
+            );
         }
+        println!();
+        println!("Claude will TeamCreate + spawn all agents + set up delegations.");
+        println!("Each agent independently calls review_submit → ELO cycle works per-agent.");
     } else {
         println!("Next steps:");
         for ap in &result.agent_prompts {
