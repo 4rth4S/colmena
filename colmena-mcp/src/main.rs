@@ -1545,15 +1545,9 @@ impl ColmenaServer {
         // Agent prompts (ready to paste into Agent tool)
         if input.auto_spawn {
             output.push_str("\n## [AUTO-SPAWN] Flat-Team Orchestration\n\n");
-            output.push_str(
-                "**ORCHESTRATE.md** has been written to the mission directory. ",
-            );
-            output.push_str(
-                "In Claude Code, say: **\"orquestá esta misión\"** — Claude will ",
-            );
-            output.push_str(
-                "TeamCreate + spawn all agents as teammates + set up delegations.\n\n",
-            );
+            output.push_str("**ORCHESTRATE.md** has been written to the mission directory. ");
+            output.push_str("In Claude Code, say: **\"orquestá esta misión\"** — Claude will ");
+            output.push_str("TeamCreate + spawn all agents as teammates + set up delegations.\n\n");
             output.push_str("This is the proven pentest-delpirque pattern: flat team, ");
             output.push_str("team-lead spawns everyone, ELO cycle works per-agent.\n\n");
             output.push_str(&format!(

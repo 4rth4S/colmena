@@ -442,17 +442,13 @@ pub fn generate_mission(
 
         // Merge manifest scope (mission-level + per-agent) into role permissions
         let mut augmented_role: Role = (*role).clone();
-        if let Some(ref manifest) = manifest {
+        if let Some(manifest) = manifest {
             let agent_scope = manifest
                 .role(&assignment.role_id)
                 .and_then(|a| a.scope.clone());
 
             // Merge mission-level scope as base, then per-agent scope on top
-            let mission_bash: Vec<String> = manifest
-                .scope
-                .bash_patterns
-                .extra_allow
-                .clone();
+            let mission_bash: Vec<String> = manifest.scope.bash_patterns.extra_allow.clone();
             let mission_paths: Vec<String> = manifest.scope.paths.clone();
 
             let agent_bash: Vec<String> = agent_scope
@@ -464,23 +460,17 @@ pub fn generate_mission(
                 .map(|s| s.paths.clone())
                 .unwrap_or_default();
 
-            let merged_bash: Vec<String> = mission_bash
-                .into_iter()
-                .chain(agent_bash)
-                .collect();
-            let merged_paths: Vec<String> = mission_paths
-                .into_iter()
-                .chain(agent_paths)
-                .collect();
+            let merged_bash: Vec<String> = mission_bash.into_iter().chain(agent_bash).collect();
+            let merged_paths: Vec<String> = mission_paths.into_iter().chain(agent_paths).collect();
 
             if !merged_bash.is_empty() || !merged_paths.is_empty() {
-                let perms = augmented_role
-                    .permissions
-                    .get_or_insert_with(|| crate::library::RolePermissions {
+                let perms = augmented_role.permissions.get_or_insert_with(|| {
+                    crate::library::RolePermissions {
                         bash_patterns: vec![],
                         path_within: vec![],
                         path_not_match: vec![],
-                    });
+                    }
+                });
                 for p in merged_bash {
                     if !perms.bash_patterns.contains(&p) {
                         perms.bash_patterns.push(p);
@@ -1514,11 +1504,7 @@ fn write_orchestrate_md(
     md.push_str("Their full agent ID will be `<name>@<team_name>`.\n\n");
 
     for (i, ap) in agent_prompts.iter().enumerate() {
-        md.push_str(&format!(
-            "### Agent {}: {}\n\n",
-            i + 1,
-            ap.role_name
-        ));
+        md.push_str(&format!("### Agent {}: {}\n\n", i + 1, ap.role_name));
         md.push_str(&format!("- **subagent_type:** `{}`\n", ap.agent_id));
         md.push_str(&format!("- **name:** `{}`\n", ap.role_id));
         md.push_str(&format!("- **team_name:** `{}`\n", team_name));
@@ -1561,7 +1547,7 @@ fn write_orchestrate_md(
             "colmena delegate add --tool WebFetch --ttl 8 --agent \"{}\"\n",
             agent_full_id
         ));
-        md.push_str("\n");
+        md.push('\n');
     }
     md.push_str("```\n\n");
 

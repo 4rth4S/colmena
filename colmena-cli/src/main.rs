@@ -2798,7 +2798,10 @@ fn run_mission_spawn(
             );
         }
         println!();
-        println!("Agents to spawn as teammates ({} total):", result.agent_prompts.len());
+        println!(
+            "Agents to spawn as teammates ({} total):",
+            result.agent_prompts.len()
+        );
         for ap in &result.agent_prompts {
             println!(
                 "  - {} | subagent_type: \"{}\" | name: \"{}\"",
