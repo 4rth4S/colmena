@@ -307,10 +307,9 @@ enum MissionAction {
         /// YAML `enforce_missions: false` is explicit and mission has ≥3 roles.
         #[arg(long)]
         no_gate_confirmed: bool,
-        /// Flat-team orchestration: writes ORCHESTRATE.md so the operator's
-        /// Claude Code session spawns all agents as teammates directly.
-        /// This is the proven pentest-delpirque pattern — no intermediate
-        /// Mission Lead, ELO cycle works per-agent.
+        /// Flat-team orchestration: writes ORCHESTRATE.md with TeamCreate +
+        /// Agent() instructions so Claude Code spawns all agents as teammates.
+        /// Each agent calls review_submit independently — ELO cycle per-agent.
         #[arg(long)]
         auto_spawn: bool,
     },

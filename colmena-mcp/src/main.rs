@@ -197,8 +197,9 @@ struct MissionSpawnInput {
     /// to spawn it (read-only -- same pattern as delegate MCP).
     #[serde(default)]
     manifest_path: Option<String>,
-    /// Flat-team orchestration: writes ORCHESTRATE.md so Claude Code
-    /// spawns all agents as teammates. Proven pentest-delpirque pattern.
+    /// Flat-team orchestration: writes ORCHESTRATE.md with TeamCreate +
+    /// Agent() instructions so Claude Code spawns all agents as teammates.
+    /// Each agent calls review_submit independently — ELO cycle per-agent.
     #[serde(default)]
     auto_spawn: bool,
 }
