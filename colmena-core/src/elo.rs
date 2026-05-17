@@ -39,7 +39,7 @@ pub struct StoredEloEvent {
 }
 
 /// An agent's computed rating.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AgentRating {
     pub agent: String,
     pub elo: i32,

@@ -9,9 +9,12 @@ mod upgrade;
 use std::io::{BufReader, Read as _};
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 
 use colmena_core::config::Action;
 use colmena_core::delegate::RuntimeDelegation;
@@ -28,6 +31,10 @@ use colmena_core::selector::{
 #[derive(Parser)]
 #[command(name = "colmena", version, about)]
 struct Cli {
+    /// Output structured JSON instead of human-readable tables
+    #[arg(global = true, long, short, action = clap::ArgAction::SetTrue)]
+    json: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -71,6 +78,11 @@ enum Commands {
     Elo {
         #[command(subcommand)]
         action: EloAction,
+    },
+    /// Manage review alerts
+    Alerts {
+        #[command(subcommand)]
+        action: AlertsAction,
     },
     /// Mission management (delegations lifecycle)
     Mission {
@@ -249,6 +261,41 @@ enum ReviewAction {
         /// Review ID
         id: String,
     },
+    /// Submit an artifact for auditor review
+    Submit {
+        /// Path to the artifact file
+        #[arg(long)]
+        artifact: String,
+        /// Author's role ID (e.g., "pentester")
+        #[arg(long)]
+        author: String,
+        /// Mission ID
+        #[arg(long)]
+        mission: String,
+        /// Available reviewer roles (comma-separated)
+        #[arg(long)]
+        available_roles: String,
+    },
+    /// Evaluate a pending review (submit scores and findings)
+    Evaluate {
+        /// Review ID to evaluate
+        review_id: String,
+        /// Reviewer's role ID
+        #[arg(long)]
+        reviewer: String,
+        /// Scores as JSON string, e.g. '{"accuracy":8,"completeness":7}'
+        #[arg(long)]
+        scores: String,
+        /// Findings as JSON string, e.g. '[{"category":"completeness","severity":"medium","description":"...","recommendation":"..."}]'
+        #[arg(long)]
+        findings: String,
+        /// Path to artifact file (for hash verification)
+        #[arg(long)]
+        artifact: String,
+        /// Optional evaluation narrative
+        #[arg(long)]
+        narrative: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -363,6 +410,15 @@ enum MissionAction {
 }
 
 #[derive(Subcommand)]
+enum AlertsAction {
+    /// Acknowledge an alert by ID, or "all" for all
+    Ack {
+        /// Alert ID, or "all" to acknowledge everything
+        alert_id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum CalibrateAction {
     /// Run calibration from current ELO scores
     Run,
@@ -397,7 +453,7 @@ fn main() {
         },
         Commands::Install => install::run_install(),
         Commands::Library { action } => match action {
-            LibraryAction::List => run_library_list(),
+            LibraryAction::List => run_library_list(cli.json),
             LibraryAction::Show { id } => run_library_show(id),
             LibraryAction::Select {
                 mission,
@@ -418,11 +474,33 @@ fn main() {
             } => run_library_create_pattern(id, description, topology),
         },
         Commands::Review { action } => match action {
-            ReviewAction::List { state } => run_review_list(state),
-            ReviewAction::Show { id } => run_review_show(id),
+            ReviewAction::List { state } => run_review_list(state, cli.json),
+            ReviewAction::Show { id } => run_review_show(id, cli.json),
+            ReviewAction::Submit {
+                artifact,
+                author,
+                mission,
+                available_roles,
+            } => run_review_submit(cli.json, &artifact, &author, &mission, &available_roles),
+            ReviewAction::Evaluate {
+                review_id,
+                reviewer,
+                scores,
+                findings,
+                artifact,
+                narrative,
+            } => run_review_evaluate(
+                cli.json,
+                &review_id,
+                &reviewer,
+                &scores,
+                &findings,
+                &artifact,
+                narrative.as_deref(),
+            ),
         },
         Commands::Elo { action } => match action {
-            EloAction::Show => run_elo_show(),
+            EloAction::Show => run_elo_show(cli.json),
         },
         Commands::Mission { action } => match action {
             MissionAction::List => run_mission_list(),
@@ -483,10 +561,13 @@ fn main() {
                     )
                 }
             }
-            MissionAction::Status { id } => run_mission_status(&id),
+            MissionAction::Status { id } => run_mission_status(cli.json, &id),
             MissionAction::Abort { id, reason, force } => {
                 run_mission_abort(&id, reason.as_deref(), force)
             }
+        },
+        Commands::Alerts { action } => match action {
+            AlertsAction::Ack { alert_id } => run_alerts_ack(cli.json, &alert_id),
         },
         Commands::Calibrate { action } => match action {
             CalibrateAction::Run => run_calibrate(),
@@ -507,6 +588,13 @@ fn main() {
     };
 
     if let Err(e) = result {
+        if cli.json {
+            let _ = serde_json::to_writer(
+                std::io::stdout(),
+                &serde_json::json!({"error": format!("{e:#}")}),
+            );
+            std::process::exit(1);
+        }
         log_error(&format!("Hook error: {e:#}"));
         // Fix 15 (DREAD 6.2): sanitize error messages — generic for stdout, details in log only
         let sanitized = sanitize_error(&format!("{e}"));
@@ -1492,18 +1580,30 @@ fn run_config_check(config_path: Option<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn run_library_list() -> Result<()> {
+fn run_library_list(json: bool) -> Result<()> {
     let library_dir = default_library_dir();
     if !library_dir.exists() {
-        eprintln!(
-            "Library directory not found: {}\nRun `colmena install` or create the directory manually.",
-            library_dir.display()
+        exit_with_error(
+            &format!(
+                "Library directory not found: {}\nRun `colmena install` or create the directory manually.",
+                library_dir.display()
+            ),
+            json,
         );
-        std::process::exit(1);
     }
 
     let roles = load_roles(&library_dir)?;
     let patterns = load_patterns(&library_dir)?;
+
+    if json {
+        let library_data = serde_json::json!({
+            "roles": &roles,
+            "patterns": &patterns,
+        });
+        serde_json::to_writer(std::io::stdout(), &library_data)?;
+        println!();
+        return Ok(());
+    }
 
     // Print roles table
     println!("Roles ({}):", roles.len());
@@ -2003,9 +2103,14 @@ fn run_library_create_pattern(
     Ok(())
 }
 
-fn run_review_list(state: Option<String>) -> Result<()> {
+fn run_review_list(state: Option<String>, json: bool) -> Result<()> {
     let review_dir = default_config_dir().join("reviews");
     if !review_dir.exists() {
+        if json {
+            serde_json::to_writer(std::io::stdout(), &[] as &[serde_json::Value])?;
+            println!();
+            return Ok(());
+        }
         println!("No reviews found.");
         return Ok(());
     }
@@ -2019,15 +2124,23 @@ fn run_review_list(state: Option<String>) -> Result<()> {
         Some("needs_human_review") => Some(ReviewState::NeedsHumanReview),
         Some("rejected") => Some(ReviewState::Rejected),
         Some(other) => {
-            eprintln!(
-                "Unknown state '{other}'. Valid: pending, in_review, evaluated, completed, needs_human_review, rejected"
+            exit_with_error(
+                &format!(
+                    "Unknown state '{other}'. Valid: pending, in_review, evaluated, completed, needs_human_review, rejected"
+                ),
+                json,
             );
-            std::process::exit(1);
         }
         None => None,
     };
 
     let entries = review::list_reviews(&review_dir, state_filter)?;
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &entries)?;
+        println!();
+        return Ok(());
+    }
 
     if entries.is_empty() {
         println!("No reviews found.");
@@ -2062,11 +2175,10 @@ fn run_review_list(state: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn run_review_show(id: String) -> Result<()> {
+fn run_review_show(id: String, json: bool) -> Result<()> {
     let review_dir = default_config_dir().join("reviews");
     if !review_dir.exists() {
-        eprintln!("No reviews directory found.");
-        std::process::exit(1);
+        exit_with_error("No reviews directory found.", json);
     }
 
     let entries = review::list_reviews(&review_dir, None)?;
@@ -2075,10 +2187,15 @@ fn run_review_show(id: String) -> Result<()> {
     let entry = match entry {
         Some(e) => e,
         None => {
-            eprintln!("Review '{id}' not found.");
-            std::process::exit(1);
+            exit_with_error(&format!("Review '{id}' not found."), json);
         }
     };
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &entry)?;
+        println!();
+        return Ok(());
+    }
 
     println!("Review: {}", entry.review_id);
     println!("  State:         {}", format_review_state(&entry.state));
@@ -2117,7 +2234,7 @@ fn run_review_show(id: String) -> Result<()> {
     Ok(())
 }
 
-fn run_elo_show() -> Result<()> {
+fn run_elo_show(json: bool) -> Result<()> {
     let config_dir = default_config_dir();
     let elo_log_path = config_dir.join("elo/elo-log.jsonl");
 
@@ -2138,6 +2255,12 @@ fn run_elo_show() -> Result<()> {
     };
 
     let ratings = elo::leaderboard(&events, &baselines);
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &ratings)?;
+        println!();
+        return Ok(());
+    }
 
     if ratings.is_empty() {
         println!("No ELO data available.");
@@ -3162,7 +3285,21 @@ budget:
     Ok(())
 }
 
-fn run_mission_status(mission_id: &str) -> Result<()> {
+#[derive(Serialize)]
+struct MissionStatusJson {
+    mission_id: String,
+    spawned_at: Option<String>,
+    manifest_sha256: Option<String>,
+    mission_ttl_hours: Option<i64>,
+    elapsed_hours: Option<i64>,
+    remaining_hours: Option<i64>,
+    subagent_files: usize,
+    active_delegations: usize,
+    budget_overrides: usize,
+    unread_alerts: usize,
+}
+
+fn run_mission_status(json: bool, mission_id: &str) -> Result<()> {
     let config_dir = default_config_dir();
     let runtime_path = colmena_core::config::runtime_overrides_path(&config_dir);
     let delegations_path = config_dir.join("runtime-delegations.json");
@@ -3179,6 +3316,77 @@ fn run_mission_status(mission_id: &str) -> Result<()> {
         .iter()
         .filter(|d| d.mission_id.as_deref() == Some(mission_id))
         .collect();
+
+    // Count subagent files matching this mission
+    let mut subagent_count = 0;
+    if agents_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.contains(mission_id) || name.starts_with("colmena_") {
+                    subagent_count += 1;
+                }
+            }
+        }
+    }
+
+    // Check alerts
+    let alerts_path = config_dir.join("alerts.json");
+    let unread_alerts =
+        if let Ok(alerts) = colmena_core::alerts::list_alerts(&alerts_path, Some(false)) {
+            alerts.len()
+        } else {
+            0
+        };
+
+    if json {
+        let (
+            spawned_at,
+            manifest_sha256,
+            mission_ttl_hours,
+            elapsed_hours,
+            remaining_hours,
+            budget_overrides,
+        ) = match mission_ov {
+            Some(ov) => {
+                let (elapsed, remaining) =
+                    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&ov.applied_at) {
+                        let elapsed = chrono::Utc::now()
+                            .signed_duration_since(ts.with_timezone(&chrono::Utc));
+                        let hours = elapsed.num_hours();
+                        let remaining = (ov.mission_ttl_hours - hours).max(0);
+                        (Some(hours), Some(remaining))
+                    } else {
+                        (None, None)
+                    };
+                (
+                    Some(ov.applied_at.clone()),
+                    Some(ov.manifest_sha256.clone()),
+                    Some(ov.mission_ttl_hours),
+                    elapsed,
+                    remaining,
+                    ov.overrides.len(),
+                )
+            }
+            None => (None, None, None, None, None, 0),
+        };
+
+        let status = MissionStatusJson {
+            mission_id: mission_id.to_string(),
+            spawned_at,
+            manifest_sha256,
+            mission_ttl_hours,
+            elapsed_hours,
+            remaining_hours,
+            subagent_files: subagent_count,
+            active_delegations: active_delegations.len(),
+            budget_overrides,
+            unread_alerts,
+        };
+        serde_json::to_writer(std::io::stdout(), &status)?;
+        println!();
+        return Ok(());
+    }
 
     println!("Mission: {}", mission_id);
     if let Some(ov) = mission_ov {
@@ -3197,19 +3405,6 @@ fn run_mission_status(mission_id: &str) -> Result<()> {
         println!("Spawned: NOT FOUND in runtime overrides");
     }
 
-    // Count subagent files matching this mission
-    let mut subagent_count = 0;
-    if agents_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if name.contains(mission_id) || name.starts_with("colmena_") {
-                    subagent_count += 1;
-                }
-            }
-        }
-    }
-
     println!(
         "\nAgents:      {} subagent files, {} active delegations",
         subagent_count,
@@ -3221,12 +3416,8 @@ fn run_mission_status(mission_id: &str) -> Result<()> {
     );
 
     // Check alerts
-    let alerts_path = config_dir.join("alerts.json");
-    if let Ok(alerts) = colmena_core::alerts::list_alerts(&alerts_path, Some(false)) {
-        let unread = alerts.len();
-        if unread > 0 {
-            println!("Alerts:      {} unread", unread);
-        }
+    if unread_alerts > 0 {
+        println!("Alerts:      {} unread", unread_alerts);
     }
 
     Ok(())
@@ -3386,6 +3577,134 @@ fn run_calibrate_reset() -> Result<()> {
         println!("ELO overrides cleared. All agents return to default trust rules.");
     } else {
         println!("No ELO overrides file found — already at defaults.");
+    }
+    Ok(())
+}
+
+// ── Exit helper ───────────────────────────────────────────────────────
+
+/// Print an error message to stderr (or JSON error to stdout in --json mode)
+/// and exit with code 1.
+fn exit_with_error(msg: &str, json: bool) -> ! {
+    if json {
+        let _ = serde_json::to_writer(std::io::stdout(), &serde_json::json!({"error": msg}));
+    } else {
+        eprintln!("{msg}");
+    }
+    std::process::exit(1);
+}
+
+// ── Alerts subcommands ─────────────────────────────────────────────────
+
+fn run_alerts_ack(json: bool, alert_id: &str) -> Result<()> {
+    let config_dir = default_config_dir();
+    let alerts_path = config_dir.join("alerts.json");
+
+    if alert_id == "all" {
+        colmena_core::alerts::acknowledge_all(&alerts_path)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"acknowledged": "all", "status": "ok"})
+            );
+        } else {
+            println!("All alerts acknowledged.");
+        }
+    } else {
+        colmena_core::alerts::acknowledge_alert(&alerts_path, alert_id)?;
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"acknowledged": alert_id, "status": "ok"})
+            );
+        } else {
+            println!("Alert '{alert_id}' acknowledged.");
+        }
+    }
+    Ok(())
+}
+
+// ── Review subcommands ─────────────────────────────────────────────────
+
+fn run_review_submit(
+    json: bool,
+    artifact: &str,
+    author: &str,
+    mission: &str,
+    available_roles: &str,
+) -> Result<()> {
+    let review_dir = default_config_dir().join("reviews");
+    let artifact_path = std::path::PathBuf::from(artifact);
+    let roles: Vec<String> = available_roles
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    let entry =
+        colmena_core::review::submit_review(&review_dir, &artifact_path, author, mission, &roles)?;
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &entry)?;
+        println!();
+    } else {
+        println!("Review created:");
+        println!("  review_id:  {}", entry.review_id);
+        println!("  author:     {}", entry.author_role);
+        println!("  reviewer:   {}", entry.reviewer_role);
+        println!("  hash:       {}", entry.artifact_hash);
+        println!("  state:      {}", format_review_state(&entry.state));
+    }
+    Ok(())
+}
+
+fn run_review_evaluate(
+    json: bool,
+    review_id: &str,
+    reviewer_role: &str,
+    scores_json: &str,
+    findings_json: &str,
+    artifact_path: &str,
+    narrative: Option<&str>,
+) -> Result<()> {
+    let review_dir = default_config_dir().join("reviews");
+
+    // Parse JSON inputs
+    let scores: HashMap<String, u32> = serde_json::from_str(scores_json)
+        .context("--scores must be a JSON object like {\"accuracy\":8,\"completeness\":7}")?;
+    let finding_inputs: Vec<colmena_core::findings::Finding> = serde_json::from_str(findings_json)
+        .context("--findings must be a JSON array of finding objects")?;
+
+    // Validate finding fields
+    for f in &finding_inputs {
+        colmena_core::findings::validate_severity(&f.severity)
+            .with_context(|| format!("invalid severity '{}'", f.severity))?;
+        colmena_core::findings::validate_category(&f.category)
+            .with_context(|| format!("invalid category '{}'", f.category))?;
+    }
+
+    let artifact = std::path::PathBuf::from(artifact_path);
+    let entry = colmena_core::review::evaluate_review(
+        &review_dir,
+        review_id,
+        reviewer_role,
+        scores,
+        finding_inputs,
+        &artifact,
+        narrative.map(|s| s.to_string()),
+    )?;
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &entry)?;
+        println!();
+    } else {
+        let avg = entry.score_average.unwrap_or(0.0);
+        let count = entry.finding_count.unwrap_or(0);
+        println!("Review evaluated:");
+        println!("  review_id:  {}", entry.review_id);
+        println!("  state:      {}", format_review_state(&entry.state));
+        println!("  score_avg:  {avg:.1}");
+        println!("  findings:   {count}");
+        println!("  reviewer:   {}", entry.reviewer_role);
     }
     Ok(())
 }
