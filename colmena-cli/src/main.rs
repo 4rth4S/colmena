@@ -588,6 +588,13 @@ fn main() {
     };
 
     if let Err(e) = result {
+        if cli.json {
+            let _ = serde_json::to_writer(
+                std::io::stdout(),
+                &serde_json::json!({"error": format!("{e:#}")}),
+            );
+            std::process::exit(1);
+        }
         log_error(&format!("Hook error: {e:#}"));
         // Fix 15 (DREAD 6.2): sanitize error messages — generic for stdout, details in log only
         let sanitized = sanitize_error(&format!("{e}"));
