@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Role types ────────────────────────────────────────────────────────────────
 
 /// Optional permissions block for role-bound firewall delegations.
 /// When a mission uses this role, these become scoped auto-approve rules.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RolePermissions {
     /// Regex patterns for auto-approved Bash commands (e.g. `^uv (run|pip)`)
     #[serde(default)]
@@ -21,7 +21,7 @@ pub struct RolePermissions {
     pub path_not_match: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Role {
     pub name: String,
     pub id: String,
@@ -45,14 +45,14 @@ pub struct Role {
     pub mentoring: MentoringConfig,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EloConfig {
     pub initial: u32,
     #[serde(default)]
     pub categories: HashMap<String, u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MentoringConfig {
     #[serde(default)]
     pub can_mentor: Vec<String>,
@@ -62,7 +62,7 @@ pub struct MentoringConfig {
 
 // ── Pattern types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Pattern {
     pub name: String,
     pub id: String,
@@ -94,11 +94,11 @@ pub struct Pattern {
 ///   roles_suggested:
 ///     oracle: security_architect
 ///     workers: [pentester, auditor, researcher]
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct RolesSuggested(pub HashMap<String, RoleSlot>);
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RoleSlot {
     Single(String),
