@@ -359,6 +359,10 @@ enum MissionAction {
         /// Each agent calls review_submit independently — ELO cycle per-agent.
         #[arg(long)]
         auto_spawn: bool,
+        /// Base branch for git diff (default: "main"). Recorded in mission.yaml
+        /// so `mission deliverables` knows what to diff against.
+        #[arg(long, default_value = "main")]
+        base_branch: String,
     },
     /// Emit the INTER_AGENT_DIRECTIVE as a standalone block for manual Agent spawns.
     PromptInject {
@@ -406,6 +410,22 @@ enum MissionAction {
         /// Skip confirmation prompt.
         #[arg(long)]
         force: bool,
+    },
+    /// Show mission deliverables — file tree with git metadata
+    /// (artifacts in the mission directory + code changes in the project repo).
+    Deliverables {
+        /// Mission ID (slug).
+        #[arg(long)]
+        id: String,
+    },
+    /// Show unified diff for a mission file (artifact or code change).
+    FileDiff {
+        /// Mission ID (slug).
+        #[arg(long)]
+        id: String,
+        /// File path relative to mission dir (artifacts) or repo root (changes).
+        #[arg(long)]
+        file: String,
     },
 }
 
@@ -519,6 +539,7 @@ fn main() {
                 session_gate,
                 no_gate_confirmed,
                 auto_spawn,
+                base_branch,
             } => run_mission_spawn(
                 from,
                 mission,
@@ -533,6 +554,7 @@ fn main() {
                 session_gate,
                 no_gate_confirmed,
                 auto_spawn,
+                &base_branch,
             ),
             MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
             MissionAction::Validate { file } => run_mission_validate(&file),
@@ -565,6 +587,8 @@ fn main() {
             MissionAction::Abort { id, reason, force } => {
                 run_mission_abort(&id, reason.as_deref(), force)
             }
+            MissionAction::Deliverables { id } => run_mission_deliverables(cli.json, &id),
+            MissionAction::FileDiff { id, file } => run_mission_file_diff(cli.json, &id, &file),
         },
         Commands::Alerts { action } => match action {
             AlertsAction::Ack { alert_id } => run_alerts_ack(cli.json, &alert_id),
@@ -1859,6 +1883,7 @@ fn run_library_select(
         Some(&default_config_dir()),
         None,  // manifest: legacy CLI path does not take a manifest
         false, // dry_run: this CLI path always persists
+        None,  // base_branch: default "main"
     )?;
 
     // Save role-generated delegations
@@ -2672,6 +2697,7 @@ fn run_mission_spawn(
     session_gate: bool,
     no_gate_confirmed: bool,
     auto_spawn: bool,
+    base_branch: &str,
 ) -> Result<()> {
     use colmena_core::mission_manifest::{
         InterAgentProtocol, ManifestAgent, ManifestBashPatterns, ManifestScope, MissionBudget,
@@ -2828,6 +2854,7 @@ fn run_mission_spawn(
         dry_run,
         overwrite,
         auto_spawn,
+        Some(base_branch),
     )?;
 
     // Emit summary
@@ -3480,6 +3507,214 @@ fn run_mission_abort(mission_id: &str, reason: Option<&str>, force: bool) -> Res
 
     println!("\n\u{2713} Mission '{}' aborted.", mission_id);
     Ok(())
+}
+
+// ── Mission deliverables & file-diff (M7.16) ──────────────────────────────────
+
+fn run_mission_deliverables(json: bool, mission_id: &str) -> Result<()> {
+    use colmena_core::deliverables;
+
+    let config_dir = default_config_dir();
+    let mission_dir = config_dir.join("missions").join(mission_id);
+
+    if !mission_dir.exists() {
+        anyhow::bail!(
+            "mission directory not found: {}. Check the mission ID.",
+            mission_dir.display()
+        );
+    }
+
+    // Read git metadata from mission.yaml
+    let meta = match deliverables::read_mission_metadata(&mission_dir) {
+        Ok(m) => m,
+        Err(e) => {
+            // For missions without git metadata, return artifacts only
+            if json {
+                let artifacts = deliverables::list_artifacts(&mission_dir).unwrap_or_default();
+                let summary = deliverables::DeliverablesSummary {
+                    artifacts_count: artifacts.len(),
+                    changes_created: 0,
+                    changes_modified: 0,
+                    total_size: artifacts.iter().map(|a| a.size).sum(),
+                };
+                let output = deliverables::DeliverablesOutput {
+                    mission_id: mission_id.to_string(),
+                    working_dir: String::new(),
+                    branch: String::new(),
+                    base_branch: String::new(),
+                    artifacts: deliverables::ArtifactsSection { files: artifacts },
+                    changes: None,
+                    summary,
+                };
+                serde_json::to_writer(std::io::stdout(), &output)?;
+                println!();
+            } else {
+                eprintln!("Warning: {} — showing only mission artifacts.", e);
+                let artifacts = deliverables::list_artifacts(&mission_dir)?;
+                println!("Mission: {}", mission_id);
+                println!("Git metadata: NOT AVAILABLE (mission created before v0.15.0)");
+                println!("\nArtifacts ({} files):", artifacts.len());
+                for a in &artifacts {
+                    println!("  {}  {}  {}", a.path, human_size(a.size), a.last_modified);
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    let artifacts = deliverables::list_artifacts(&mission_dir).unwrap_or_default();
+    let changes =
+        match deliverables::list_changes(&meta.working_dir, &meta.base_branch, &meta.branch) {
+            Ok(c) => c,
+            Err(e) => {
+                if json {
+                    // Non-fatal: return what we have
+                    eprintln!("Warning: failed to list git changes: {}", e);
+                    Vec::new()
+                } else {
+                    anyhow::bail!("failed to list git changes: {}", e);
+                }
+            }
+        };
+
+    let changes_created = changes.iter().filter(|c| c.status == "created").count();
+    let changes_modified = changes.iter().filter(|c| c.status == "modified").count();
+    let total_size: u64 =
+        artifacts.iter().map(|a| a.size).sum::<u64>() + changes.iter().map(|c| c.size).sum::<u64>();
+
+    let summary = deliverables::DeliverablesSummary {
+        artifacts_count: artifacts.len(),
+        changes_created,
+        changes_modified,
+        total_size,
+    };
+
+    if json {
+        let output = deliverables::DeliverablesOutput {
+            mission_id: mission_id.to_string(),
+            working_dir: meta.working_dir.to_string_lossy().to_string(),
+            branch: meta.branch,
+            base_branch: meta.base_branch,
+            artifacts: deliverables::ArtifactsSection { files: artifacts },
+            changes: Some(deliverables::ChangesSection { files: changes }),
+            summary,
+        };
+        serde_json::to_writer(std::io::stdout(), &output)?;
+        println!();
+        return Ok(());
+    }
+
+    // Human-readable output
+    println!("Mission: {}", mission_id);
+    println!("Repo:    {}  ({})", meta.working_dir.display(), meta.branch);
+    println!("Diff:    {}...{}", meta.base_branch, meta.branch);
+    println!();
+
+    if !artifacts.is_empty() {
+        println!("Artifacts ({} files):", artifacts.len());
+        for a in &artifacts {
+            println!("  {}  {}  {}", a.path, human_size(a.size), a.last_modified);
+        }
+        println!();
+    }
+
+    if !changes.is_empty() {
+        println!(
+            "Changes ({} created, {} modified):",
+            changes_created, changes_modified
+        );
+        for c in &changes {
+            println!(
+                "  [{}] {}  {}  {}",
+                c.status,
+                c.path,
+                human_size(c.size),
+                c.last_modified
+            );
+        }
+    }
+
+    if artifacts.is_empty() && changes.is_empty() {
+        println!("No deliverables found.");
+    }
+
+    Ok(())
+}
+
+fn run_mission_file_diff(json: bool, mission_id: &str, file_path: &str) -> Result<()> {
+    use colmena_core::deliverables;
+
+    let config_dir = default_config_dir();
+    let mission_dir = config_dir.join("missions").join(mission_id);
+
+    if !mission_dir.exists() {
+        anyhow::bail!("mission directory not found: {}", mission_dir.display());
+    }
+
+    // 1. Check if it's a mission artifact (no git metadata needed)
+    let artifact_path = mission_dir.join(file_path);
+    if artifact_path.exists() && artifact_path.is_file() {
+        let content = std::fs::read_to_string(&artifact_path)
+            .with_context(|| format!("failed to read artifact: {}", artifact_path.display()))?;
+        let result = deliverables::FileDiffOutput {
+            path: file_path.to_string(),
+            source: "artifacts".to_string(),
+            status: "artifact".to_string(),
+            diff: content,
+        };
+
+        if json {
+            serde_json::to_writer(std::io::stdout(), &result)?;
+            println!();
+        } else {
+            println!(
+                "File:  {}  [{}]  source: {}",
+                result.path, result.status, result.source
+            );
+            println!("---");
+            println!("{}", result.diff);
+        }
+        return Ok(());
+    }
+
+    // 2. Code change — requires git metadata
+    let meta = deliverables::read_mission_metadata(&mission_dir)?;
+    let result = deliverables::compute_file_diff(
+        &mission_dir,
+        &meta.working_dir,
+        &meta.base_branch,
+        &meta.branch,
+        file_path,
+    )?;
+
+    if json {
+        serde_json::to_writer(std::io::stdout(), &result)?;
+        println!();
+    } else {
+        println!(
+            "File:  {}  [{}]  source: {}",
+            result.path, result.status, result.source
+        );
+        println!("---");
+        println!("{}", result.diff);
+    }
+
+    Ok(())
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    while size >= 1024.0 && unit_idx < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    if unit_idx == 0 {
+        format!("{:.0}{}", size, UNITS[unit_idx])
+    } else {
+        format!("{:.1}{}", size, UNITS[unit_idx])
+    }
 }
 
 // ── Calibrate subcommands ────────────────────────────────────────────────────

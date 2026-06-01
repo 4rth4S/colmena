@@ -37,6 +37,41 @@ pub struct RoleAssignment {
     pub icon: String,
 }
 
+/// Auto-detect the current git branch via `git rev-parse --abbrev-ref HEAD`.
+fn detect_git_branch(working_dir: &Path) -> Result<String> {
+    use std::process::Command;
+    let output = Command::new("git")
+        .args([
+            "-C",
+            &working_dir.to_string_lossy(),
+            "rev-parse",
+            "--abbrev-ref",
+            "HEAD",
+        ])
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to run git rev-parse in {} — ensure you are in a git repo",
+                working_dir.display()
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git rev-parse failed in {}: {}",
+            working_dir.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() || branch == "HEAD" {
+        anyhow::bail!(
+            "detected detached HEAD in {} — please check out a branch before spawning a mission",
+            working_dir.display()
+        );
+    }
+    Ok(branch)
+}
+
 /// Default TTL for mission-generated delegations: 8 hours.
 pub const DEFAULT_MISSION_TTL_HOURS: i64 = 8;
 
@@ -319,6 +354,7 @@ pub fn generate_mission(
     config_dir: Option<&Path>,
     manifest: Option<&crate::mission_manifest::MissionManifest>,
     dry_run: bool,
+    base_branch: Option<&str>,
 ) -> Result<MissionConfig> {
     let role_map: HashMap<&str, &Role> = roles.iter().map(|r| (r.id.as_str(), r)).collect();
 
@@ -399,13 +435,29 @@ pub fn generate_mission(
             .with_context(|| format!("Failed to create mission dir: {}", mission_dir.display()))?;
     }
 
+    // Auto-detect git metadata for deliverables tracking
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let working_dir_str = working_dir.to_string_lossy().to_string();
+    let branch = detect_git_branch(&working_dir).unwrap_or_else(|_| "unknown".to_string());
+    let base = base_branch.unwrap_or("main");
+
     // Write mission.yaml
     let mission_yaml = format!(
-        "mission: \"{}\"\npattern: {}\npattern_name: \"{}\"\ncreated: {}\nagents:\n{}",
+        "mission: \"{}\"\n\
+         pattern: {}\n\
+         pattern_name: \"{}\"\n\
+         created: {}\n\
+         working_dir: {}\n\
+         branch: {}\n\
+         base_branch: {}\n\
+         agents:\n{}",
         mission.replace('"', "\\\""),
         recommendation.pattern_id,
         recommendation.pattern_name,
         Utc::now().to_rfc3339(),
+        working_dir_str,
+        branch,
+        base,
         recommendation
             .role_assignments
             .iter()
@@ -1595,6 +1647,7 @@ pub fn spawn_mission(
     dry_run: bool,
     overwrite_subagents: bool,
     auto_spawn: bool,
+    base_branch: Option<&str>,
 ) -> Result<SpawnResult> {
     if roles.is_empty() {
         anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
@@ -1751,6 +1804,7 @@ pub fn spawn_mission(
         config_dir,
         manifest,
         dry_run,
+        base_branch,
     )?;
 
     // 3b. Apply pattern-level workspace_scope override. When the chosen pattern
@@ -2501,6 +2555,7 @@ mod tests {
             None,  // no config_dir — no prompt review detection
             None,  // no manifest
             false, // dry_run: test writes to disk
+            None,  // base_branch
         )
         .expect("generate_mission should succeed");
 
@@ -2980,6 +3035,7 @@ mod tests {
             Some(config_dir),
             None,
             false,
+            None, // base_branch
         )
         .expect("generate_mission should succeed");
 
@@ -3058,6 +3114,7 @@ mod tests {
             Some(config_dir),
             None,
             false,
+            None, // base_branch
         )
         .expect("generate_mission should succeed");
 
@@ -3277,6 +3334,7 @@ mod tests {
             None,
             None,
             false,
+            None, // base_branch
         )
         .expect("generate_mission should succeed");
 
@@ -3339,6 +3397,7 @@ mod tests {
             None,
             None,
             false,
+            None, // base_branch
         )
         .expect("generate_mission should succeed");
 
@@ -3413,6 +3472,7 @@ mod tests {
             false, // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -3471,6 +3531,7 @@ mod tests {
             false, // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         );
         assert!(
             result.is_ok(),
@@ -3511,6 +3572,7 @@ mod tests {
             false, // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         );
         assert!(
             result.is_err(),
@@ -3578,6 +3640,7 @@ mod tests {
             false, // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         )
         .unwrap();
 
@@ -3907,6 +3970,7 @@ mod tests {
             None,
             None,
             false,
+            None, // base_branch
         );
 
         assert!(
@@ -3981,6 +4045,7 @@ mod tests {
             false,
             true,  // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         )
         .unwrap();
 
@@ -4057,6 +4122,7 @@ mod tests {
             true,  // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         )
         .unwrap();
 
@@ -4130,6 +4196,7 @@ agents:
             false,            // dry_run
             false,            // overwrite_subagents
             false,            // auto_spawn
+            None,             // base_branch
         );
 
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
@@ -4247,6 +4314,7 @@ agents:
             true,  // dry_run
             false, // overwrite_subagents
             false, // auto_spawn
+            None,  // base_branch
         );
 
         assert!(

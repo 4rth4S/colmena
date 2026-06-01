@@ -813,6 +813,7 @@ impl ColmenaServer {
             Some(&self.config_dir),
             None,  // manifest: MCP doesn't expose manifest yet
             false, // dry_run: MCP always persists
+            None,  // base_branch: default "main"
         )
         .map_err(|e| sanitize_error(&format!("Mission generation failed: {e}")))?;
 
@@ -1507,6 +1508,7 @@ impl ColmenaServer {
             false, // dry_run
             false, // overwrite_subagents — MCP never overwrites; human-only via CLI
             input.auto_spawn,
+            None, // base_branch: default "main"
         )
         .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
 

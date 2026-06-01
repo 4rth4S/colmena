@@ -4,6 +4,7 @@ pub mod auto_elevate;
 pub mod calibrate;
 pub mod config;
 pub mod delegate;
+pub mod deliverables;
 pub mod elo;
 pub mod emitters;
 pub mod findings;
