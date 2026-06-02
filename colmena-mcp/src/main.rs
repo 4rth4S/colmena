@@ -1547,14 +1547,29 @@ impl ColmenaServer {
 
         // Agent prompts (ready to paste into Agent tool)
         if input.auto_spawn {
-            output.push_str("\n## [AUTO-SPAWN] Flat-Team Orchestration\n\n");
-            output.push_str("**ORCHESTRATE.md** has been written to the mission directory. ");
-            output.push_str("In Claude Code, say: **\"orquestá esta misión\"** — Claude will ");
-            output.push_str("TeamCreate + spawn all agents as teammates + set up delegations.\n\n");
-            output.push_str("This is the proven pentest-delpirque pattern: flat team, ");
-            output.push_str("team-lead spawns everyone, ELO cycle works per-agent.\n\n");
+            output.push_str("\n## [AUTO-SPAWN] Mission Lead Orchestration\n\n");
+            output.push_str("**spawn-manifest.json** + **Mission Lead subagent** + ");
+            output.push_str("**ORCHESTRATE.md** (fallback) have been written.\n\n");
+            if let Some(ref lead_path) = spawn_result.mission_lead_subagent_path {
+                let lead_name = lead_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy())
+                    .unwrap_or_else(|| "mission-lead".into());
+                output.push_str("To launch the mission, spawn the Mission Lead:\n\n");
+                output.push_str("```\n");
+                output.push_str(&format!(
+                    "Agent(subagent_type: \"{lead_name}\", description: \"Orquestar misión {mission_id}\", run_in_background: true)\n",
+                    lead_name = lead_name,
+                    mission_id = spawn_result.mission_name
+                ));
+                output.push_str("```\n\n");
+                output.push_str("The Mission Lead reads spawn-manifest.json and ");
+                output.push_str("spawns all workers via Agent(run_in_background: true).\n\n");
+            } else {
+                output.push_str("(Mission Lead role not found — use ORCHESTRATE.md fallback)\n\n");
+            }
             output.push_str(&format!(
-                "**Agents to spawn ({} total):**\n\n",
+                "**Agents ({} total — spawned by Mission Lead):**\n\n",
                 spawn_result.agent_prompts.len()
             ));
             for ap in &spawn_result.agent_prompts {
