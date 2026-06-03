@@ -2929,26 +2929,51 @@ fn run_mission_spawn(
 
     println!();
     if auto_spawn {
-        // Auto-spawn: flat-team approach (pentest-delpirque pattern).
-        // All agents are spawned directly by the operator's Claude Code session
-        // as teammates. No intermediate Mission Lead — the operator IS the team-lead.
-        println!("[AUTO-SPAWN] Flat-team orchestration ready. In Claude Code, say:");
-        println!("  \"orquestá esta misión\"");
+        // Auto-spawn v2: Mission Lead as a real agent. Generates:
+        // 1. spawn-manifest.json → the contract the Mission Lead reads
+        // 2. Mission Lead subagent .md → single Agent() call to kick off
+        // 3. ORCHESTRATE.md → manual fallback
+        println!("[AUTO-SPAWN] Mission Lead ready. To launch the mission:");
+        println!();
+        if let Some(ref lead_path) = result.mission_lead_subagent_path {
+            let lead_name = lead_path
+                .file_stem()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| "mission-lead".into());
+            println!("  Agent(");
+            println!("    subagent_type: \"{}\",", lead_name);
+            println!(
+                "    description: \"Orquestar misión {}\",",
+                result.mission_name
+            );
+            println!("    run_in_background: true");
+            println!("  )");
+        } else {
+            // Fallback if no mission-lead role in library
+            println!("  (Mission Lead role not found in library — use ORCHESTRATE.md fallback)");
+        }
         println!();
         if dry_run {
             println!(
-                "  (dry-run) ORCHESTRATE.md WOULD be written to: {}/ORCHESTRATE.md",
+                "  (dry-run) spawn-manifest.json WOULD be written to: {}/spawn-manifest.json",
                 result.mission_config.mission_dir.display()
             );
         } else {
             println!(
-                "  ORCHESTRATE.md written to: {}/ORCHESTRATE.md",
+                "  spawn-manifest.json: {}/spawn-manifest.json",
+                result.mission_config.mission_dir.display()
+            );
+            if let Some(ref lead_path) = result.mission_lead_subagent_path {
+                println!("  Mission Lead subagent: {}", lead_path.display());
+            }
+            println!(
+                "  ORCHESTRATE.md (manual fallback): {}/ORCHESTRATE.md",
                 result.mission_config.mission_dir.display()
             );
         }
         println!();
         println!(
-            "Agents to spawn as teammates ({} total):",
+            "Agents ({} total — spawned by Mission Lead):",
             result.agent_prompts.len()
         );
         for ap in &result.agent_prompts {
@@ -2958,7 +2983,7 @@ fn run_mission_spawn(
             );
         }
         println!();
-        println!("Claude will TeamCreate + spawn all agents + set up delegations.");
+        println!("The Mission Lead will TeamCreate + spawn all agents in background.");
         println!("Each agent independently calls review_submit → ELO cycle works per-agent.");
     } else {
         println!("Next steps:");

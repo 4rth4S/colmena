@@ -11,6 +11,7 @@ pub use crate::pattern_scaffold::{
 use crate::templates::{detect_category, generate_role_prompt, generate_role_yaml, RoleCategory};
 use anyhow::{Context, Result};
 use chrono::Utc;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -117,6 +118,14 @@ pub struct SpawnResult {
     /// Contains instructions for the operator's Claude Code session to spawn
     /// all agents as teammates — the same pattern used in the pentest-delpirque session.
     pub orchestrate_md_path: Option<PathBuf>,
+    /// Path to spawn-manifest.json (only populated when `auto_spawn` is true).
+    /// Read by the Mission Lead agent to deterministically spawn workers.
+    pub spawn_manifest_path: Option<PathBuf>,
+    /// Path to the Mission Lead subagent `.md` file (only populated when
+    /// `auto_spawn` is true and the `mission-lead` role exists in the library).
+    pub mission_lead_subagent_path: Option<PathBuf>,
+    /// Team name derived from the mission ID — used for TeamCreate coordination.
+    pub team_name: Option<String>,
 }
 
 /// A ready-to-paste agent prompt with mission marker.
@@ -1521,6 +1530,125 @@ fn build_instance_map(
     map
 }
 
+// ── Auto-spawn support (M7.16) ─────────────────────────────────────────────────
+
+/// Serializable agent entry for spawn-manifest.json.
+#[derive(Serialize)]
+struct ManifestAgentEntry {
+    index: usize,
+    subagent_type: String,
+    name: String,
+    description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    prompt: String,
+}
+
+#[derive(Serialize)]
+struct SpawnManifest {
+    mission_id: String,
+    generated_at: String,
+    mission_dir: String,
+    team_name: String,
+    agents: Vec<ManifestAgentEntry>,
+}
+
+/// Write spawn-manifest.json — the contract the Mission Lead reads to
+/// deterministically spawn every worker agent in this mission.
+fn write_spawn_manifest(
+    mission_dir: &Path,
+    mission_id: &str,
+    agent_prompts: &[AgentPrompt],
+    team_name: &str,
+    dry_run: bool,
+) -> Result<PathBuf> {
+    let path = mission_dir.join("spawn-manifest.json");
+
+    let agents: Vec<ManifestAgentEntry> = agent_prompts
+        .iter()
+        .enumerate()
+        .map(|(i, ap)| ManifestAgentEntry {
+            index: i,
+            subagent_type: ap.agent_id.clone(),
+            name: ap.role_id.clone(),
+            description: format!("{} for mission {}", ap.role_name, mission_id),
+            model: ap.model.clone(),
+            prompt: ap.prompt.clone(),
+        })
+        .collect();
+
+    let manifest = SpawnManifest {
+        mission_id: mission_id.to_string(),
+        generated_at: Utc::now().to_rfc3339(),
+        mission_dir: mission_dir.to_string_lossy().to_string(),
+        team_name: team_name.to_string(),
+        agents,
+    };
+
+    if !dry_run {
+        let json = serde_json::to_string_pretty(&manifest)
+            .context("failed to serialize spawn-manifest.json")?;
+        std::fs::write(&path, json)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+    }
+
+    Ok(path)
+}
+
+/// Generate the Mission Lead subagent `.md` file so the operator can spawn
+/// it with a single `Agent()` call. The Mission Lead reads spawn-manifest.json
+/// and deterministically spawns all workers.
+fn write_mission_lead_subagent(
+    agents_dir: &Path,
+    mission_id: &str,
+    mission_dir: &Path,
+    team_name: &str,
+    library_dir: &Path,
+    role: &Role,
+    dry_run: bool,
+) -> Result<PathBuf> {
+    let mission_slug = mission_id
+        .to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .take(48)
+        .collect::<String>();
+    let agent_id = format!("mission-lead-{}", mission_slug);
+    let path = agents_dir.join(format!("{}.md", agent_id));
+
+    // Load the Mission Lead prompt template
+    let prompt_path = library_dir.join("prompts").join("mission-lead.md");
+    let prompt_template = if prompt_path.exists() {
+        std::fs::read_to_string(&prompt_path)
+            .with_context(|| format!("failed to read {}", prompt_path.display()))?
+    } else {
+        // Fallback minimal prompt if the file doesn't exist
+        include_str!("../../config/library/prompts/mission-lead.md").to_string()
+    };
+
+    // Substitute template variables
+    let body = prompt_template
+        .replace("{mission_dir}", &mission_dir.to_string_lossy())
+        .replace("{mission_id}", mission_id)
+        .replace("{team_name}", team_name);
+
+    let description = format!("Mission Lead for {}", mission_id);
+    let tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
+
+    if dry_run {
+        return Ok(path);
+    }
+
+    crate::emitters::claude_code::write_subagent_file(
+        &path,
+        &agent_id,
+        &description,
+        &tools,
+        &body,
+        true,
+    )
+}
+
 /// Write ORCHESTRATE.md — instructions for the operator's Claude Code session
 /// to spawn all agents as teammates. This is the pattern proven in the
 /// pentest-delpirque session: flat team, team-lead spawns everyone,
@@ -2032,12 +2160,44 @@ pub fn spawn_mission(
         );
     }
 
-    // 4c. Auto-spawn: write ORCHESTRATE.md with instructions for the operator's
-    //     Claude Code session to spawn all agents as teammates directly.
-    //     This is the pattern proven in the pentest-delpirque session:
-    //     flat team, team-lead spawns everyone, ELO cycle works per-agent.
+    // 4c. Auto-spawn: generate spawn-manifest.json + Mission Lead subagent .md +
+    //     ORCHESTRATE.md (fallback). The Mission Lead reads the manifest and
+    //     deterministically spawns all workers via Agent(run_in_background: true).
+    //     The operator only needs ONE Agent() call to kick off the entire mission.
     let mut orchestrate_md_path: Option<PathBuf> = None;
+    let mut spawn_manifest_path: Option<PathBuf> = None;
+    let mut mission_lead_subagent_path: Option<PathBuf> = None;
+    let mut team_name: Option<String> = None;
     if auto_spawn {
+        let tn = mission_name.replace('_', "-").to_lowercase();
+        let tn = if tn.len() > 64 { &tn[..64] } else { &tn };
+        let tn = tn.to_string();
+        team_name = Some(tn.clone());
+
+        // 1. Generate spawn-manifest.json (NUEVO)
+        spawn_manifest_path = Some(write_spawn_manifest(
+            &mission_config.mission_dir,
+            &mission_name,
+            &agent_prompts,
+            &tn,
+            dry_run,
+        )?);
+
+        // 2. Generate Mission Lead subagent .md (NUEVO)
+        let lead_role = roles.iter().find(|r| r.id == "mission-lead");
+        if let Some(lead) = lead_role {
+            mission_lead_subagent_path = Some(write_mission_lead_subagent(
+                agents_dir,
+                &mission_name,
+                &mission_config.mission_dir,
+                &tn,
+                library_dir,
+                lead,
+                dry_run,
+            )?);
+        }
+
+        // 3. ORCHESTRATE.md as manual fallback (existente)
         orchestrate_md_path = Some(write_orchestrate_md(
             &mission_config.mission_dir,
             &agent_prompts,
@@ -2226,6 +2386,9 @@ pub fn spawn_mission(
         subagent_files_written,
         subagent_files_respected,
         orchestrate_md_path,
+        spawn_manifest_path,
+        mission_lead_subagent_path,
+        team_name,
     })
 }
 
