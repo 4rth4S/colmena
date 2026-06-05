@@ -202,6 +202,10 @@ struct MissionSpawnInput {
     /// Each agent calls review_submit independently — ELO cycle per-agent.
     #[serde(default)]
     auto_spawn: bool,
+    /// Auto-spawn execution mode: "cc-native" (Agent tool, default) or
+    /// "tmux" (independent tmux sessions per agent).
+    #[serde(default)]
+    auto_spawn_mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1509,6 +1513,7 @@ impl ColmenaServer {
             false, // overwrite_subagents — MCP never overwrites; human-only via CLI
             input.auto_spawn,
             None, // base_branch: default "main"
+            input.auto_spawn_mode.as_deref(),
         )
         .map_err(|e| sanitize_error(&format!("Mission spawn failed: {e}")))?;
 
@@ -1547,9 +1552,15 @@ impl ColmenaServer {
 
         // Agent prompts (ready to paste into Agent tool)
         if input.auto_spawn {
-            output.push_str("\n## [AUTO-SPAWN] Mission Lead Orchestration\n\n");
+            let is_tmux = spawn_result.auto_spawn_mode.as_deref() == Some("tmux");
+            let mode_label = if is_tmux { " (tmux)" } else { "" };
+
+            output.push_str("\n## [AUTO-SPAWN] Mission Lead Orchestration");
+            output.push_str(mode_label);
+            output.push_str("\n\n");
             output.push_str("**spawn-manifest.json** + **Mission Lead subagent** + ");
             output.push_str("**ORCHESTRATE.md** (fallback) have been written.\n\n");
+
             if let Some(ref lead_path) = spawn_result.mission_lead_subagent_path {
                 let lead_name = lead_path
                     .file_stem()
@@ -1558,16 +1569,32 @@ impl ColmenaServer {
                 output.push_str("To launch the mission, spawn the Mission Lead:\n\n");
                 output.push_str("```\n");
                 output.push_str(&format!(
-                    "Agent(subagent_type: \"{lead_name}\", description: \"Orquestar misión {mission_id}\", run_in_background: true)\n",
+                    "Agent(subagent_type: \"{lead_name}\", description: \"Orquestar misión {mission_id}{mode_label}\", run_in_background: true)\n",
                     lead_name = lead_name,
-                    mission_id = spawn_result.mission_name
+                    mission_id = spawn_result.mission_name,
+                    mode_label = mode_label
                 ));
                 output.push_str("```\n\n");
-                output.push_str("The Mission Lead reads spawn-manifest.json and ");
-                output.push_str("spawns all workers via Agent(run_in_background: true).\n\n");
+                if is_tmux {
+                    output.push_str("The Mission Lead spawns workers in tmux sessions ");
+                    output.push_str("via `Bash(tmux new-session -d ...)`.\n\n");
+                } else {
+                    output.push_str("The Mission Lead reads spawn-manifest.json and ");
+                    output.push_str("spawns all workers via Agent(run_in_background: true).\n\n");
+                }
             } else {
                 output.push_str("(Mission Lead role not found — use ORCHESTRATE.md fallback)\n\n");
             }
+
+            if is_tmux {
+                if let Some(ref sh_path) = spawn_result.launch_sh_path {
+                    output.push_str(&format!(
+                        "**Direct launch (no Mission Lead):** `bash {}`\n\n",
+                        sh_path.display()
+                    ));
+                }
+            }
+
             output.push_str(&format!(
                 "**Agents ({} total — spawned by Mission Lead):**\n\n",
                 spawn_result.agent_prompts.len()

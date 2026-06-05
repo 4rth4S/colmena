@@ -15,6 +15,7 @@ pub mod mission_manifest;
 pub mod models;
 pub mod paths;
 pub mod pattern_scaffold;
+pub mod project_detect;
 pub mod queue;
 pub mod review;
 pub mod sanitize;

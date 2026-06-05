@@ -126,6 +126,11 @@ pub struct SpawnResult {
     pub mission_lead_subagent_path: Option<PathBuf>,
     /// Team name derived from the mission ID — used for TeamCreate coordination.
     pub team_name: Option<String>,
+    /// Auto-spawn execution mode: "cc-native" (Agent tool) or "tmux" (tmux sessions).
+    /// Only populated when `auto_spawn` is true.
+    pub auto_spawn_mode: Option<String>,
+    /// Path to launch.sh (only populated when auto_spawn is true and mode is "tmux").
+    pub launch_sh_path: Option<PathBuf>,
 }
 
 /// A ready-to-paste agent prompt with mission marker.
@@ -1598,14 +1603,20 @@ fn write_spawn_manifest(
 /// Generate the Mission Lead subagent `.md` file so the operator can spawn
 /// it with a single `Agent()` call. The Mission Lead reads spawn-manifest.json
 /// and deterministically spawns all workers.
+///
+/// `mode` selects the prompt: "cc-native" loads `mission-lead.md` (Agent tool),
+/// "tmux" loads `mission-lead-tmux.md` (Bash/tmux sessions).
+#[allow(clippy::too_many_arguments)]
 fn write_mission_lead_subagent(
     agents_dir: &Path,
     mission_id: &str,
     mission_dir: &Path,
     team_name: &str,
+    working_dir: &Path,
     library_dir: &Path,
     role: &Role,
     dry_run: bool,
+    mode: &str,
 ) -> Result<PathBuf> {
     let mission_slug = mission_id
         .to_lowercase()
@@ -1616,23 +1627,64 @@ fn write_mission_lead_subagent(
     let agent_id = format!("mission-lead-{}", mission_slug);
     let path = agents_dir.join(format!("{}.md", agent_id));
 
-    // Load the Mission Lead prompt template
-    let prompt_path = library_dir.join("prompts").join("mission-lead.md");
+    // Compute short_id matching the dashboard convention:
+    // last 24 chars of the mission directory name, with
+    // non-alphanumeric/underscore/dash replaced by '-'.
+    let dir_name = mission_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| mission_id.to_string());
+    let short_id: String = if dir_name.len() > 24 {
+        dir_name[dir_name.len() - 24..]
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    } else {
+        dir_name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .collect()
+    };
+
+    // Load the Mission Lead prompt template based on mode
+    let prompt_file = match mode {
+        "tmux" => "mission-lead-tmux.md",
+        _ => "mission-lead.md",
+    };
+    let prompt_path = library_dir.join("prompts").join(prompt_file);
     let prompt_template = if prompt_path.exists() {
         std::fs::read_to_string(&prompt_path)
             .with_context(|| format!("failed to read {}", prompt_path.display()))?
     } else {
-        // Fallback minimal prompt if the file doesn't exist
-        include_str!("../../config/library/prompts/mission-lead.md").to_string()
+        // Fallback: embedded copy of the cc-native prompt
+        return Err(anyhow::anyhow!(
+            "Mission Lead prompt not found: {}. Run `colmena setup` to install defaults.",
+            prompt_path.display()
+        ));
     };
 
     // Substitute template variables
     let body = prompt_template
         .replace("{mission_dir}", &mission_dir.to_string_lossy())
         .replace("{mission_id}", mission_id)
-        .replace("{team_name}", team_name);
+        .replace("{team_name}", team_name)
+        .replace("{working_dir}", &working_dir.to_string_lossy())
+        .replace("{short_id}", &short_id);
 
-    let description = format!("Mission Lead for {}", mission_id);
+    let mode_label = if mode == "tmux" { " (tmux)" } else { "" };
+    let description = format!("Mission Lead for {}{}", mission_id, mode_label);
     let tools = crate::emitters::claude_code::mission_tool_set(&role.tools_allowed);
 
     if dry_run {
@@ -1647,6 +1699,164 @@ fn write_mission_lead_subagent(
         &body,
         true,
     )
+}
+
+/// Write launch.sh — a convenience script that creates a single tmux session
+/// with tiled panes, one per agent, so the operator can watch all workers live.
+/// Used by `--auto-spawn --mode tmux`.
+#[allow(clippy::useless_format)]
+fn write_launch_sh(
+    mission_dir: &Path,
+    agent_prompts: &[AgentPrompt],
+    mission_id: &str,
+    working_dir: &Path,
+    dry_run: bool,
+) -> Result<PathBuf> {
+    let path = mission_dir.join("launch.sh");
+
+    // Derive a clean tmux session name from the mission directory
+    let dir_name = mission_dir
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| mission_id.to_string());
+    let session_name: String = dir_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect();
+
+    let working_dir_str = working_dir.to_string_lossy();
+    let mission_dir_str = mission_dir.to_string_lossy();
+
+    let mut script = String::new();
+    script.push_str("#!/bin/bash\n");
+    script.push_str("# Auto-generated by Colmena mission spawn --auto-spawn --mode tmux\n");
+    script.push_str(&format!("# Mission: {}\n", mission_id));
+    script.push_str(&format!("# Generated: {}\n", Utc::now().to_rfc3339()));
+    script.push('\n');
+    script.push_str("set -e\n\n");
+    script.push_str(&format!("WORKING_DIR=\"{}\"\n", working_dir_str));
+    script.push_str(&format!("MISSION_DIR=\"{}\"\n", mission_dir_str));
+    script.push_str(&format!("SESSION=\"{}\"\n", session_name));
+    script.push('\n');
+
+    // Kill existing session if any (idempotent)
+    script.push_str(&format!(
+        "tmux kill-session -t \"$SESSION\" 2>/dev/null || true\n"
+    ));
+    script.push('\n');
+
+    // Create main session detached so we can set it up
+    script.push_str(&format!(
+        "tmux new-session -d -s \"$SESSION\" -c \"$WORKING_DIR\" \\\n"
+    ));
+    script.push_str("  -x \"$(tput cols 2>/dev/null || echo 80)\" -y \"$(tput lines 2>/dev/null || echo 24)\"\n");
+    script.push_str(&format!(
+        "tmux set-option -t \"$SESSION\" remain-on-exit on\n"
+    ));
+    script.push_str(&format!("tmux set-option -t \"$SESSION\" mouse on\n"));
+    script.push_str(&format!("tmux set-option -t \"$SESSION\" status on\n"));
+    script.push_str(&format!(
+        "tmux set-option -t \"$SESSION\" status-style 'fg=white,bg=#1a1a2e'\n"
+    ));
+    script.push_str(&format!(
+        "tmux rename-window -t \"$SESSION\" \"{}\"\n",
+        &session_name[..std::cmp::min(session_name.len(), 32)]
+    ));
+    script.push('\n');
+
+    // Pane 0 — Mission Control header
+    script.push_str("# Mission Control header\n");
+    script.push_str(&format!("tmux send-keys -t \"$SESSION\" \"clear\" C-m\n"));
+    script.push_str(&format!(
+        "tmux send-keys -t \"$SESSION\" \"echo '🎯 {} — {} agents'\" C-m\n",
+        mission_id,
+        agent_prompts.len()
+    ));
+    script.push_str(&format!(
+        "tmux send-keys -t \"$SESSION\" \"echo 'Session: $SESSION | Dir: $WORKING_DIR'\" C-m\n"
+    ));
+    script.push_str(&format!(
+        "tmux send-keys -t \"$SESSION\" \"echo '---'\" C-m\n"
+    ));
+    script.push('\n');
+
+    // Capture the header pane index (handles both base-index 0 and 1)
+    script.push_str("# Detect base index — tmux can be configured with pane-base-index 0 or 1\n");
+    script.push_str("HEADER_PANE=$(tmux display -t \"$SESSION\" -p '#{pane_index}')\n\n");
+
+    // For each agent: split and launch claude in its own pane
+    // All fan out from the header pane for a tiled grid
+    for (i, ap) in agent_prompts.iter().enumerate() {
+        let claude_md_path = format!("{}/agents/{}/CLAUDE.md", mission_dir_str, ap.role_id);
+
+        script.push_str(&format!(
+            "# Agent {}: {} ({})\n",
+            i + 1,
+            ap.role_name,
+            ap.role_id
+        ));
+
+        // First agent splits vertically (below header), rest alternate
+        let split_dir = if i % 2 == 0 { "-v" } else { "-h" };
+        script.push_str(&format!(
+            "tmux split-window {} -t \"$SESSION.$HEADER_PANE\" -c \"$WORKING_DIR\"\n",
+            split_dir
+        ));
+
+        // Launch agent wrapped in a logging subshell.
+        // All output goes to both the tmux pane AND agents/<role_id>/output.log.
+        // The START/DONE markers let `colmena mission status` detect agent progress.
+        script.push_str(&format!(
+            "tmux send-keys -t \"$SESSION\" \"mkdir -p \\\"$MISSION_DIR/agents/{}\\\"; ( echo '▶ {} ({}) START'; echo 'Execute your assigned task according to the system prompt. Begin working now.' | claude --print --system-prompt-file '{}' --add-dir '$WORKING_DIR' --dangerously-skip-permissions; echo '✅ {} DONE' ) 2>&1 | tee \\\"$MISSION_DIR/agents/{}/output.log\\\"\" C-m\n",
+            ap.role_id, ap.role_name, ap.role_id, claude_md_path, ap.role_id, ap.role_id
+        ));
+        script.push('\n');
+    }
+
+    // Tiled layout for even grid distribution
+    script.push_str(&format!("tmux select-layout -t \"$SESSION\" tiled\n"));
+    script.push('\n');
+
+    // Attach to show the operator (only if we have a real terminal)
+    script.push_str("echo \"Launching tmux session: $SESSION\"\n");
+    script.push_str("echo \"Agents: ");
+    for (i, ap) in agent_prompts.iter().enumerate() {
+        if i > 0 {
+            script.push_str(", ");
+        }
+        script.push_str(&ap.role_id);
+    }
+    script.push_str("\"\n");
+    script.push_str("echo \"\"\n");
+    script.push_str("sleep 1\n");
+    script.push_str("if [ -t 0 ]; then\n");
+    script.push_str("    tmux attach -t \"$SESSION\"\n");
+    script.push_str("else\n");
+    script.push_str(
+        "    echo \"Session running. Attach from a terminal: tmux attach -t $SESSION\"\n",
+    );
+    script.push_str("fi\n");
+
+    if !dry_run {
+        std::fs::write(&path, &script)
+            .with_context(|| format!("failed to write {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&path, perms)?;
+        }
+    }
+
+    Ok(path)
 }
 
 /// Write ORCHESTRATE.md — instructions for the operator's Claude Code session
@@ -1776,6 +1986,7 @@ pub fn spawn_mission(
     overwrite_subagents: bool,
     auto_spawn: bool,
     base_branch: Option<&str>,
+    auto_spawn_mode: Option<&str>,
 ) -> Result<SpawnResult> {
     if roles.is_empty() {
         anyhow::bail!("No roles available in library. Run `colmena setup` to install defaults.");
@@ -2161,20 +2372,29 @@ pub fn spawn_mission(
     }
 
     // 4c. Auto-spawn: generate spawn-manifest.json + Mission Lead subagent .md +
-    //     ORCHESTRATE.md (fallback). The Mission Lead reads the manifest and
-    //     deterministically spawns all workers via Agent(run_in_background: true).
-    //     The operator only needs ONE Agent() call to kick off the entire mission.
+    //     launch.sh (tmux mode) + ORCHESTRATE.md (fallback).
+    //     Two modes: "cc-native" (Agent tool, default) and "tmux" (tmux sessions).
     let mut orchestrate_md_path: Option<PathBuf> = None;
     let mut spawn_manifest_path: Option<PathBuf> = None;
     let mut mission_lead_subagent_path: Option<PathBuf> = None;
     let mut team_name: Option<String> = None;
+    let auto_spawn_mode: Option<String> = if auto_spawn {
+        let mode = auto_spawn_mode.unwrap_or("cc-native");
+        Some(mode.to_string())
+    } else {
+        None
+    };
+    let mut launch_sh_path: Option<PathBuf> = None;
     if auto_spawn {
         let tn = mission_name.replace('_', "-").to_lowercase();
         let tn = if tn.len() > 64 { &tn[..64] } else { &tn };
         let tn = tn.to_string();
         team_name = Some(tn.clone());
 
-        // 1. Generate spawn-manifest.json (NUEVO)
+        let mode = auto_spawn_mode.as_deref().unwrap_or("cc-native");
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+        // 1. Generate spawn-manifest.json (shared by both modes)
         spawn_manifest_path = Some(write_spawn_manifest(
             &mission_config.mission_dir,
             &mission_name,
@@ -2183,7 +2403,7 @@ pub fn spawn_mission(
             dry_run,
         )?);
 
-        // 2. Generate Mission Lead subagent .md (NUEVO)
+        // 2. Generate Mission Lead subagent .md (mode-aware prompt)
         let lead_role = roles.iter().find(|r| r.id == "mission-lead");
         if let Some(lead) = lead_role {
             mission_lead_subagent_path = Some(write_mission_lead_subagent(
@@ -2191,13 +2411,27 @@ pub fn spawn_mission(
                 &mission_name,
                 &mission_config.mission_dir,
                 &tn,
+                &working_dir,
                 library_dir,
                 lead,
+                dry_run,
+                mode,
+            )?);
+        }
+
+        // 3. Mode-specific artifacts
+        if mode == "tmux" {
+            // Generate launch.sh for direct tmux launch (convenience)
+            launch_sh_path = Some(write_launch_sh(
+                &mission_config.mission_dir,
+                &agent_prompts,
+                &mission_name,
+                &working_dir,
                 dry_run,
             )?);
         }
 
-        // 3. ORCHESTRATE.md as manual fallback (existente)
+        // 4. ORCHESTRATE.md as manual fallback (always generated)
         orchestrate_md_path = Some(write_orchestrate_md(
             &mission_config.mission_dir,
             &agent_prompts,
@@ -2389,6 +2623,8 @@ pub fn spawn_mission(
         spawn_manifest_path,
         mission_lead_subagent_path,
         team_name,
+        auto_spawn_mode,
+        launch_sh_path,
     })
 }
 
@@ -3636,6 +3872,7 @@ mod tests {
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         );
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
 
@@ -3695,6 +3932,7 @@ mod tests {
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         );
         assert!(
             result.is_ok(),
@@ -3736,6 +3974,7 @@ mod tests {
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         );
         assert!(
             result.is_err(),
@@ -3804,6 +4043,7 @@ mod tests {
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         )
         .unwrap();
 
@@ -4209,6 +4449,7 @@ mod tests {
             true,  // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         )
         .unwrap();
 
@@ -4286,6 +4527,7 @@ mod tests {
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         )
         .unwrap();
 
@@ -4360,6 +4602,7 @@ agents:
             false,            // overwrite_subagents
             false,            // auto_spawn
             None,             // base_branch
+            None,             // auto_spawn_mode
         );
 
         assert!(result.is_ok(), "spawn_mission failed: {:?}", result.err());
@@ -4478,6 +4721,7 @@ agents:
             false, // overwrite_subagents
             false, // auto_spawn
             None,  // base_branch
+            None,  // auto_spawn_mode
         );
 
         assert!(
