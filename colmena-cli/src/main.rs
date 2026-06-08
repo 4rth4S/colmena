@@ -363,6 +363,10 @@ enum MissionAction {
         /// so `mission deliverables` knows what to diff against.
         #[arg(long, default_value = "main")]
         base_branch: String,
+        /// Auto-spawn execution mode: "cc-native" (Agent tool, default) or
+        /// "tmux" (single tmux session with tiled panes, one per agent).
+        #[arg(long, default_value = "cc-native")]
+        mode: String,
     },
     /// Emit the INTER_AGENT_DIRECTIVE as a standalone block for manual Agent spawns.
     PromptInject {
@@ -410,6 +414,28 @@ enum MissionAction {
         /// Skip confirmation prompt.
         #[arg(long)]
         force: bool,
+    },
+    /// One-command mission launch: auto-detect project type, confirm, spawn, execute.
+    /// The vibeCoder's entry point — no manifest, no manual steps.
+    Go {
+        /// Project directory (default: current directory)
+        #[arg(long, default_value = ".")]
+        dir: String,
+        /// Mission description (what you want to build)
+        #[arg(long)]
+        desc: String,
+        /// Execution mode: "cc-native" (Agent tool) or "tmux" (tiled panes, default)
+        #[arg(long, default_value = "tmux")]
+        mode: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Dry run: show what would be done, don't write anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Overwrite existing delegations whose TTL is shorter than mission end
+        #[arg(long)]
+        extend_existing: bool,
     },
     /// Show mission deliverables — file tree with git metadata
     /// (artifacts in the mission directory + code changes in the project repo).
@@ -540,6 +566,7 @@ fn main() {
                 no_gate_confirmed,
                 auto_spawn,
                 base_branch,
+                mode,
             } => run_mission_spawn(
                 from,
                 mission,
@@ -555,6 +582,7 @@ fn main() {
                 no_gate_confirmed,
                 auto_spawn,
                 &base_branch,
+                &mode,
             ),
             MissionAction::PromptInject { mode } => run_mission_prompt_inject(&mode),
             MissionAction::Validate { file } => run_mission_validate(&file),
@@ -587,6 +615,14 @@ fn main() {
             MissionAction::Abort { id, reason, force } => {
                 run_mission_abort(&id, reason.as_deref(), force)
             }
+            MissionAction::Go {
+                dir,
+                desc,
+                mode,
+                yes,
+                dry_run,
+                extend_existing,
+            } => run_mission_go(&dir, &desc, &mode, yes, dry_run, extend_existing),
             MissionAction::Deliverables { id } => run_mission_deliverables(cli.json, &id),
             MissionAction::FileDiff { id, file } => run_mission_file_diff(cli.json, &id, &file),
         },
@@ -2698,6 +2734,7 @@ fn run_mission_spawn(
     no_gate_confirmed: bool,
     auto_spawn: bool,
     base_branch: &str,
+    mode: &str,
 ) -> Result<()> {
     use colmena_core::mission_manifest::{
         InterAgentProtocol, ManifestAgent, ManifestBashPatterns, ManifestScope, MissionBudget,
@@ -2838,6 +2875,7 @@ fn run_mission_spawn(
 
     let agents_dir = colmena_core::paths::default_agents_dir()?;
 
+    let mode_opt = if auto_spawn { Some(mode) } else { None };
     let result = colmena_core::selector::spawn_mission(
         &manifest.mission_id,
         Some(&manifest),
@@ -2855,6 +2893,7 @@ fn run_mission_spawn(
         overwrite,
         auto_spawn,
         Some(base_branch),
+        mode_opt,
     )?;
 
     // Emit summary
@@ -2929,30 +2968,44 @@ fn run_mission_spawn(
 
     println!();
     if auto_spawn {
-        // Auto-spawn v2: Mission Lead as a real agent. Generates:
-        // 1. spawn-manifest.json → the contract the Mission Lead reads
-        // 2. Mission Lead subagent .md → single Agent() call to kick off
-        // 3. ORCHESTRATE.md → manual fallback
-        println!("[AUTO-SPAWN] Mission Lead ready. To launch the mission:");
+        let is_tmux = result.auto_spawn_mode.as_deref() == Some("tmux");
+        let mode_label = if is_tmux { " (tmux)" } else { "" };
+
+        println!(
+            "[AUTO-SPAWN] Mission Lead{} ready. To launch the mission:",
+            mode_label
+        );
         println!();
+
+        // Option A: Mission Lead Agent() call
         if let Some(ref lead_path) = result.mission_lead_subagent_path {
             let lead_name = lead_path
                 .file_stem()
                 .map(|s| s.to_string_lossy())
                 .unwrap_or_else(|| "mission-lead".into());
+            println!("  # Option A: Spawn Mission Lead (orchestrates all workers):");
             println!("  Agent(");
             println!("    subagent_type: \"{}\",", lead_name);
             println!(
-                "    description: \"Orquestar misión {}\",",
-                result.mission_name
+                "    description: \"Orquestar misión {}{}\",",
+                result.mission_name, mode_label
             );
             println!("    run_in_background: true");
             println!("  )");
-        } else {
-            // Fallback if no mission-lead role in library
-            println!("  (Mission Lead role not found in library — use ORCHESTRATE.md fallback)");
+            println!();
         }
-        println!();
+
+        // Option B: launch.sh (tmux mode only)
+        if is_tmux {
+            if let Some(ref sh_path) = result.launch_sh_path {
+                println!("  # Option B: Launch directly (no Mission Lead):");
+                println!("  bash {}", sh_path.display());
+                println!();
+                println!("  # Opens a tmux session with tiled panes — one agent per pane. Mouse enabled.");
+                println!();
+            }
+        }
+
         if dry_run {
             println!(
                 "  (dry-run) spawn-manifest.json WOULD be written to: {}/spawn-manifest.json",
@@ -2965,6 +3018,9 @@ fn run_mission_spawn(
             );
             if let Some(ref lead_path) = result.mission_lead_subagent_path {
                 println!("  Mission Lead subagent: {}", lead_path.display());
+            }
+            if let Some(ref sh_path) = result.launch_sh_path {
+                println!("  launch.sh (tmux): {}", sh_path.display());
             }
             println!(
                 "  ORCHESTRATE.md (manual fallback): {}/ORCHESTRATE.md",
@@ -2983,7 +3039,12 @@ fn run_mission_spawn(
             );
         }
         println!();
-        println!("The Mission Lead will TeamCreate + spawn all agents in background.");
+        if is_tmux {
+            println!("The Mission Lead will create a single tmux session with tiled panes.");
+            println!("All agents run simultaneously — each in its own pane.");
+        } else {
+            println!("The Mission Lead will TeamCreate + spawn all agents in background.");
+        }
         println!("Each agent independently calls review_submit → ELO cycle works per-agent.");
     } else {
         println!("Next steps:");
@@ -3349,6 +3410,79 @@ struct MissionStatusJson {
     active_delegations: usize,
     budget_overrides: usize,
     unread_alerts: usize,
+    /// Per-agent status from output.log scanning
+    agents: Vec<AgentStatusEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct AgentStatusEntry {
+    /// Role ID, e.g. "developer", "auditor"
+    role_id: String,
+    /// Agent status: "not_started", "running", "completed"
+    status: String,
+    /// Number of lines in the agent's output.log
+    log_lines: usize,
+    /// First line of the log file (the START marker)
+    first_line: Option<String>,
+    /// Last non-empty line of the log file (the DONE marker or latest output)
+    last_line: Option<String>,
+}
+
+/// Scan agent log files and build per-agent status entries from output.log files.
+fn scan_agent_logs(mission_dir: &std::path::Path) -> Vec<AgentStatusEntry> {
+    let agents_dir = mission_dir.join("agents");
+    if !agents_dir.exists() {
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    let read_dir = match std::fs::read_dir(&agents_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    for entry in read_dir.flatten() {
+        let entry_path = entry.path();
+        if !entry_path.is_dir() {
+            continue;
+        }
+        let role_id = match entry.file_name().to_str() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        let log_path = entry_path.join("output.log");
+        let (status, log_lines, first_line, last_line) = match std::fs::read_to_string(&log_path) {
+            Ok(content) => {
+                let lines: Vec<&str> = content.lines().collect();
+                let count = lines.len();
+                let first = lines.first().map(|s| s.to_string());
+                let last = lines
+                    .iter()
+                    .rev()
+                    .find(|l| !l.trim().is_empty())
+                    .map(|s| s.to_string());
+                // Heuristic: last non-empty line contains "DONE" → completed
+                let has_done = last.as_deref().is_some_and(|l| l.contains("DONE"));
+                let status = if has_done {
+                    "completed"
+                } else if count > 0 {
+                    "running"
+                } else {
+                    "not_started"
+                };
+                (status.to_string(), count, first, last)
+            }
+            Err(_) => ("not_started".to_string(), 0, None, None),
+        };
+        entries.push(AgentStatusEntry {
+            role_id,
+            status,
+            log_lines,
+            first_line,
+            last_line,
+        });
+    }
+    // Sort by role_id for deterministic output
+    entries.sort_by(|a, b| a.role_id.cmp(&b.role_id));
+    entries
 }
 
 fn run_mission_status(json: bool, mission_id: &str) -> Result<()> {
@@ -3356,6 +3490,11 @@ fn run_mission_status(json: bool, mission_id: &str) -> Result<()> {
     let runtime_path = colmena_core::config::runtime_overrides_path(&config_dir);
     let delegations_path = config_dir.join("runtime-delegations.json");
     let agents_dir = colmena_core::paths::default_agents_dir()?;
+
+    // Scan agent log files from the mission directory
+    let missions_dir = config_dir.join("missions");
+    let mission_dir = missions_dir.join(mission_id);
+    let agent_statuses = scan_agent_logs(&mission_dir);
 
     // Load runtime overrides for this mission
     let overrides =
@@ -3434,6 +3573,7 @@ fn run_mission_status(json: bool, mission_id: &str) -> Result<()> {
             active_delegations: active_delegations.len(),
             budget_overrides,
             unread_alerts,
+            agents: agent_statuses,
         };
         serde_json::to_writer(std::io::stdout(), &status)?;
         println!();
@@ -3470,6 +3610,30 @@ fn run_mission_status(json: bool, mission_id: &str) -> Result<()> {
     // Check alerts
     if unread_alerts > 0 {
         println!("Alerts:      {} unread", unread_alerts);
+    }
+
+    // Per-agent log status
+    if !agent_statuses.is_empty() {
+        println!("\nAgent Logs:");
+        for a in &agent_statuses {
+            let icon = match a.status.as_str() {
+                "completed" => "✓",
+                "running" => "▶",
+                _ => "○",
+            };
+            let line_info = if a.log_lines > 0 {
+                format!("[{} lines]", a.log_lines)
+            } else {
+                String::new()
+            };
+            println!("  {} {:<20} {:>12}", icon, a.role_id, line_info);
+            if let Some(ref last) = a.last_line {
+                let truncated: String = last.chars().take(80).collect();
+                println!("    └ {}", truncated);
+            }
+        }
+    } else if mission_dir.exists() {
+        println!("\nAgent Logs: (no agents/ directory — mission may not have started)");
     }
 
     Ok(())
@@ -3531,6 +3695,209 @@ fn run_mission_abort(mission_id: &str, reason: Option<&str>, force: bool) -> Res
     println!("Subagent files:     {} removed", removed_files);
 
     println!("\n\u{2713} Mission '{}' aborted.", mission_id);
+    Ok(())
+}
+
+// ── Mission go — one-command orchestration ────────────────────────────────────
+
+fn run_mission_go(
+    dir: &str,
+    desc: &str,
+    mode: &str,
+    yes: bool,
+    dry_run: bool,
+    extend_existing: bool,
+) -> Result<()> {
+    use colmena_core::project_detect;
+    use std::io::Write;
+
+    let working_dir = PathBuf::from(dir);
+
+    // 1. Auto-detect project type
+    println!("🔍 Scanning project...");
+    let info = project_detect::detect_project(&working_dir)?;
+
+    println!("   ✅ {} {}", info.project_type, info.language);
+    if let Some(ref fw) = info.framework {
+        println!("   🧩 framework: {}", fw);
+    }
+    println!("   📦 {}", info.project_name);
+    if info.has_payments {
+        println!("   💳 Payment integration detected");
+    }
+    if info.has_tests {
+        println!("   🧪 Tests detected");
+    }
+    println!();
+
+    // 2. Display configuration
+    println!("🎯 Auto-detected configuration:");
+    println!("   Pattern:  {}", info.suggested_pattern);
+    println!("   Roles:    {}", info.suggested_roles.join(", "));
+    println!("   Scope:    {}", info.working_dir.display());
+    if mode == "tmux" {
+        println!("   Mode:     tmux (tiled panes — one agent per pane)");
+    } else {
+        println!("   Mode:     cc-native (Agent tool)");
+    }
+    println!("   TTL:      12 hours");
+    println!();
+
+    // 3. Confirm
+    if !yes {
+        print!("Proceed? [Y/n]: ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if input != "y" && input != "yes" && !input.is_empty() {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+    println!();
+
+    // 4. Build mission description from project info
+    let mission_desc = if desc.trim().is_empty() {
+        format!(
+            "Build and improve {} — a {} project at {}",
+            info.project_name,
+            info.language,
+            info.working_dir.display()
+        )
+    } else {
+        desc.to_string()
+    };
+
+    // 5. Run spawn internally
+    println!("⏳ Spawning mission...");
+    let library_dir = default_library_dir();
+    let config_dir = default_config_dir();
+    let missions_dir = config_dir.join("missions");
+    let runtime_delegations_path = config_dir.join("runtime-delegations.json");
+    let agents_dir = colmena_core::paths::default_agents_dir()?;
+    let all_roles = load_roles(&library_dir)?;
+    let all_patterns = load_patterns(&library_dir)?;
+
+    // Build a minimal manifest from detected info
+    let manifest = colmena_core::mission_manifest::MissionManifest {
+        version: 1,
+        mission_id: project_detect::suggest_mission_id(&info.project_name, &mission_desc),
+        description: mission_desc,
+        author: "operator".to_string(),
+        pattern: Some(info.suggested_pattern.clone()),
+        mission_ttl_hours: 12,
+        agents: info
+            .suggested_roles
+            .iter()
+            .map(|r| colmena_core::mission_manifest::ManifestAgent {
+                role: r.clone(),
+                count: 1,
+                instances: vec![],
+                task: String::new(),
+                scope: None,
+                model: None,
+            })
+            .collect(),
+        scope: colmena_core::mission_manifest::ManifestScope {
+            paths: vec![info.working_dir.to_string_lossy().to_string()],
+            path_not_match: vec![
+                "*.env".to_string(),
+                ".env.local".to_string(),
+                "node_modules/**".to_string(),
+                ".next/**".to_string(),
+                "target/**".to_string(),
+            ],
+            bash_patterns: Default::default(),
+        },
+        mission_gate: colmena_core::mission_manifest::MissionGate::Enforce,
+        auditor_pool: vec!["auditor".to_string()],
+        inter_agent_protocol: Default::default(),
+        budget: Default::default(),
+        acceptance_criteria: vec![],
+        metadata: Default::default(),
+        tags: vec![],
+    };
+
+    let result = colmena_core::selector::spawn_mission(
+        &manifest.mission_id,
+        Some(&manifest),
+        &all_roles,
+        &all_patterns,
+        &library_dir,
+        &missions_dir,
+        &runtime_delegations_path,
+        &agents_dir,
+        None,
+        &[],
+        Some(&config_dir),
+        extend_existing, // extend_existing
+        dry_run,         // dry_run
+        false,           // overwrite
+        true,            // auto_spawn
+        Some("main"),    // base_branch
+        Some(mode),      // auto_spawn_mode
+    )?;
+
+    println!(
+        "   ✅ {} subagent prompts composed",
+        result.agent_prompts.len()
+    );
+    println!(
+        "   ✅ {} delegations created",
+        result.delegations_created.len()
+    );
+
+    // 6. Execute launch.sh for tmux mode
+    if mode == "tmux" && !dry_run {
+        if let Some(ref sh_path) = result.launch_sh_path {
+            println!();
+            println!("🚀 Launching tmux session...");
+            println!("   To reattach later: tmux attach -t {}", {
+                result
+                    .mission_config
+                    .mission_dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default()
+            });
+            println!();
+
+            // Replace current process with the launch script
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                let err = std::process::Command::new("bash").arg(sh_path).exec();
+                // exec() only returns on error
+                anyhow::bail!("failed to exec launch.sh: {}", err);
+            }
+            #[cfg(not(unix))]
+            {
+                let status = std::process::Command::new("bash").arg(sh_path).status()?;
+                if !status.success() {
+                    anyhow::bail!("launch.sh exited with: {}", status);
+                }
+            }
+        }
+    } else {
+        // cc-native: print Agent() call
+        println!();
+        if let Some(ref lead_path) = result.mission_lead_subagent_path {
+            let lead_name = lead_path
+                .file_stem()
+                .map(|s| s.to_string_lossy())
+                .unwrap_or_else(|| "mission-lead".into());
+            println!("  Agent(");
+            println!("    subagent_type: \"{}\",", lead_name);
+            println!(
+                "    description: \"Orquestar misión {}\",",
+                result.mission_name
+            );
+            println!("    run_in_background: true");
+            println!("  )");
+        }
+    }
+
     Ok(())
 }
 
