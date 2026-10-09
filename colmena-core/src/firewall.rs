@@ -170,6 +170,32 @@ pub fn evaluate_with_elo(
         return decision;
     }
 
+    // 4.4. Mission revocation kill switch
+    // If agent's mission was deactivated, deny all tools. This overrides CC session rules
+    // that were taught via PermissionRequest hooks before the mission was revoked.
+    // Check both agent_id and agent_type so revocations against the stable agent
+    // name (the only stable key single-agent owners can target) kill switch
+    // reliably regardless of which field CC populates.
+    // Must run before 4.5: chain_aware returns final decisions, and a chain of
+    // trust-circle pieces (`ls && cat f`) would otherwise be auto-approved for a
+    // revoked agent.
+    for candidate in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if revoked_agents.contains(candidate) {
+            return Decision {
+                action: Action::Block,
+                reason: format!(
+                    "Mission revoked for agent '{}' — permissions expired",
+                    candidate
+                ),
+                matched_rule: Some(format!("mission_revoked:{}", candidate)),
+                priority: Priority::High,
+            };
+        }
+    }
+
     // 4.5. M7.10: Chain-aware Bash evaluator. Splits top-level chains (&&/||/;/|)
     // and re-evaluates each piece against blocked/restricted/trust_circle.
     // Returns Some(decision) when the chain decision is final; returns None
@@ -194,29 +220,6 @@ pub fn evaluate_with_elo(
                     priority: Priority::Medium,
                 };
             }
-        }
-    }
-
-    // 4.8. Mission revocation kill switch
-    // If agent's mission was deactivated, deny all tools. This overrides CC session rules
-    // that were taught via PermissionRequest hooks before the mission was revoked.
-    // Check both agent_id and agent_type so revocations against the stable agent
-    // name (the only stable key single-agent owners can target) kill switch
-    // reliably regardless of which field CC populates.
-    for candidate in [payload.agent_id.as_deref(), payload.agent_type.as_deref()]
-        .into_iter()
-        .flatten()
-    {
-        if revoked_agents.contains(candidate) {
-            return Decision {
-                action: Action::Block,
-                reason: format!(
-                    "Mission revoked for agent '{}' — permissions expired",
-                    candidate
-                ),
-                matched_rule: Some(format!("mission_revoked:{}", candidate)),
-                priority: Priority::High,
-            };
         }
     }
 
@@ -470,41 +473,198 @@ fn extract_path(payload: &EvaluationInput) -> Option<String> {
     }
 }
 
-/// Strip content inside matched single and double quotes from a command string.
-/// Replaces quoted regions with spaces so that operators inside quotes are not detected.
-/// Unmatched trailing quotes preserve all consumed content (conservative: better false
-/// positive than bypass). (Finding #15, DREAD 5.6)
-fn strip_quoted_regions(cmd: &str) -> String {
-    let mut result = String::with_capacity(cmd.len());
-    let chars: Vec<(usize, char)> = cmd.char_indices().collect();
+/// Result of a quote- and escape-aware lexical scan of a Bash command.
+#[derive(Debug, Default)]
+struct ShellScan {
+    /// Simple commands split on `&&`, `||`, `;`, `&`, `|`, `|&` and newlines.
+    /// Trimmed; empty segments (e.g. after a trailing `&`) are dropped.
+    segments: Vec<String>,
+    /// An operator other than a plain pipe separates commands.
+    chained: bool,
+    /// `$(`, a backtick, `<(` or `>(` appears where bash would execute it.
+    substitution: bool,
+    /// An unquoted `(` or `)`: subshell, arithmetic or function definition.
+    /// `ls() ( rm -rf ~ ); ls` redefines `ls`, so its segments cannot be judged alone.
+    grouping: bool,
+    /// The command ends inside a quote.
+    unterminated_quote: bool,
+}
+
+#[derive(PartialEq)]
+enum QuoteState {
+    None,
+    /// `'...'` — everything literal, no escapes.
+    Single,
+    /// `$'...'` — ANSI-C quoting, backslash escapes the next char (`$'\''` is one quote).
+    AnsiC,
+    /// `"..."` — backslash escapes, `$(...)` and backticks still execute.
+    Double,
+}
+
+/// Split a Bash command into simple commands the way bash would, without executing it.
+///
+/// The scanner must never *merge* what bash splits (that is a bypass); splitting more
+/// than bash does only produces extra asks. Hence: comments are not recognized, a
+/// backslash-newline is kept literal, and a lone `&` is a separator unless it is part of
+/// a redirection (`2>&1`, `&>file`). (Finding #15, DREAD 5.6; chain guard parser rewrite)
+fn scan_shell(cmd: &str) -> ShellScan {
+    let chars: Vec<char> = normalize_unicode_operators(cmd).chars().collect();
+    let mut scan = ShellScan::default();
+    let mut current = String::new();
+    let mut quote = QuoteState::None;
+    // True when the previous char was an unquoted, unescaped `<` or `>`.
+    let mut after_redirect = false;
     let mut i = 0;
+
+    let flush = |current: &mut String, segments: &mut Vec<String>| {
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            segments.push(trimmed.to_string());
+        }
+        current.clear();
+    };
+
     while i < chars.len() {
-        let (byte_idx, c) = chars[i];
-        if c == '\'' || c == '"' {
-            let quote = c;
-            // Scan ahead for matching close quote
-            let mut found_close = None;
-            for (j, &(_, ch)) in chars.iter().enumerate().skip(i + 1) {
-                if ch == quote {
-                    found_close = Some(j);
-                    break;
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+
+        match quote {
+            QuoteState::Single => {
+                if c == '\'' {
+                    quote = QuoteState::None;
                 }
+                current.push(c);
+                i += 1;
+                continue;
             }
-            if let Some(close_idx) = found_close {
-                // Replace entire quoted region (open + content + close) with a space
-                result.push(' ');
-                i = close_idx + 1;
-            } else {
-                // Unmatched quote — preserve everything from here (conservative)
-                result.push_str(&cmd[byte_idx..]);
-                break;
+            QuoteState::AnsiC | QuoteState::Double => {
+                if c == '\\' {
+                    current.push(c);
+                    if let Some(n) = next {
+                        current.push(n);
+                    }
+                    i += 2;
+                    continue;
+                }
+                if quote == QuoteState::AnsiC && c == '\'' {
+                    quote = QuoteState::None;
+                } else if quote == QuoteState::Double {
+                    if c == '"' {
+                        quote = QuoteState::None;
+                    } else if c == '`' || (c == '$' && next == Some('(')) {
+                        scan.substitution = true;
+                    }
+                }
+                current.push(c);
+                i += 1;
+                continue;
             }
-        } else {
-            result.push(c);
-            i += 1;
+            QuoteState::None => {}
+        }
+
+        let was_after_redirect = after_redirect;
+        after_redirect = false;
+        match c {
+            '\\' => {
+                // Escaped char is literal: `\"`, `\;`, `\&` never open quotes or split.
+                current.push(c);
+                if let Some(n) = next {
+                    current.push(n);
+                }
+                i += 2;
+            }
+            '\'' => {
+                quote = QuoteState::Single;
+                current.push(c);
+                i += 1;
+            }
+            '"' => {
+                quote = QuoteState::Double;
+                current.push(c);
+                i += 1;
+            }
+            '$' if next == Some('\'') => {
+                quote = QuoteState::AnsiC;
+                current.push_str("$'");
+                i += 2;
+            }
+            '$' if next == Some('(') => {
+                scan.substitution = true;
+                current.push(c);
+                i += 1;
+            }
+            '`' => {
+                scan.substitution = true;
+                current.push(c);
+                i += 1;
+            }
+            '<' | '>' => {
+                if next == Some('(') {
+                    scan.substitution = true;
+                }
+                after_redirect = true;
+                current.push(c);
+                i += 1;
+            }
+            '(' | ')' => {
+                scan.grouping = true;
+                current.push(c);
+                i += 1;
+            }
+            ';' | '\n' => {
+                scan.chained = true;
+                flush(&mut current, &mut scan.segments);
+                i += 1;
+            }
+            '&' if next == Some('&') => {
+                scan.chained = true;
+                flush(&mut current, &mut scan.segments);
+                i += 2;
+            }
+            '&' if next == Some('>') || was_after_redirect => {
+                // `&>file`, `2>&1`, `<&3` — redirections, not a background separator.
+                current.push(c);
+                i += 1;
+            }
+            '&' => {
+                scan.chained = true;
+                flush(&mut current, &mut scan.segments);
+                i += 1;
+            }
+            '|' if next == Some('|') => {
+                scan.chained = true;
+                flush(&mut current, &mut scan.segments);
+                i += 2;
+            }
+            '|' if was_after_redirect => {
+                // `>|file` — clobbering redirection.
+                current.push(c);
+                i += 1;
+            }
+            '|' => {
+                flush(&mut current, &mut scan.segments);
+                i += if next == Some('&') { 2 } else { 1 };
+            }
+            _ => {
+                current.push(c);
+                i += 1;
+            }
         }
     }
-    result
+
+    scan.unterminated_quote = quote != QuoteState::None;
+    flush(&mut current, &mut scan.segments);
+    scan
+}
+
+/// True for `cd`, `cd <dir>` — a directory change with no other effect.
+/// Redirections are rejected: `cd >file` truncates `file`.
+fn is_plain_cd(segment: &str) -> bool {
+    if segment.contains(['<', '>']) {
+        return false;
+    }
+    let mut words = segment.split_whitespace();
+    words.next() == Some("cd") && words.count() <= 1
 }
 
 /// Normalize Unicode homoglyphs to their ASCII equivalents before chain guard check.
@@ -546,6 +706,11 @@ fn normalize_unicode_operators(cmd: &str) -> String {
 ///
 /// Conservative grammar: key is `^[A-Z_][A-Z0-9_]*` (uppercase only). Anything
 /// after the value (a space + extra tokens) disqualifies the piece.
+///
+/// Keys that change how later pieces run are never bare: `PATH=/tmp/evil; ls`
+/// runs `/tmp/evil/ls`. That covers shell-special variables, loader/tool
+/// prefixes, and any variable already in the environment — assigning to an
+/// exported variable updates what every following command inherits.
 pub fn is_bare_assignment(piece: &str) -> bool {
     let trimmed = piece.trim();
     if trimmed.is_empty() {
@@ -574,89 +739,100 @@ pub fn is_bare_assignment(piece: &str) -> bool {
     {
         return false;
     }
-    // Validate the value: must be a single token (no unescaped spaces unless
-    // they sit inside matched quotes).
-    let value = &trimmed[eq_pos + 1..];
-    let stripped_value = strip_quoted_regions(value);
-    // After quote stripping, quoted regions have been replaced with spaces.
-    // Trim surrounding spaces (artifact of quote replacement), then check
-    // that no interior whitespace remains — interior whitespace would mean
-    // a follow-up command token outside any quoted region.
-    !stripped_value.trim().contains(char::is_whitespace)
+    if is_sensitive_env_key(key) {
+        return false;
+    }
+    // Validate the value: must be a single word — no unquoted, unescaped
+    // whitespace (`KEY=\"a b\"` runs `b\"` as a command).
+    is_single_shell_word(&trimmed[eq_pos + 1..])
 }
 
-/// Split a Bash command into top-level pieces along `&&`, `||`, `;`, or `|`,
-/// respecting matched single/double quotes. Returns `None` for inputs the
-/// caller must NOT chain-evaluate: presence of `$(`, backticks, or unmatched
-/// quotes — those should fall through to the legacy `chain_guard` ask.
-///
-/// The returned strings are allocated (owned) from the normalized input,
-/// including any surrounding whitespace. Callers should `trim` each piece
-/// before evaluating.
-///
-/// A non-chained input still returns `Some(vec![cmd])` (single element); the
-/// caller decides whether to short-circuit. Unicode homoglyphs are normalized
-/// before scanning so fullwidth `&&` etc. are caught.
-pub fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
-    let normalized = normalize_unicode_operators(cmd);
-    // Reject inputs containing command substitution outside quotes.
-    let stripped = strip_quoted_regions(&normalized);
-    if stripped.contains("$(") || stripped.contains('`') {
-        return None;
-    }
-    // Detect unmatched quote.
-    let mut quote_state: Option<char> = None;
-    for c in normalized.chars() {
-        match (quote_state, c) {
-            (None, '\'') | (None, '"') => quote_state = Some(c),
-            (Some(q), c) if c == q => quote_state = None,
-            _ => {}
-        }
-    }
-    if quote_state.is_some() {
-        return None;
-    }
+/// Shell-special variables and prefixes whose assignment alters how later
+/// commands resolve or execute, plus anything already exported to this process.
+fn is_sensitive_env_key(key: &str) -> bool {
+    const EXACT: &[&str] = &[
+        "PATH",
+        "IFS",
+        "CDPATH",
+        "ENV",
+        "BASH_ENV",
+        "HOME",
+        "SHELL",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "GLOBIGNORE",
+        "PS4",
+        "PROMPT_COMMAND",
+        "TMPDIR",
+        "PAGER",
+        "MANPAGER",
+        "EDITOR",
+        "VISUAL",
+        "BROWSER",
+    ];
+    const PREFIXES: &[&str] = &[
+        "LD_",
+        "DYLD_",
+        "BASH_",
+        "GIT_",
+        "SSH_",
+        "PYTHON",
+        "NODE_",
+        "NPM_",
+        "RUBY",
+        "PERL",
+        "LESS",
+        "CARGO_",
+        "RUST",
+        "GCLOUD_",
+        "CLOUDSDK_",
+        "GOOGLE_",
+        "AWS_",
+        "GH_",
+    ];
+    EXACT.contains(&key)
+        || PREFIXES.iter().any(|p| key.starts_with(p))
+        || std::env::var_os(key).is_some()
+}
 
-    // Byte-level scan with quote tracking + top-level operator splitting.
-    let bytes = normalized.as_bytes();
-    let mut pieces: Vec<String> = Vec::new();
-    let mut current_start = 0usize;
-    let mut i = 0usize;
-    let mut in_quote: Option<u8> = None;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if let Some(q) = in_quote {
-            if b == q {
-                in_quote = None;
+/// True when `s` has no whitespace outside quotes or backslash escapes.
+fn is_single_shell_word(s: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') => quote = None,
+            (Some('\''), _) => {}
+            (_, '\\') => {
+                chars.next();
             }
-            i += 1;
-            continue;
+            (Some('"'), '"') => quote = None,
+            (Some(_), _) => {}
+            (None, '\'') | (None, '"') => quote = Some(c),
+            (None, c) if c.is_whitespace() => return false,
+            (None, _) => {}
         }
-        if b == b'\'' || b == b'"' {
-            in_quote = Some(b);
-            i += 1;
-            continue;
-        }
-        // Two-char operators first.
-        if i + 1 < bytes.len() {
-            let pair = &bytes[i..i + 2];
-            if pair == b"&&" || pair == b"||" {
-                pieces.push(normalized[current_start..i].to_string());
-                i += 2;
-                current_start = i;
-                continue;
-            }
-        }
-        if b == b';' || b == b'|' {
-            pieces.push(normalized[current_start..i].to_string());
-            i += 1;
-            current_start = i;
-            continue;
-        }
-        i += 1;
     }
-    pieces.push(normalized[current_start..].to_string());
-    Some(pieces)
+    quote.is_none()
+}
+
+/// Split a Bash command into top-level pieces along `&&`, `||`, `;`, `&`, `|`,
+/// `|&` and newlines, the way bash would (see `scan_shell`). Returns `None` for
+/// inputs the caller must NOT chain-evaluate: command/process substitution
+/// (also inside double quotes), unquoted `(`/`)` (subshells, function
+/// definitions like `ls() ( rm -rf ~ ); ls`), or unterminated quotes — those
+/// fall through to the legacy `chain_guard` ask.
+///
+/// Pieces are trimmed and empty pieces dropped. A non-chained input still
+/// returns `Some(vec![cmd])` (single element); the caller decides whether to
+/// short-circuit. Unicode homoglyphs are normalized before scanning so
+/// fullwidth `&&` etc. are caught.
+pub fn split_top_level_chain(cmd: &str) -> Option<Vec<String>> {
+    let scan = scan_shell(cmd);
+    if scan.substitution || scan.grouping || scan.unterminated_quote {
+        return None;
+    }
+    Some(scan.segments)
 }
 
 /// Compositional Bash chain evaluator (M7.10).
@@ -706,6 +882,12 @@ fn evaluate_chain_aware(
         }
         if is_bare_assignment(trimmed) {
             matched_rules.push("assignment".to_string());
+            continue;
+        }
+        // `cd` only changes the cwd of the following pieces, which are checked on
+        // their own; trust-circle Bash rules do not depend on the cwd.
+        if is_plain_cd(trimmed) {
+            matched_rules.push("cd".to_string());
             continue;
         }
         // Build a synthetic payload for this piece.
@@ -818,26 +1000,22 @@ fn evaluate_chain_aware(
     })
 }
 
-/// Detect shell chain operators in a Bash command.
+/// Detect a Bash command that is more than one simple command.
 ///
-/// Returns true if the command contains `&&`, `||`, `;`, `$(`, or a backtick
-/// **outside of quoted strings**.
-/// Plain pipes (`|`) are intentionally excluded — single pipes are safe for
-/// the piped-commands trust_circle rules (`cat file | grep foo`).
+/// Returns true if bash would run more than one command: `&&`, `||`, `;`, `&`,
+/// newline, a pipe, command/process substitution (also inside double quotes),
+/// or an unterminated quote. This is the fallback for everything chain_aware
+/// refused to decide (or for `chain_aware: false`).
 ///
-/// Quote-aware: operators inside matched single/double quotes are ignored
-/// (Finding #15, DREAD 5.6). Unmatched quotes are treated conservatively.
+/// Pipes are included because the right-hand side runs a separate program
+/// (`echo 'rm -rf ~' | sh`).
 ///
+/// Quote- and escape-aware (Finding #15, DREAD 5.6): see `scan_shell`.
 /// Unicode-normalized: homoglyph characters are replaced with ASCII equivalents
 /// before detection (Finding #3, DREAD 5.2).
 fn contains_shell_chain(cmd: &str) -> bool {
-    let normalized = normalize_unicode_operators(cmd);
-    let stripped = strip_quoted_regions(&normalized);
-    stripped.contains("&&")
-        || stripped.contains("||")
-        || stripped.contains(';')
-        || stripped.contains("$(")
-        || stripped.contains('`')
+    let scan = scan_shell(cmd);
+    scan.chained || scan.substitution || scan.unterminated_quote || scan.segments.len() > 1
 }
 
 /// Glob matching for path_not_match rules.
@@ -1665,10 +1843,15 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_guard_ignores_subshell_in_quotes() {
+    fn test_chain_guard_detects_subshell_in_double_quotes() {
+        // Bash expands $(...) inside double quotes — `echo "$(rm -rf ~)"` runs rm.
         assert!(
-            !contains_shell_chain("echo \"$(date)\""),
-            "$() inside double quotes should not trigger"
+            contains_shell_chain("echo \"$(date)\""),
+            "$() inside double quotes executes and must trigger"
+        );
+        assert!(
+            !contains_shell_chain("echo '$(date)'"),
+            "$() inside single quotes is literal"
         );
     }
 
@@ -1772,12 +1955,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_quoted_regions_basic() {
-        assert_eq!(strip_quoted_regions("echo \"a;b\" foo"), "echo   foo");
-        assert_eq!(strip_quoted_regions("echo 'a&&b' foo"), "echo   foo");
-    }
-
-    #[test]
     fn test_normalize_unicode_operators_basic() {
         assert_eq!(normalize_unicode_operators("foo\u{037E}bar"), "foo;bar");
         assert_eq!(
@@ -1798,7 +1975,9 @@ mod tests {
     #[test]
     fn test_bare_assignment_quoted() {
         assert!(is_bare_assignment("TOKEN=\"some value\""));
-        assert!(is_bare_assignment("PATH='abc:def'"));
+        assert!(is_bare_assignment("SDK_DIR='abc:def'"));
+        // PATH and other exec-altering keys are never bare (see is_sensitive_env_key).
+        assert!(!is_bare_assignment("PATH='abc:def'"));
     }
 
     #[test]
@@ -1828,8 +2007,8 @@ mod tests {
     fn test_split_chain_and_or() {
         let parts = split_top_level_chain("git status && git log").unwrap();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], "git status ");
-        assert_eq!(parts[1], " git log");
+        assert_eq!(parts[0], "git status");
+        assert_eq!(parts[1], "git log");
     }
 
     #[test]
@@ -1837,16 +2016,16 @@ mod tests {
         let parts = split_top_level_chain("ls; cat foo; head -5 bar").unwrap();
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[0], "ls");
-        assert_eq!(parts[1], " cat foo");
-        assert_eq!(parts[2], " head -5 bar");
+        assert_eq!(parts[1], "cat foo");
+        assert_eq!(parts[2], "head -5 bar");
     }
 
     #[test]
     fn test_split_chain_pipe() {
         let parts = split_top_level_chain("git fetch origin main 2>&1 | tail -20").unwrap();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], "git fetch origin main 2>&1 ");
-        assert_eq!(parts[1], " tail -20");
+        assert_eq!(parts[0], "git fetch origin main 2>&1");
+        assert_eq!(parts[1], "tail -20");
     }
 
     #[test]
@@ -1856,10 +2035,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(parts.len(), 4);
-        assert_eq!(parts[0], "go build ./... 2>&1 ");
-        assert_eq!(parts[1], " head -20 ");
-        assert_eq!(parts[2], " go test ./... 2>&1 ");
-        assert_eq!(parts[3], " tail -15");
+        assert_eq!(parts[0], "go build ./... 2>&1");
+        assert_eq!(parts[1], "head -20");
+        assert_eq!(parts[2], "go test ./... 2>&1");
+        assert_eq!(parts[3], "tail -15");
     }
 
     #[test]
@@ -1877,8 +2056,8 @@ mod tests {
 
         let parts = split_top_level_chain("echo 'foo; bar' && ls").unwrap();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], "echo 'foo; bar' ");
-        assert_eq!(parts[1], " ls");
+        assert_eq!(parts[0], "echo 'foo; bar'");
+        assert_eq!(parts[1], "ls");
     }
 
     #[test]
@@ -1896,25 +2075,22 @@ mod tests {
     fn test_split_chain_normalizes_unicode() {
         let parts = split_top_level_chain("git status \u{FF06}\u{FF06} git log").unwrap();
         assert_eq!(parts.len(), 2);
-        assert_eq!(parts[0], "git status ");
-        assert_eq!(parts[1], " git log");
+        assert_eq!(parts[0], "git status");
+        assert_eq!(parts[1], "git log");
     }
 
     #[test]
     fn test_split_chain_empty_input() {
-        // Empty string → Some(vec![""]) — single empty piece, no chain to evaluate.
+        // Empty string → Some(vec![]) — pieces are trimmed and empties dropped.
         let parts = split_top_level_chain("").unwrap();
-        assert_eq!(parts.len(), 1);
-        assert_eq!(parts[0], "");
+        assert!(parts.is_empty());
     }
 
     #[test]
     fn test_split_chain_only_operators() {
-        // ";;" splits into 3 empty pieces (before first ;, between, after last ;).
-        // The chain-aware evaluator will skip empty pieces during fold.
+        // ";;" has no commands: empty pieces are dropped, nothing to evaluate.
         let parts = split_top_level_chain(";;").unwrap();
-        assert_eq!(parts.len(), 3);
-        assert!(parts.iter().all(|p| p.is_empty()));
+        assert!(parts.is_empty());
     }
 
     // ── evaluate_chain_aware tests (M7.10) ───────────────────────────────────
@@ -2142,5 +2318,147 @@ mod tests {
             decision.action,
             decision.reason
         );
+    }
+}
+
+/// Regression tests for chain parser bypasses: every payload below runs `rm`
+/// (or a hijacked binary) in bash and was auto-approved before the
+/// `scan_shell` rewrite.
+#[cfg(test)]
+mod chain_parser_bypass_tests {
+    use super::*;
+    use crate::config::{compile_config, load_config};
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn setup() -> (FirewallConfig, crate::config::CompiledPatterns) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../config/trust-firewall.yaml");
+        let config = load_config(&path, "/Users/test/project").unwrap();
+        let patterns = compile_config(&config).unwrap();
+        (config, patterns)
+    }
+
+    fn payload(cmd: &str, agent: Option<&str>) -> EvaluationInput {
+        EvaluationInput {
+            session_id: "s".into(),
+            tool_name: "Bash".into(),
+            tool_input: json!({ "command": cmd }),
+            tool_use_id: "t".into(),
+            agent_id: agent.map(String::from),
+            agent_type: None,
+            cwd: "/Users/test/project".into(),
+        }
+    }
+
+    fn decide(cmd: &str) -> Decision {
+        let (config, patterns) = setup();
+        evaluate(&config, &patterns, &[], &payload(cmd, None))
+    }
+
+    #[test]
+    fn bypass_payloads_are_never_auto_approved() {
+        for cmd in [
+            "echo \\\" ; rm -rf ~ ; echo \\\"",     // escaped double quote
+            "echo $'\\'' ; rm -rf ~ ; echo $'\\''", // ANSI-C quoting
+            "echo \"$(rm -rf ~)\"",                 // $() inside double quotes
+            "echo \"`rm -rf ~`\"",                  // backtick inside double quotes
+            "cat file.txt\nrm -rf ~",               // newline separator
+            "cat file.txt & rm -rf ~",              // background separator
+            "echo \\>& rm -rf ~",                   // escaped redirect before `&`
+            "echo 'rm -rf ~' | sh",                 // pipe into an interpreter
+            "cat <(rm -rf ~)",                      // process substitution
+            "ls() ( rm -rf ~ ); ls",                // function redefinition
+            "ls () ( rm -rf ~ )\nls",
+            "function ls { rm -rf ~; }; ls",
+            "PATH=/tmp/evil:/usr/bin; ls", // PATH hijack via bare assignment
+            "PATH=.; ls",
+            "LD_PRELOAD=/tmp/x.so; ls",
+            "GIT_SSH_COMMAND=/tmp/x; git status",
+            "X=\\\"a sh\\\"; ls", // escaped quotes in assignment value
+        ] {
+            assert_ne!(
+                decide(cmd).action,
+                Action::AutoApprove,
+                "auto-approved: {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn revoked_agent_chain_is_blocked() {
+        let (config, patterns) = setup();
+        let revoked: HashSet<String> = ["agent-x".to_string()].into();
+        let d = evaluate_with_elo(
+            &config,
+            &patterns,
+            &[],
+            &payload("ls && cat f", Some("agent-x")),
+            &HashMap::new(),
+            &revoked,
+            None,
+        );
+        assert_eq!(d.action, Action::Block);
+    }
+
+    #[test]
+    fn read_only_chains_are_auto_approved() {
+        for cmd in [
+            "cd /repo && ls -la && git log --oneline -40 && git status -s",
+            "ls /a; echo ---; ls /b",
+            "git log --oneline | head -5",
+            "cat file.txt | grep pattern | sort | uniq -c",
+            "grep -rn foo src 2>/dev/null | head -30",
+            "ls -la 2>&1 | head",
+            "M=/repo/memory; ls $M",
+        ] {
+            assert_eq!(
+                decide(cmd).action,
+                Action::AutoApprove,
+                "should approve: {cmd:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn scan_shell_splits_like_bash() {
+        let s = scan_shell("cd /x && ls -la | head; echo 'a;b' & wc -l");
+        assert_eq!(
+            s.segments,
+            vec!["cd /x", "ls -la", "head", "echo 'a;b'", "wc -l"]
+        );
+        assert!(s.chained && !s.substitution && !s.grouping);
+
+        // Redirections are not separators.
+        let s = scan_shell("cmd 2>&1 &>out >|clobber");
+        assert_eq!(s.segments, vec!["cmd 2>&1 &>out >|clobber"]);
+        assert!(!s.chained);
+
+        // Escapes inside double quotes don't close them.
+        let s = scan_shell("echo \"a \\\" ; b\"");
+        assert_eq!(s.segments.len(), 1);
+        assert!(!s.unterminated_quote);
+
+        // `$(...)` only executes outside single quotes.
+        assert!(!scan_shell("echo '$(date)'").substitution);
+        assert!(scan_shell("echo \"$(date)\"").substitution);
+    }
+
+    #[test]
+    fn sensitive_assignments_are_not_bare() {
+        for piece in [
+            "PATH=/x",
+            "IFS=x",
+            "LD_PRELOAD=/x",
+            "DYLD_INSERT_LIBRARIES=/x",
+            "GIT_DIR=/x",
+            "BASH_ENV=/x",
+        ] {
+            assert!(!is_bare_assignment(piece), "{piece}");
+        }
+        assert!(is_bare_assignment("COLMENA_TEST_UNSET_VAR_7F3=/repo"));
+        assert!(!is_bare_assignment(
+            "COLMENA_TEST_UNSET_VAR_7F3=\\\"a b\\\""
+        ));
+        assert!(is_bare_assignment("COLMENA_TEST_UNSET_VAR_7F3=\"a b\""));
     }
 }
